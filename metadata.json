@@ -1,0 +1,6 @@
+{
+  "name": "ChanLun Stock Analyzer",
+  "description": "An interactive stock trading platform featuring real-time financial tracking, backtesting, database-persisted profiles, and an automated K-line chart visualization utilizing ChanLun (缠论) structural analysis to map market strokes, price hubs, and key buy/sell setups.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
