@@ -150,7 +150,7 @@ export default function BacktestManager({ klines, buySellPoints, symbol, current
   const handleSaveBacktest = async () => {
     if (!backtest) return;
     if (!currentUser) {
-      alert('Login/Registration Required first! Please register an account in Navbar to store backtests permanently.');
+      alert('需要先登录/注册!请在导航栏注册账户以永久存储回测结果。');
       return;
     }
 
@@ -165,7 +165,7 @@ export default function BacktestManager({ klines, buySellPoints, symbol, current
   };
 
   const handleDeleteHistory = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this backtest execution?')) return;
+    if (!confirm('确定要删除此回测执行吗?')) return;
     const ok = await deleteBacktestResult(id);
     if (ok && currentUser) {
       fetchBacktests(currentUser.id).then(setRecords);
@@ -187,7 +187,7 @@ export default function BacktestManager({ klines, buySellPoints, symbol, current
           id="tab-run-backtest"
         >
           <Play className="h-4 w-4 text-emerald-400" />
-          <span>Interactive Backtester</span>
+          <span>交互式回测器</span>
         </button>
 
         <button
@@ -200,7 +200,7 @@ export default function BacktestManager({ klines, buySellPoints, symbol, current
           id="tab-history-backtests"
         >
           <History className="h-4 w-4 text-emerald-400" />
-          <span>Simulation Ledger ({currentUser ? records.length : 'Login Needed'})</span>
+          <span>模拟账本 ({currentUser ? records.length : '需要登录'})</span>
         </button>
       </div>
 
@@ -210,7 +210,7 @@ export default function BacktestManager({ klines, buySellPoints, symbol, current
           {/* Settings Grid */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 bg-zinc-950 p-5 rounded-2xl border border-zinc-800/80">
             <div>
-              <label className="block text-xs font-semibold text-zinc-400 mb-2 font-sans">Initial Portfolio Cash</label>
+              <label className="block text-xs font-semibold text-zinc-400 mb-2 font-sans">初始资金</label>
               <div className="relative">
                 <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-xs font-bold text-zinc-650 font-mono">$</span>
                 <input
@@ -223,7 +223,7 @@ export default function BacktestManager({ klines, buySellPoints, symbol, current
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-zinc-400 mb-2 font-sans">Mock Protective Stop-Loss</label>
+              <label className="block text-xs font-semibold text-zinc-400 mb-2 font-sans">模拟保护止损</label>
               <div className="relative">
                 <input
                   type="number"
@@ -243,7 +243,7 @@ export default function BacktestManager({ klines, buySellPoints, symbol, current
                 id="btn-run-simulation"
               >
                 <Play className="h-4.5 w-4.5 fill-current text-zinc-955" />
-                <span>{loading ? 'Simulating Trades...' : 'Run Automated Backtest'}</span>
+                <span>{loading ? '模拟交易中...' : '运行自动回测'}</span>
               </button>
             </div>
           </div>
@@ -252,35 +252,35 @@ export default function BacktestManager({ klines, buySellPoints, symbol, current
           <div className="flex gap-3 p-3.5 bg-zinc-950/40 border border-zinc-855 rounded-xl">
             <ShieldAlert className="h-4.5 w-4.5 text-emerald-400 shrink-0 mt-0.5" />
             <p className="text-[11px] text-zinc-400 leading-relaxed font-sans">
-              <strong>ChanLun Trading Rule Setup:</strong> Enters a 100% long portfolio position on first active Class 1 or 2 Buy signal (`一买`/`二买`). Liquidates position fully on any Class 1 or 2 Sell triggers (`一卖`/`二卖`) or on trailing Stop-Loss breaches. Uses daily close historical prices.
+              <strong>缠论交易规则设置:</strong> 在一类或二类买入信号(一买/二买)触发时建立100%多头仓位。在一类或二类卖出信号(一卖/二卖)或跟踪止损触发时完全平仓。使用日线收盘历史价格。
             </p>
           </div>
 
           {/* Simulation Output Overview */}
           {backtest && (
             <div className="space-y-6 transition-all animate-fade-in text-zinc-100">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400 border-b border-zinc-800 pb-2">Simulator Report Overview</h4>
+              <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400 border-b border-zinc-800 pb-2">模拟器报告概览</h4>
               
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="p-4 bg-zinc-950 border border-zinc-850 rounded-xl">
-                  <span className="text-[10px] text-zinc-500 font-mono uppercase">Starting Capital</span>
+                  <span className="text-[10px] text-zinc-500 font-mono uppercase">起始资金</span>
                   <p className="text-sm font-extrabold font-mono text-zinc-200 mt-1">${backtest.initialBalance}</p>
                 </div>
 
                 <div className="p-4 bg-zinc-950 border border-zinc-850 rounded-xl">
-                  <span className="text-[10px] text-zinc-500 font-mono uppercase">Closing Balance</span>
+                  <span className="text-[10px] text-zinc-500 font-mono uppercase">结束余额</span>
                   <p className="text-sm font-extrabold font-mono text-zinc-200 mt-1">${backtest.finalBalance}</p>
                 </div>
 
                 <div className="p-4 bg-zinc-950 border border-zinc-850 rounded-xl">
-                  <span className="text-[10px] text-zinc-500 font-mono uppercase">Net Total Return</span>
+                  <span className="text-[10px] text-zinc-500 font-mono uppercase">净总收益</span>
                   <p className={`text-sm font-extrabold font-mono mt-1 ${backtest.totalReturnPercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                     {backtest.totalReturnPercent >= 0 ? '+' : ''}{backtest.totalReturnPercent}%
                   </p>
                 </div>
 
                 <div className="p-4 bg-zinc-950 border border-zinc-850 rounded-xl">
-                  <span className="text-[10px] text-zinc-500 font-mono uppercase">Win Rate (Trades)</span>
+                  <span className="text-[10px] text-zinc-500 font-mono uppercase">胜率(交易)</span>
                   <p className="text-sm font-extrabold font-mono mt-1 text-zinc-200">
                     {backtest.winRate}% <span className="text-[10px] font-normal text-zinc-500 font-sans">({backtest.winningTrades}/{backtest.totalTrades})</span>
                   </p>
@@ -291,7 +291,7 @@ export default function BacktestManager({ klines, buySellPoints, symbol, current
               <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl bg-zinc-950 border border-zinc-850 text-zinc-100">
                 <div className="flex gap-2 items-center">
                   <Database className="h-4.5 w-4.5 text-emerald-400" />
-                  <span className="text-xs font-semibold">Store this Backtest Profile</span>
+                  <span className="text-xs font-semibold">保存此回测配置</span>
                 </div>
                 
                 {currentUser ? (
@@ -305,34 +305,34 @@ export default function BacktestManager({ klines, buySellPoints, symbol, current
                     }`}
                     id="btn-save-report"
                   >
-                    {saveStatus === 'success' ? 'Saved successfully! ✓' : 'Save To Supabase'}
+                    {saveStatus === 'success' ? '保存成功! ✓' : '保存到Supabase'}
                   </button>
                 ) : (
                   <span className="text-[11px] text-amber-500 font-medium bg-amber-950/20 border border-amber-900/30 px-3 py-1 rounded">
-                    Account Registration / Login required to save results permanently!
+                    需要账户注册/登录才能永久保存结果!
                   </span>
                 )}
               </div>
 
               {/* Trades Ledger Table */}
               <div>
-                <h5 className="text-xs font-bold text-zinc-400 mb-3 uppercase tracking-wider">Trades Ledger Ledger</h5>
+                <h5 className="text-xs font-bold text-zinc-400 mb-3 uppercase tracking-wider">交易账本</h5>
                 <div className="overflow-x-auto rounded-xl border border-zinc-850 bg-zinc-950">
                   <table className="w-full text-left text-xs text-zinc-300">
                     <thead className="bg-zinc-900 border-b border-zinc-850 text-zinc-500 font-mono font-semibold">
                       <tr>
-                        <th className="px-4 py-2.5">Date</th>
-                        <th className="px-4 py-2.5">Type</th>
-                        <th className="px-4 py-2.5">Signal Source</th>
-                        <th className="px-4 py-2.5">Execution Price</th>
-                        <th className="px-4 py-2.5">Trade Allocation</th>
-                        <th className="px-4 py-2.5 text-right">PnL Result</th>
+                        <th className="px-4 py-2.5">日期</th>
+                        <th className="px-4 py-2.5">类型</th>
+                        <th className="px-4 py-2.5">信号来源</th>
+                        <th className="px-4 py-2.5">执行价格</th>
+                        <th className="px-4 py-2.5">交易分配</th>
+                        <th className="px-4 py-2.5 text-right">盈亏结果</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-900 font-mono">
                       {backtest.trades.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="text-center py-6 text-zinc-500 font-sans">No trades were triggered. Try extending the analysis horizon.</td>
+                          <td colSpan={6} className="text-center py-6 text-zinc-500 font-sans">未触发任何交易。请尝试延长分析周期。</td>
                         </tr>
                       ) : (
                         backtest.trades.map((tr, i) => (
@@ -370,14 +370,14 @@ export default function BacktestManager({ klines, buySellPoints, symbol, current
           {!currentUser ? (
             <div className="p-8 border border-zinc-800 rounded-xl text-center bg-zinc-950/40">
               <Database className="h-8 w-8 text-zinc-700 mx-auto mb-2" />
-              <p className="text-sm font-semibold text-zinc-300 font-sans">Login Portal Suspended</p>
-              <p className="text-xs text-zinc-500 mt-1 font-sans">Please complete registration or log in at the top right corner to retrieve previous backtest histories synchronized in Supabase.</p>
+              <p className="text-sm font-semibold text-zinc-300 font-sans">登录门户暂停</p>
+              <p className="text-xs text-zinc-500 mt-1 font-sans">请在右上角完成注册或登录以检索Supabase中同步的历史回测记录。</p>
             </div>
           ) : records.length === 0 ? (
             <div className="p-8 border border-zinc-805 rounded-xl text-center bg-zinc-955 border-zinc-800">
               <Calendar className="h-8 w-8 text-zinc-700 mx-auto mb-2" />
-              <p className="text-sm font-semibold text-zinc-300 font-sans font-medium">No records found</p>
-              <p className="text-xs text-zinc-500 mt-1 font-sans">Your previous backtest simulations will be preserved here when saved to the database.</p>
+              <p className="text-sm font-semibold text-zinc-300 font-sans font-medium">未找到记录</p>
+              <p className="text-xs text-zinc-500 mt-1 font-sans">您之前的回测模拟将在此处保存到数据库时保留。</p>
             </div>
           ) : (
             <div className="divide-y divide-zinc-800/80 text-xs text-zinc-300">
@@ -386,9 +386,9 @@ export default function BacktestManager({ klines, buySellPoints, symbol, current
                   <div className="space-y-1">
                     <p className="font-extrabold text-sm text-zinc-100 font-mono tracking-tight">{rec.symbol} <span className="text-xs font-normal text-zinc-500 font-sans">({rec.startDate} to {rec.endDate})</span></p>
                     <p className="text-zinc-400 font-sans">
-                      Start Cash: <strong className="font-mono text-zinc-305">${rec.initialBalance}</strong> | End Balance: <strong className="font-mono text-zinc-100">${rec.finalBalance}</strong>
+                      起始资金: <strong className="font-mono text-zinc-305">${rec.initialBalance}</strong> | 结束余额: <strong className="font-mono text-zinc-100">${rec.finalBalance}</strong>
                     </p>
-                    <p className="text-[11px] text-zinc-505 font-mono text-zinc-500">Ran on: {new Date(rec.createdAt).toLocaleString()}</p>
+                    <p className="text-[11px] text-zinc-505 font-mono text-zinc-500">运行于: {new Date(rec.createdAt).toLocaleString()}</p>
                   </div>
 
                   <div className="flex items-center gap-4">
@@ -396,13 +396,13 @@ export default function BacktestManager({ klines, buySellPoints, symbol, current
                       <p className={`text-base font-extrabold font-mono leading-none ${rec.totalReturnPercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                         {rec.totalReturnPercent >= 0 ? '+' : ''}{rec.totalReturnPercent}%
                       </p>
-                      <p className="text-[10px] text-zinc-500 font-mono mt-1">Win rate: {rec.winRate}%</p>
+                      <p className="text-[10px] text-zinc-500 font-mono mt-1">胜率: {rec.winRate}%</p>
                     </div>
 
                     <button
                       onClick={() => handleDeleteHistory(rec.id)}
                       className="p-2 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-zinc-800 transition-colors cursor-pointer"
-                      title="Delete profile"
+                      title="删除配置"
                       id={`btn-delete-${rec.id}`}
                     >
                       <Trash2 className="h-4.5 w-4.5" />

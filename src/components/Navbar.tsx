@@ -27,7 +27,7 @@ export default function Navbar({ onUserChanged, currentUser }: NavbarProps) {
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password) {
-      setErrorMsg('Please input email and password');
+      setErrorMsg('请输入邮箱和密码');
       return;
     }
     setLoading(true);
@@ -40,7 +40,7 @@ export default function Navbar({ onUserChanged, currentUser }: NavbarProps) {
         if (error) {
           setErrorMsg(error.message);
         } else {
-          setSuccessMsg('Registration successful! Auto logged in.');
+          setSuccessMsg('注册成功!已自动登录。');
           onUserChanged(user);
           setTimeout(() => {
             setIsLoginModalOpen(false);
@@ -52,7 +52,7 @@ export default function Navbar({ onUserChanged, currentUser }: NavbarProps) {
         if (error) {
           setErrorMsg(error.message);
         } else {
-          setSuccessMsg('Logged in successfully!');
+          setSuccessMsg('登录成功!');
           onUserChanged(user);
           setTimeout(() => {
             setIsLoginModalOpen(false);
@@ -61,7 +61,7 @@ export default function Navbar({ onUserChanged, currentUser }: NavbarProps) {
         }
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Authentication error');
+      setErrorMsg(err.message || '认证错误');
     } finally {
       setLoading(false);
     }
@@ -90,9 +90,9 @@ export default function Navbar({ onUserChanged, currentUser }: NavbarProps) {
           </div>
           <div>
             <h1 className="text-lg font-bold font-sans tracking-tight text-zinc-100 leading-none">
-              ZenTheory <span className="text-xs text-zinc-500 font-normal">缠论分析系统</span>
+              缠论理论 <span className="text-xs text-zinc-500 font-normal">缠论分析系统</span>
             </h1>
-            <p className="text-[10px] font-mono text-zinc-500 mt-1 uppercase">Advanced Technical Bento Canvas</p>
+            <p className="text-[10px] font-mono text-zinc-500 mt-1 uppercase">高级技术分析画布</p>
           </div>
         </div>
 
@@ -108,12 +108,12 @@ export default function Navbar({ onUserChanged, currentUser }: NavbarProps) {
             {usingMock ? (
               <>
                 <AlertTriangle className="h-3.5 w-3.5 text-amber-500 animate-pulse" />
-                <span>Simulation Store</span>
+                <span>模拟存储</span>
               </>
             ) : (
               <>
                 <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-                <span>Supabase Active</span>
+                <span>Supabase 已激活</span>
               </>
             )}
           </div>
@@ -123,7 +123,7 @@ export default function Navbar({ onUserChanged, currentUser }: NavbarProps) {
             <div className="flex items-center gap-3">
               <div className="hidden md:flex flex-col items-end">
                 <span className="text-xs font-semibold text-zinc-200">{currentUser.email}</span>
-                <span className="text-[10px] font-mono text-emerald-400">Premium Account</span>
+                <span className="text-[10px] font-mono text-emerald-400">高级账户</span>
               </div>
               <div className="h-9 w-9 rounded-full bg-zinc-850 flex items-center justify-center border border-zinc-750">
                 <User className="h-4 w-4 text-zinc-400" />
@@ -131,7 +131,7 @@ export default function Navbar({ onUserChanged, currentUser }: NavbarProps) {
               <button
                 onClick={handleLogout}
                 className="flex items-center justify-center p-2 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-950/20 transition-colors cursor-pointer"
-                title="Log Out"
+                title="登出"
                 id="btn-logout"
               >
                 <LogOut className="h-5 w-5" />
@@ -147,7 +147,7 @@ export default function Navbar({ onUserChanged, currentUser }: NavbarProps) {
               id="btn-login-trigger"
             >
               <User className="h-3.5 w-3.5 text-emerald-400" />
-              <span>Login Portal</span>
+              <span>登录门户</span>
             </button>
           )}
         </div>
@@ -162,7 +162,7 @@ export default function Navbar({ onUserChanged, currentUser }: NavbarProps) {
 
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-lg font-bold text-zinc-100">
-                {isSignUp ? 'Create Quant Account' : 'Access ZenTheory Engine'}
+                {isSignUp ? '创建量化账户' : '访问缠论引擎'}
               </h3>
               <button 
                 onClick={() => {
@@ -179,14 +179,14 @@ export default function Navbar({ onUserChanged, currentUser }: NavbarProps) {
               <div className="p-3 bg-amber-950/20 rounded-xl mb-4 border border-amber-900/30 flex gap-2.5">
                 <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
                 <p className="text-[11px] text-amber-400 leading-normal font-sans">
-                  The portal is currently in <strong>Local Storage mode</strong>. Credentials can be entered safely to test the secure account layouts.
+                  门户当前处于<strong>本地存储模式</strong>。可以安全输入凭据以测试安全账户布局。
                 </p>
               </div>
             )}
 
             <form onSubmit={handleAuthSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-zinc-400 mb-1.5 font-sans">Email Address</label>
+                <label className="block text-xs font-semibold text-zinc-400 mb-1.5 font-sans">邮箱地址</label>
                 <input
                   type="email"
                   value={email}
@@ -198,13 +198,13 @@ export default function Navbar({ onUserChanged, currentUser }: NavbarProps) {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-400 mb-1.5 font-sans">Security Key / Password</label>
+                <label className="block text-xs font-semibold text-zinc-400 mb-1.5 font-sans">安全密钥/密码</label>
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="w-full px-3 py-2.5 text-sm bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
-                  placeholder="Min 6 characters"
+                  placeholder="最少6个字符"
                   required
                 />
               </div>
@@ -228,7 +228,7 @@ export default function Navbar({ onUserChanged, currentUser }: NavbarProps) {
                 disabled={loading}
                 className="w-full py-2.5 mt-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-zinc-950 font-bold text-sm transition-all cursor-pointer flex items-center justify-center shadow-lg shadow-emerald-500/10"
               >
-                {loading ? 'Processing Workspace...' : isSignUp ? 'Sign Up New Account' : 'Authenticate Identity'}
+                {loading ? '处理工作空间...' : isSignUp ? '注册新账户' : '验证身份'}
               </button>
             </form>
 
@@ -240,7 +240,7 @@ export default function Navbar({ onUserChanged, currentUser }: NavbarProps) {
                 }}
                 className="text-xs text-zinc-500 hover:text-emerald-400 transition-colors font-medium cursor-pointer"
               >
-                {isSignUp ? 'Already registered? Authenticate here' : 'Fresh quant trader? Create account now'}
+                {isSignUp ? '已注册?在此登录' : '新量化交易者?立即创建账户'}
               </button>
             </div>
             

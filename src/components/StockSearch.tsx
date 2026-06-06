@@ -1,60 +1,33 @@
 import React, { useState } from 'react';
-import { Search, TrendingUp, Compass, Globe } from 'lucide-react';
+import { Search, Compass, Globe } from 'lucide-react';
 
 interface StockSearchProps {
-  onSearch: (symbol: string, range: string, interval: string) => void;
+  onSearch: (symbol: string) => void;
   isLoading: boolean;
   activeSymbol: string;
-  activeRange: string;
-  activeInterval: string;
 }
 
 const PRESET_STOCKS = [
-  { symbol: 'AAPL', name: 'Apple Inc.' },
-  { symbol: 'TSLA', name: 'Tesla Inc.' },
   { symbol: '600519', name: 'Moutai (贵州茅台)' },
   { symbol: '002594', name: 'BYD (比亚迪)' },
-  { symbol: 'NVDA', name: 'Nvidia Corp.' },
-  { symbol: '000001', name: 'PingAn Bank (平安银行)' }
+  { symbol: '000001', name: 'PingAn Bank (平安银行)' },
+  { symbol: '600036', name: 'CMB (招商银行)' },
+  { symbol: '601318', name: 'PingAn Insurance (中国平安)' },
+  { symbol: '000858', name: 'Wuliangye (五粮液)' }
 ];
 
-export default function StockSearch({ onSearch, isLoading, activeSymbol, activeRange, activeInterval }: StockSearchProps) {
+export default function StockSearch({ onSearch, isLoading, activeSymbol }: StockSearchProps) {
   const [ticker, setTicker] = useState(activeSymbol);
-  const [range, setRange] = useState(activeRange);
-  const [interval, setIntervalVal] = useState(activeInterval);
-
-  // Sync internal state when props update
-  React.useEffect(() => {
-    setIntervalVal(activeInterval);
-  }, [activeInterval]);
-
-  React.useEffect(() => {
-    setRange(activeRange);
-  }, [activeRange]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!ticker.trim()) return;
-    onSearch(ticker.toUpperCase().trim(), range, interval);
+    onSearch(ticker.toUpperCase().trim());
   };
 
   const handlePresetClick = (symbol: string) => {
     setTicker(symbol);
-    onSearch(symbol, range, interval);
-  };
-
-  const handleRangeChange = (newRange: string) => {
-    setRange(newRange);
-    if (ticker.trim()) {
-      onSearch(ticker.toUpperCase().trim(), newRange, interval);
-    }
-  };
-
-  const handleIntervalChange = (newInterval: string) => {
-    setIntervalVal(newInterval);
-    if (ticker.trim()) {
-      onSearch(ticker.toUpperCase().trim(), range, newInterval);
-    }
+    onSearch(symbol);
   };
 
   return (
@@ -65,14 +38,14 @@ export default function StockSearch({ onSearch, isLoading, activeSymbol, activeR
         <div className="w-full lg:max-w-md">
           <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-widest flex items-center gap-2 mb-2 font-sans">
             <Compass className="h-4 w-4 text-emerald-400" />
-            <span>Search Global / A-Share Tickers</span>
+            <span>搜索A股股票代码</span>
           </h2>
           <form onSubmit={handleSubmit} className="relative flex items-center">
             <input
               type="text"
               value={ticker}
               onChange={(e) => setTicker(e.target.value)}
-              placeholder="e.g. AAPL, NVDA, 600519..."
+              placeholder="例如: 600519, 000001, 002594..."
               disabled={isLoading}
               className="w-full pl-4 pr-12 py-2.5 text-sm bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
             />
@@ -87,61 +60,14 @@ export default function StockSearch({ onSearch, isLoading, activeSymbol, activeR
           </form>
         </div>
 
-        {/* Range Selector & Timeframe Interval Selector */}
-        <div className="flex flex-wrap items-center gap-6">
-          {/* Timeframe Interval Control */}
-          <div className="flex flex-col">
-            <span className="text-xs font-semibold text-zinc-500 mb-2 font-sans uppercase tracking-widest">K-line Interval</span>
-            <div className="inline-flex bg-zinc-950 p-1 rounded-xl border border-zinc-800">
-              {[
-                { value: '5m', label: '5 Min' },
-                { value: '60m', label: '60 Min' },
-                { value: '4h', label: '4 Hour' },
-                { value: '1d', label: 'Daily' }
-              ].map(opt => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => handleIntervalChange(opt.value)}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-lg font-mono transition-all cursor-pointer ${
-                    interval === opt.value
-                      ? 'bg-emerald-500 text-zinc-950 font-bold shadow'
-                      : 'text-zinc-500 hover:text-zinc-300'
-                  }`}
-                  id={`btn-interval-${opt.value}`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
+        {/* Info Badge */}
+        <div className="flex items-center gap-3 px-4 py-2 bg-zinc-950 rounded-xl border border-zinc-800">
+          <div className="h-8 w-8 bg-emerald-500/10 rounded-lg flex items-center justify-center">
+            <Globe className="h-4 w-4 text-emerald-400" />
           </div>
-
-          {/* Range Selection Control */}
-          <div className="flex flex-col">
-            <span className="text-xs font-semibold text-zinc-500 mb-2 font-sans uppercase tracking-widest">Analyze Horizon</span>
-            <div className="inline-flex bg-zinc-950 p-1 rounded-xl border border-zinc-800">
-              {[
-                { value: '6m', label: '6 Month' },
-                { value: '1y', label: '1 Year' },
-                { value: '2y', label: '2 Year' }
-              ].map(opt => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => handleRangeChange(opt.value)}
-                  disabled={interval !== '1d'}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-lg font-mono transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ${
-                    range === opt.value
-                      ? 'bg-zinc-800 text-zinc-100 shadow'
-                      : 'text-zinc-500 hover:text-zinc-300'
-                  }`}
-                  id={`btn-range-${opt.value}`}
-                  title={interval !== '1d' ? 'Horizon applies only to Daily interval (intraday handles automatic timeframe)' : ''}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
+          <div>
+            <span className="text-[10px] text-zinc-500 font-mono tracking-wider block uppercase font-sans">数据范围</span>
+            <span className="text-sm font-bold text-zinc-100">5年日K线 · 前复权</span>
           </div>
         </div>
 
@@ -151,7 +77,7 @@ export default function StockSearch({ onSearch, isLoading, activeSymbol, activeR
       <div className="mt-4 pt-4 border-t border-zinc-800/80">
         <div className="flex items-center gap-2 mb-2">
           <Globe className="h-3.5 w-3.5 text-zinc-500" />
-          <span className="text-[10px] font-semibold uppercase font-sans tracking-widest text-zinc-500">Benchmarking Showcase</span>
+          <span className="text-[10px] font-semibold uppercase font-sans tracking-widest text-zinc-500">热门A股</span>
         </div>
         <div className="flex flex-wrap gap-2">
           {PRESET_STOCKS.map(item => (
@@ -160,7 +86,7 @@ export default function StockSearch({ onSearch, isLoading, activeSymbol, activeR
               type="button"
               onClick={() => handlePresetClick(item.symbol)}
               className={`px-3 py-1.5 rounded-xl border text-[11px] font-sans font-medium hover:border-emerald-500 hover:text-emerald-400 transition-all cursor-pointer ${
-                activeSymbol === item.symbol || (item.symbol === '600519' && activeSymbol === '600519.SS')
+                activeSymbol === item.symbol || activeSymbol === `${item.symbol}.SS` || activeSymbol === `${item.symbol}.SZ`
                   ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400 font-bold'
                   : 'border-zinc-805 bg-zinc-950 text-zinc-400 border-zinc-800 hover:bg-zinc-800'
               }`}

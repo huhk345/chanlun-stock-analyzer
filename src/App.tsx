@@ -15,14 +15,13 @@ import {
   calculateHubs,
   calculateBuySellPoints
 } from './utils/chanlun';
+import { calculateMACD, calculateBollingerBands } from './utils/indicators';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<SupabaseUser | null>(null);
   
   // Stock queries parameters
-  const [symbol, setSymbol] = useState('AAPL');
-  const [range, setRange] = useState('1y');
-  const [interval, setIntervalVal] = useState('1d');
+  const [symbol, setSymbol] = useState('600000');
   const [isLoading, setIsLoading] = useState(false);
   const [errorText, setErrorText] = useState('');
 
@@ -34,12 +33,12 @@ export default function App() {
   const [buySellPoints, setBuySellPoints] = useState<BuySellPoint[]>([]);
   const [dataSource, setDataSource] = useState('');
 
-  const fetchAndProcessStock = async (querySymbol: string, queryRange: string, queryInterval: string = interval) => {
+  const fetchAndProcessStock = async (querySymbol: string) => {
     setIsLoading(true);
     setErrorText('');
 
     try {
-      const response = await fetch(`/api/stock?symbol=${querySymbol}&range=${queryRange}&interval=${queryInterval}`);
+      const response = await fetch(`/api/stock?symbol=${querySymbol}`);
       if (!response.ok) {
         throw new Error('Stock retrieval endpoint failed');
       }
@@ -57,18 +56,27 @@ export default function App() {
       const computedStrokes = calculateStrokes(fractions);
       const computedSegments = calculateSegments(computedStrokes);
       const computedHubs = calculateHubs(computedStrokes);
-      const computedSignals = calculateBuySellPoints(computedStrokes, computedHubs);
+
+      // 计算MACD和BOLL指标用于买卖点动力学辅助判断
+      const macdData = calculateMACD(rawKlines, 12, 26, 9);
+      const bollData = calculateBollingerBands(rawKlines, 20, 2);
+
+      const computedSignals = calculateBuySellPoints(
+        computedStrokes,
+        computedHubs,
+        rawKlines,
+        macdData,
+        bollData
+      );
 
       // Sync React state
       setSymbol(data.symbol);
-      setRange(data.range || queryRange);
-      setIntervalVal(data.interval || queryInterval);
       setKlines(rawKlines);
       setStrokes(computedStrokes);
       setSegments(computedSegments);
       setHubs(computedHubs);
       setBuySellPoints(computedSignals);
-      setDataSource(data.source || 'Yahoo Finance');
+      setDataSource(data.source || 'TickFlow API');
 
     } catch (err: any) {
       console.error(err);
@@ -80,7 +88,7 @@ export default function App() {
 
   // Run on mount to display a majestic default chart
   useEffect(() => {
-    fetchAndProcessStock('AAPL', '1y', '1d');
+    fetchAndProcessStock('600000');
   }, []);
 
   return (
@@ -96,9 +104,9 @@ export default function App() {
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-zinc-900 border border-zinc-800 p-6 rounded-2xl text-zinc-100 shadow-md relative overflow-hidden">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.06),transparent_45%)]" />
           <div className="space-y-1 relative">
-            <h2 className="text-xl font-bold font-sans tracking-tight uppercase">ChanLun Quant Trading Workspace</h2>
+            <h2 className="text-xl font-bold font-sans tracking-tight uppercase">缠论量化交易工作台</h2>
             <p className="text-zinc-400 text-xs font-normal max-w-2xl">
-              Apply Zen Chan-Zhong-Shuo-Chan (缠中说禅) structural analysis to global equities. Track strokes, linear trends, and overlapping consolidations.
+              应用缠中说禅结构分析全球股票市场。追踪笔、线段和重叠中枢结构。
             </p>
           </div>
           <div className="flex items-center gap-3 relative shrink-0">
@@ -106,7 +114,7 @@ export default function App() {
               <LineChart className="h-5 w-5 text-emerald-400 animate-pulse" />
             </div>
             <div className="text-left">
-              <span className="text-[10px] text-zinc-500 font-mono tracking-wider block uppercase font-sans">Current Focus Asset</span>
+              <span className="text-[10px] text-zinc-500 font-mono tracking-wider block uppercase font-sans">当前关注资产</span>
               <span className="text-sm font-bold font-mono text-emerald-400">{symbol}</span>
             </div>
           </div>
@@ -116,17 +124,15 @@ export default function App() {
         <StockSearch 
           onSearch={fetchAndProcessStock} 
           isLoading={isLoading} 
-          activeSymbol={symbol} 
-          activeRange={range} 
-          activeInterval={interval}
+          activeSymbol={symbol}
         />
 
         {/* Global Loading / Error messages block */}
         {isLoading && (
           <div className="p-12 text-center bg-zinc-900 border border-zinc-800 rounded-2xl shadow-sm flex flex-col items-center justify-center">
             <div className="h-8 w-8 rounded-full border-2 border-emerald-500 border-t-transparent animate-spin mb-4" />
-            <h4 className="text-sm font-semibold text-zinc-200">Compiling Technical Market Canvas</h4>
-            <p className="text-xs text-zinc-550 mt-1 text-zinc-400">Merging K-line containment structures and locating fraction extremes...</p>
+            <h4 className="text-sm font-semibold text-zinc-200">编译技术市场画布</h4>
+            <p className="text-xs text-zinc-550 mt-1 text-zinc-400">合并K线包含关系并定位分型极值...</p>
           </div>
         )}
 
@@ -134,7 +140,7 @@ export default function App() {
           <div className="p-5 bg-red-950/20 border border-red-900/30 text-red-400 rounded-2xl flex gap-3 text-xs">
             <Activity className="h-5 w-5 text-red-500 mt-0.5 shrink-0" />
             <div>
-              <p className="font-extrabold font-sans">Market Lookup Failed</p>
+              <p className="font-extrabold font-sans">市场查询失败</p>
               <p className="text-zinc-405 leading-normal font-sans mt-1 text-zinc-400">{errorText}</p>
             </div>
           </div>
@@ -156,10 +162,10 @@ export default function App() {
 
             {/* Source label badge */}
             <div className="flex items-center justify-between px-3 py-2 bg-zinc-900 border border-zinc-800 rounded-xl text-[10px] text-zinc-400 font-mono">
-              <span>ACTIVE DATASET SOURCE: <strong>{dataSource}</strong></span>
+              <span>活跃数据源: <strong>{dataSource}</strong></span>
               <span className="flex items-center gap-1">
                 <CheckCircle2 className="h-3 w-3 text-emerald-400" />
-                Structural Analysis Synced Successfully
+                结构分析同步成功
               </span>
             </div>
 
@@ -193,27 +199,27 @@ export default function App() {
         <div className="bg-zinc-900 rounded-2xl border border-zinc-800 p-6 shadow-sm">
           <h3 className="text-xs font-bold text-zinc-350 flex items-center gap-2 mb-4 uppercase tracking-wider">
             <BookOpen className="h-4.5 w-4.5 text-emerald-400" />
-            <span>ChanLun (缠论) Theory Primer & Reference</span>
+            <span>缠论理论入门与参考</span>
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-[11px] text-zinc-400 leading-relaxed font-sans">
             <div className="space-y-1.5 p-4 bg-zinc-950/40 rounded-xl border border-zinc-850">
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono text-emerald-400 bg-emerald-950/20 border border-emerald-900/30 font-bold uppercase block w-fit">Basic Element: Stroke (笔)</span>
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono text-emerald-400 bg-emerald-950/20 border border-emerald-900/30 font-bold uppercase block w-fit">基础元素:笔</span>
               <p className="text-zinc-400 font-sans mt-2">
-                Formed after resolving K-line containment relationships. Must start at a 底分型 (Bottom Fraction) and end at a 顶分型 (Top Fraction), with at least 5 raw/merged bars between start/end points.
+                经过K线包含关系处理后形成。必须起始于底分型,结束于顶分型,且起点和终点之间至少有5根原始或合并K线。
               </p>
             </div>
             
             <div className="space-y-1.5 p-4 bg-zinc-950/40 rounded-xl border border-zinc-850">
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono text-cyan-400 bg-cyan-950/20 border border-cyan-900/30 font-bold uppercase block w-fit">Congestion Core: Price Hub (中枢)</span>
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono text-cyan-400 bg-cyan-950/20 border border-cyan-900/30 font-bold uppercase block w-fit">盘整核心:中枢</span>
               <p className="text-zinc-400 font-sans mt-2">
-                Formed by the overlap of the price zones of three consecutive alternating strokes. This core zone governs trend trends, providing breakout ceilings and support floors.
+                由连续三笔的价格区间重叠部分形成。该核心区域主导趋势走向,提供突破压力位和支撑位。
               </p>
             </div>
 
             <div className="space-y-1.5 p-4 bg-zinc-950/40 rounded-xl border border-zinc-850">
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono text-amber-400 bg-amber-950/20 border border-amber-900/30 font-bold uppercase block w-fit">Signal Matrix: Buy/Sell Points</span>
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono text-amber-400 bg-amber-950/20 border border-amber-900/30 font-bold uppercase block w-fit">信号矩阵:买卖点</span>
               <p className="text-zinc-400 font-sans mt-2">
-                <strong>Type 1</strong> triggers at key trend divergence peaks. <strong>Type 2</strong> triggers on pullbacks maintaining relative bottoms/tops. <strong>Type 3</strong> triggers on pullback tests outside successful Breakouts.
+                <strong>一类买卖点</strong>在关键趋势背离极值触发。<strong>二类买卖点</strong>在回调确认相对高低点触发。<strong>三类买卖点</strong>在突破回测确认触发。
               </p>
             </div>
           </div>
@@ -223,7 +229,7 @@ export default function App() {
 
       {/* Humble Footer */}
       <footer className="border-t border-zinc-850 py-6 mt-12 text-center text-[10px] font-mono text-zinc-500">
-        <p>© 2026 ZenChan Chuan-Lun Quant Workspace. Powered by Google AI Studio Build.</p>
+        <p>© 2026 缠论量化工作台。由 Google AI Studio 构建。</p>
       </footer>
 
     </div>

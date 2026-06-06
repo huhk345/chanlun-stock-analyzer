@@ -130,9 +130,9 @@ export default function GeminiAdvisor({ symbol, klines, strokes, segments, hubs,
         <div>
           <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2 font-sans uppercase tracking-wider">
             <BrainCircuit className="h-5 w-5 text-emerald-400" />
-            <span>Automated AI Multi-Factor Advisor</span>
+            <span>自动化AI多因子顾问</span>
           </h3>
-          <p className="text-xs text-zinc-500 mt-1">Get quantitative trading briefings processed by Gemini Core</p>
+          <p className="text-xs text-zinc-500 mt-1">获取由Gemini核心处理的量化交易简报</p>
         </div>
 
         <button
@@ -146,15 +146,15 @@ export default function GeminiAdvisor({ symbol, klines, strokes, segments, hubs,
           ) : (
             <Sparkles className="h-4 w-4 fill-zinc-950 text-zinc-950 animate-pulse" />
           )}
-          <span>{loading ? 'Compiling AI Analysis...' : 'Consult AI ChanLun Intelligence'}</span>
+          <span>{loading ? '编译AI分析...' : '咨询AI缠论智能'}</span>
         </button>
       </div>
 
       {loading && (
         <div className="p-8 border border-dashed border-zinc-800 rounded-xl bg-zinc-950/50 flex flex-col items-center justify-center text-center">
           <BrainCircuit className="h-10 w-10 text-emerald-400 animate-pulse mb-3" />
-          <p className="text-xs font-semibold text-zinc-300 font-sans">Gemini is running structural validations...</p>
-          <p className="text-[11px] text-zinc-500 mt-1 font-sans font-sans">Mapping active hubs and structural trend divergence</p>
+          <p className="text-xs font-semibold text-zinc-300 font-sans">Gemini正在运行结构验证...</p>
+          <p className="text-[11px] text-zinc-500 mt-1 font-sans font-sans">映射活跃中枢和结构性趋势背离</p>
         </div>
       )}
 
@@ -164,7 +164,7 @@ export default function GeminiAdvisor({ symbol, klines, strokes, segments, hubs,
           <div className="space-y-1">
             <p className="font-semibold">{errorMsg}</p>
             <p className="text-zinc-500 font-sans leading-relaxed">
-              Ensure that your <strong>GEMINI_API_KEY</strong> has been provided in the <strong>Settings &gt; Secrets</strong> panel of the workspace, then restart the application to register keys.
+              请确保在<strong>设置 &gt; 密钥</strong>面板中提供了<strong>GEMINI_API_KEY</strong>,然后重启应用程序以注册密钥。
             </p>
           </div>
         </div>
@@ -174,7 +174,7 @@ export default function GeminiAdvisor({ symbol, klines, strokes, segments, hubs,
         <div className="bg-zinc-950 border border-zinc-850 rounded-2xl p-6 transition-all duration-300 shadow-inner">
           <div className="flex items-center gap-2 pb-3 mb-4 border-b border-zinc-800">
             <CheckCircle2 className="h-4.5 w-4.5 text-emerald-400" />
-            <span className="text-xs font-bold text-emerald-400 font-sans uppercase tracking-wider">Quant analyst report issued</span>
+            <span className="text-xs font-bold text-emerald-400 font-sans uppercase tracking-wider">量化分析师报告已生成</span>
           </div>
           <div className="space-y-1 overflow-y-auto max-h-[420px] pr-2 text-zinc-100">
             {renderFormattedReport(report)}

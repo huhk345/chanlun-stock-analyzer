@@ -22,230 +22,167 @@ const ai = new GoogleGenAI({
   }
 });
 
-// Helper: Resolve Chinese stock symbols & general formats
+// TickFlow API Configuration
+// 免费API无需API Key，使用 https://free-api.tickflow.org
+// 完整服务需要API Key，使用 https://api.tickflow.org
+const TICKFLOW_API_KEY = process.env.TICKFLOW_API_KEY || '';
+const TICKFLOW_BASE_URL = TICKFLOW_API_KEY
+  ? 'https://api.tickflow.org'
+  : 'https://free-api.tickflow.org';
+
+// Helper: Resolve stock symbols for TickFlow API (Chinese stocks only)
 function resolveSymbol(symbol: string): { resolved: string; displayName: string; isChinaStock: boolean } {
   const clean = symbol.trim().toUpperCase();
   if (/^\d{6}$/.test(clean)) {
     // 6-digit pure numbers represent Chinese stocks
     const isSS = /^(60|68|90|11|13|51|58|60)/.test(clean);
-    const suffix = isSS ? 'SS' : 'SZ';
+    const suffix = isSS ? 'SH' : 'SZ';
     return {
       resolved: `${clean}.${suffix}`,
       displayName: `${clean}.${suffix}`,
       isChinaStock: true
     };
   }
+  // Handle symbols with .SS or .SZ suffix
+  if (clean.endsWith('.SS')) {
+    return {
+      resolved: clean.replace('.SS', '.SH'),
+      displayName: clean,
+      isChinaStock: true
+    };
+  }
+  if (clean.endsWith('.SZ')) {
+    return {
+      resolved: clean,
+      displayName: clean,
+      isChinaStock: true
+    };
+  }
   return {
     resolved: clean,
     displayName: clean,
-    isChinaStock: clean.endsWith('.SS') || clean.endsWith('.SZ')
+    isChinaStock: false
   };
 }
 
-// Generate Realistic Mock Candlesticks (Fallback)
-function generateMockKlines(symbol: string, days: number = 200, interval: string = '1d'): any[] {
-  const data: any[] = [];
-  let currentPrice = symbol.startsWith('AAPL') ? 180 : symbol.startsWith('TSLA') ? 220 : symbol.startsWith('600519') ? 1600 : 100;
-  
-  const today = new Date();
-  
-  // Decide spacing based on interval
-  let stepMs = 24 * 60 * 60 * 1000; // default 1d
-  let count = days;
-  
-  if (interval === '5m') {
-    stepMs = 5 * 60 * 1000;
-    count = 150; // 150 bars of 5m is clean
-  } else if (interval === '60m') {
-    stepMs = 60 * 60 * 1000;
-    count = 120; // 120 bars of 60m is clean
-  } else if (interval === '4h') {
-    stepMs = 4 * 60 * 60 * 1000;
-    count = 100; // 100 bars of 4h is clean
-  }
-  
-  for (let i = count; i >= 0; i--) {
-    const date = new Date(today.getTime() - i * stepMs);
-    
-    // For 1d, exclude weekends
-    if (interval === '1d' && (date.getDay() === 0 || date.getDay() === 6)) continue;
-    
-    const changePercent = (Math.random() - 0.49) * 0.05; 
-    const open = currentPrice;
-    const close = currentPrice * (1 + changePercent);
-    const high = Math.max(open, close) * (1 + Math.random() * 0.015);
-    const low = Math.min(open, close) * (1 - Math.random() * 0.015);
-    const volume = Math.floor(100000 + Math.random() * 1000000);
-    
-    let dateStr = '';
-    if (interval === '1d') {
-      dateStr = date.toISOString().split('T')[0];
-    } else {
-      const yyyy = date.getFullYear();
-      const mm = String(date.getMonth() + 1).padStart(2, '0');
-      const dd = String(date.getDate()).padStart(2, '0');
-      const hh = String(date.getHours()).padStart(2, '0');
-      const minVal = String(date.getMinutes()).padStart(2, '0');
-      dateStr = `${yyyy}-${mm}-${dd} ${hh}:${minVal}`;
-    }
-    
-    data.push({
-      date: dateStr,
-      open: parseFloat(open.toFixed(2)),
-      high: parseFloat(high.toFixed(2)),
-      low: parseFloat(low.toFixed(2)),
-      close: parseFloat(close.toFixed(2)),
-      volume: volume
-    });
-    
-    currentPrice = close;
-  }
-  
-  return data;
-}
-
-// Stock K-line Query endpoint using Yahoo Finance or fallback
+// Stock K-line Query endpoint using TickFlow API (Chinese stocks only)
 app.get('/api/stock', async (req, res) => {
-  const { symbol, range, interval } = req.query;
+  const { symbol } = req.query;
   if (!symbol) {
     return res.status(400).json({ error: 'Missing stock symbol parameter' });
   }
 
-  const queryRange = range ? String(range) : '1y'; 
-  const queryInterval = interval ? String(interval) : '1d';
-  const { resolved, displayName } = resolveSymbol(String(symbol));
+  const { resolved, displayName, isChinaStock } = resolveSymbol(String(symbol));
 
-  let yahooInterval = queryInterval;
-  let yahooRange = queryRange;
-
-  if (queryInterval === '5m') {
-    yahooInterval = '5m';
-    yahooRange = '5d';
-  } else if (queryInterval === '60m') {
-    yahooInterval = '60m';
-    yahooRange = '1mo';
-  } else if (queryInterval === '4h') {
-    yahooInterval = '60m'; // Fetch 60m and aggregate every 4 to make 4h
-    yahooRange = '3mo';
-  } else {
-    yahooInterval = '1d';
-  }
-  
-  try {
-    // Attempt real fetch from Yahoo Finance chart endpoint
-    const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${resolved}?range=${yahooRange}&interval=${yahooInterval}`;
-    const response = await fetch(yahooUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
-      }
+  if (!isChinaStock) {
+    return res.status(400).json({
+      error: 'This application only supports Chinese A-share stocks. Please use a 6-digit stock code (e.g., 600000, 000001) or a symbol with .SS/.SZ suffix.',
+      symbol: displayName
     });
+  }
+
+  // Always fetch 5 years of daily K-line data
+  const period = '1d';
+  const count = 365 * 5; // 5 years
+  const isFreeAPI = !TICKFLOW_API_KEY;
+
+  try {
+    // TickFlow API URL with query parameters
+    const tickflowUrl = `${TICKFLOW_BASE_URL}/v1/klines?symbol=${resolved}&period=${period}&count=${count}&adjust=forward`;
+
+    console.log(`[TickFlow] ${isFreeAPI ? '免费API' : '完整服务'} - Fetching 5 years data for ${displayName} (前复权)`);
+    console.log(`[TickFlow] URL: ${tickflowUrl}`);
+
+    const headers: Record<string, string> = {};
+    if (TICKFLOW_API_KEY) {
+      headers['x-api-key'] = TICKFLOW_API_KEY;
+    }
+
+    const response = await fetch(tickflowUrl, { headers });
+
+    console.log(`[TickFlow] Response status: ${response.status}`);
 
     if (!response.ok) {
-      console.warn(`Yahoo Finance rejected symbol: ${resolved}. Emitting fallbacks.`);
-      const fallbackData = generateMockKlines(resolved, yahooRange === '2y' ? 450 : yahooRange === '6m' ? 120 : 220, queryInterval);
-      return res.json({
-        symbol: resolved,
-        name: displayName,
-        klines: fallbackData,
-        source: 'Simulated Engine',
-        range: yahooRange,
-        interval: queryInterval
+      const errorText = await response.text();
+      console.error(`TickFlow API error: ${response.status} - ${errorText}`);
+      return res.status(response.status).json({
+        error: `Unable to fetch data for symbol "${displayName}" from TickFlow API. Status: ${response.status}`,
+        symbol: displayName,
+        details: errorText
       });
     }
 
-    const json: any = await response.json();
-    const result = json?.chart?.result?.[0];
-    
-    if (!result) {
-      throw new Error('Malformed structure from stock source');
+    const responseData = await response.json();
+    console.log(`[TickFlow] Response data keys: ${Object.keys(responseData || {}).join(', ')}`);
+
+    if (!responseData || !responseData.data) {
+      console.error(`[TickFlow] No data in response`);
+      throw new Error('No data returned from TickFlow API');
     }
 
-    const timestamps: number[] = result.timestamp || [];
-    const indicators = result.indicators?.quote?.[0] || {};
-    const opens: number[] = indicators.open || [];
-    const highs: number[] = indicators.high || [];
-    const lows: number[] = indicators.low || [];
-    const closes: number[] = indicators.close || [];
-    const volumes: number[] = indicators.volume || [];
+    const { data } = responseData;
+    const dataLength = data.timestamp?.length || 0;
+    console.log(`[TickFlow] Received ${dataLength} data points`);
+
+    if (dataLength === 0) {
+      throw new Error('No K-line data points returned from TickFlow API');
+    }
 
     const klines: any[] = [];
-    for (let i = 0; i < timestamps.length; i++) {
-      if (opens[i] === null || highs[i] === null || lows[i] === null || closes[i] === null) continue;
-      
-      const d = new Date(timestamps[i] * 1000);
-      let dateStr = '';
-      if (queryInterval === '1d') {
-        dateStr = d.toISOString().split('T')[0];
-      } else {
-        const yyyy = d.getFullYear();
-        const mm = String(d.getMonth() + 1).padStart(2, '0');
-        const dd = String(d.getDate()).padStart(2, '0');
-        const hh = String(d.getHours()).padStart(2, '0');
-        const minVal = String(d.getMinutes()).padStart(2, '0');
-        dateStr = `${yyyy}-${mm}-${dd} ${hh}:${minVal}`;
-      }
+
+    // TickFlow returns columnar data: arrays for each field
+    for (let i = 0; i < dataLength; i++) {
+      const timestamp = data.timestamp[i];
+      const open = data.open[i];
+      const high = data.high[i];
+      const low = data.low[i];
+      const close = data.close[i];
+      const volume = data.volume[i] || 0;
+
+      // Convert timestamp to date string (YYYY-MM-DD)
+      const date = new Date(timestamp);
+      const dateStr = date.toISOString().split('T')[0];
 
       klines.push({
         date: dateStr,
-        open: parseFloat(opens[i].toFixed(2)),
-        high: parseFloat(highs[i].toFixed(2)),
-        low: parseFloat(lows[i].toFixed(2)),
-        close: parseFloat(closes[i].toFixed(2)),
-        volume: volumes[i] ? Math.floor(volumes[i]) : 0
+        open: parseFloat(open.toFixed(2)),
+        high: parseFloat(high.toFixed(2)),
+        low: parseFloat(low.toFixed(2)),
+        close: parseFloat(close.toFixed(2)),
+        volume: volume
       });
     }
 
-    // Aggregate to 4h if requested
-    let processedKlines = klines;
-    if (queryInterval === '4h') {
-      processedKlines = [];
-      for (let i = 0; i < klines.length; i += 4) {
-        const chunk = klines.slice(i, i + 4);
-        if (chunk.length === 0) continue;
-        
-        const open = chunk[0].open;
-        const close = chunk[chunk.length - 1].close;
-        const high = Math.max(...chunk.map(c => c.high));
-        const low = Math.min(...chunk.map(c => c.low));
-        const volume = chunk.reduce((sum, c) => sum + c.volume, 0);
-        const date = chunk[0].date;
-        
-        processedKlines.push({ date, open, high, low, close, volume });
-      }
+    console.log(`[TickFlow] Processed ${klines.length} klines`);
+    if (klines.length > 0) {
+      console.log(`[TickFlow] First kline: ${JSON.stringify(klines[0])}`);
+      console.log(`[TickFlow] Last kline: ${JSON.stringify(klines[klines.length - 1])}`);
     }
 
-    if (processedKlines.length < 30) {
-      console.warn(`Insufficient online data bars for ${resolved} (${processedKlines.length} bars recovered). Engaging high-fidelity simulation fallbacks.`);
-      const fallbackData = generateMockKlines(resolved, 220, queryInterval);
-      return res.json({
-        symbol: resolved,
-        name: displayName,
-        klines: fallbackData,
-        source: processedKlines.length === 0 ? 'Simulated Engine' : `Simulated Engine (Failsafe for ${processedKlines.length} bars)`,
-        range: yahooRange,
-        interval: queryInterval
+    if (klines.length < 30) {
+      console.error(`Insufficient data bars for ${displayName} (only ${klines.length} bars available). Need at least 30 bars for analysis.`);
+      return res.status(404).json({
+        error: `Insufficient historical data for symbol "${displayName}". Only ${klines.length} bars available, need at least 30 for analysis.`,
+        symbol: displayName,
+        availableBars: klines.length
       });
     }
+
+    console.log(`[TickFlow] Successfully processed ${klines.length} klines for ${displayName}`);
 
     return res.json({
-      symbol: resolved,
+      symbol: displayName,
       name: displayName,
-      klines: processedKlines,
-      source: 'Yahoo Finance',
-      range: yahooRange,
-      interval: queryInterval
+      klines: klines,
+      source: 'TickFlow API',
+      period: '5 years daily'
     });
 
   } catch (error: any) {
-    console.error('Failed to resolve online stock metadata:', error.message);
-    const fallbackData = generateMockKlines(resolved, 220, queryInterval);
-    return res.json({
-      symbol: resolved,
-      name: displayName,
-      klines: fallbackData,
-      source: 'Simulated Engine (Failure Failover)',
-      range: yahooRange,
-      interval: queryInterval
+    console.error('Failed to fetch stock data from TickFlow API:', error.message);
+    return res.status(500).json({
+      error: `Failed to fetch stock data for "${displayName}": ${error.message}`,
+      symbol: displayName
     });
   }
 });

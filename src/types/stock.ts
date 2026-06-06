@@ -42,11 +42,14 @@ export interface Segment {
 
 export interface Hub {
   id: string;
-  high: number;  // Floor of the upper overlapping bounds
-  low: number;   // Ceiling of the lower overlapping bounds
+  zg: number;       // 中枢高点 = min of the 3 stroke highs
+  zd: number;       // 中枢低点 = max of the 3 stroke lows
+  gg: number;       // 最高点 = max of all stroke highs in hub
+  dd: number;       // 最低点 = min of all stroke lows in hub
   startIndex: number; // Start index in original Klines
   endIndex: number;   // End index in original Klines
   strokesCount: number;
+  level: number;    // 中枢级别: 1=笔中枢, 2=线段中枢
 }
 
 export type BuySellSignalType = 'BUY_1' | 'BUY_2' | 'BUY_3' | 'SELL_1' | 'SELL_2' | 'SELL_3';
@@ -58,6 +61,17 @@ export interface BuySellPoint {
   originalIndex: number;
   date: string;
   reason: string;
+  /** MACD背驰辅助信息 */
+  divergence?: {
+    /** 是否存在MACD背驰 */
+    hasMACDDivergence: boolean;
+    /** 背驰类型描述 */
+    description: string;
+  };
+  /** 关联的中枢ID（三买/三卖时使用） */
+  hubId?: string;
+  /** 趋势前提：该买卖点前是否存在至少两个同向中枢 */
+  hasTrendPremise?: boolean;
 }
 
 export interface StockInfo {
