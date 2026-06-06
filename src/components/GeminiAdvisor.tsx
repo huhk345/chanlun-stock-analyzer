@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Sparkles, BrainCircuit, RefreshCw, Layers, CheckCircle2, AlertTriangle, Key } from 'lucide-react';
+import { Sparkles, BrainCircuit, RefreshCw, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { Kline, Stroke, Segment, Hub } from '../types/stock';
+import { analyzeWithGemini } from '../utils/api';
 
 interface GeminiAdvisorProps {
   symbol: string;
@@ -29,23 +30,12 @@ export default function GeminiAdvisor({ symbol, klines, strokes, segments, hubs 
     };
 
     try {
-      const response = await fetch('/api/gemini/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          symbol,
-          lastKline,
-          stats
-        })
+      const reportText = await analyzeWithGemini({
+        symbol,
+        lastKline,
+        stats
       });
-
-      if (!response.ok) {
-        const errJson = await response.json().catch(() => ({}));
-        throw new Error(errJson.error || 'Failed to generate technical report');
-      }
-
-      const data = await response.json();
-      setReport(data.report || 'No report returned');
+      setReport(reportText || 'No report returned');
     } catch (err: any) {
       setErrorMsg(err.message || 'The AI analyst service is currently offline.');
     } finally {
@@ -84,7 +74,6 @@ export default function GeminiAdvisor({ symbol, klines, strokes, segments, hubs 
 
       // 3. Bullet points e.g. - list item
       if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
-        const trimmed = line.trim().substring(2);
         return (
           <li key={`li-${idx}`} className="list-disc list-inside text-xs font-sans text-zinc-400 pl-4 py-1.5 leading-relaxed">
             {processedComponent}
@@ -154,7 +143,7 @@ export default function GeminiAdvisor({ symbol, klines, strokes, segments, hubs 
           <div className="space-y-1">
             <p className="font-semibold">{errorMsg}</p>
             <p className="text-zinc-500 font-sans leading-relaxed">
-              请确保在<strong>设置 &gt; 密钥</strong>面板中提供了<strong>GEMINI_API_KEY</strong>,然后重启应用程序以注册密钥。
+              请确保在环境变量中设置了<strong>VITE_GEMINI_API_KEY</strong>,然后重新构建应用程序。
             </p>
           </div>
         </div>

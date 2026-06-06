@@ -281,7 +281,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
           {!currentUser ? (
             <div className="p-8 border border-zinc-800 rounded-xl text-center bg-zinc-950/40">
               <Database className="h-8 w-8 text-zinc-700 mx-auto mb-2" />
-              <p className="text-sm font-semibold text-zinc-300 font-sans">登录门户暂停</p>
+              <p className="text-sm font-semibold text-zinc-300 font-sans">请登录查看记录</p>
               <p className="text-xs text-zinc-500 mt-1 font-sans">请在右上角完成注册或登录以检索Supabase中同步的历史回测记录。</p>
             </div>
           ) : records.length === 0 ? (

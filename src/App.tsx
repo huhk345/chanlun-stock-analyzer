@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, BookOpen, LineChart, Cpu, Sparkles, CheckCircle2 } from 'lucide-react';
+import { Activity, LineChart, CheckCircle2 } from 'lucide-react';
 import Navbar from './components/Navbar';
 import StockSearch from './components/StockSearch';
 import ChanlunChart from './components/ChanlunChart';
@@ -14,6 +14,7 @@ import {
   calculateSegments,
   calculateHubs
 } from './utils/chanlun';
+import { fetchStockData } from './utils/api';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<SupabaseUser | null>(null);
@@ -35,12 +36,7 @@ export default function App() {
     setErrorText('');
 
     try {
-      const response = await fetch(`/api/stock?symbol=${querySymbol}`);
-      if (!response.ok) {
-        throw new Error('Stock retrieval endpoint failed');
-      }
-
-      const data = await response.json();
+      const data = await fetchStockData(querySymbol);
       const rawKlines: Kline[] = data.klines || [];
       
       if (rawKlines.length < 5) {
@@ -175,36 +171,6 @@ export default function App() {
 
           </div>
         )}
-
-        {/* ChanLun Introduction / Theory card */}
-        <div className="bg-zinc-900 rounded-2xl border border-zinc-800 p-6 shadow-sm">
-          <h3 className="text-xs font-bold text-zinc-350 flex items-center gap-2 mb-4 uppercase tracking-wider">
-            <BookOpen className="h-4.5 w-4.5 text-emerald-400" />
-            <span>缠论理论入门与参考</span>
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-[11px] text-zinc-400 leading-relaxed font-sans">
-            <div className="space-y-1.5 p-4 bg-zinc-950/40 rounded-xl border border-zinc-850">
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono text-emerald-400 bg-emerald-950/20 border border-emerald-900/30 font-bold uppercase block w-fit">基础元素:笔</span>
-              <p className="text-zinc-400 font-sans mt-2">
-                经过K线包含关系处理后形成。必须起始于底分型,结束于顶分型,且起点和终点之间至少有5根原始或合并K线。
-              </p>
-            </div>
-            
-            <div className="space-y-1.5 p-4 bg-zinc-950/40 rounded-xl border border-zinc-850">
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono text-cyan-400 bg-cyan-950/20 border border-cyan-900/30 font-bold uppercase block w-fit">盘整核心:中枢</span>
-              <p className="text-zinc-400 font-sans mt-2">
-                由连续三笔的价格区间重叠部分形成。该核心区域主导趋势走向,提供突破压力位和支撑位。
-              </p>
-            </div>
-
-            <div className="space-y-1.5 p-4 bg-zinc-950/40 rounded-xl border border-zinc-850">
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono text-amber-400 bg-amber-950/20 border border-amber-900/30 font-bold uppercase block w-fit">信号矩阵:买卖点</span>
-              <p className="text-zinc-400 font-sans mt-2">
-                <strong>一类买卖点</strong>在关键趋势背离极值触发。<strong>二类买卖点</strong>在回调确认相对高低点触发。<strong>三类买卖点</strong>在突破回测确认触发。
-              </p>
-            </div>
-          </div>
-        </div>
 
       </main>
 

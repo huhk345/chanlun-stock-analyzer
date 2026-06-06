@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Database, User, LogOut, Key, CheckCircle, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { User, LogOut, CheckCircle, AlertTriangle } from 'lucide-react';
 import { getCurrentUser, signInUser, signUpUser, signOutUser, isUsingMockDb, SupabaseUser } from '../utils/supabase';
 
 interface NavbarProps {
@@ -96,61 +96,26 @@ export default function Navbar({ onUserChanged, currentUser }: NavbarProps) {
           </div>
         </div>
 
-        {/* Database & Identity Statuses */}
-        <div className="flex items-center gap-4">
-          
-          {/* DB Indicator */}
-          <div className={`hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-mono font-medium border ${
-            usingMock 
-              ? 'bg-amber-950/20 text-amber-400 border-amber-900/40' 
-              : 'bg-emerald-950/20 text-emerald-400 border-emerald-900/30'
-          }`}>
-            {usingMock ? (
-              <>
-                <AlertTriangle className="h-3.5 w-3.5 text-amber-500 animate-pulse" />
-                <span>模拟存储</span>
-              </>
-            ) : (
-              <>
-                <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-                <span>Supabase 已激活</span>
-              </>
-            )}
-          </div>
-
-          {/* Account Portal */}
-          {currentUser ? (
-            <div className="flex items-center gap-3">
-              <div className="hidden md:flex flex-col items-end">
-                <span className="text-xs font-semibold text-zinc-200">{currentUser.email}</span>
-                <span className="text-[10px] font-mono text-emerald-400">高级账户</span>
-              </div>
-              <div className="h-9 w-9 rounded-full bg-zinc-850 flex items-center justify-center border border-zinc-750">
-                <User className="h-4 w-4 text-zinc-400" />
-              </div>
-              <button
-                onClick={handleLogout}
-                className="flex items-center justify-center p-2 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-950/20 transition-colors cursor-pointer"
-                title="登出"
-                id="btn-logout"
-              >
-                <LogOut className="h-5 w-5" />
-              </button>
+        {/* Account Portal */}
+        {currentUser && (
+          <div className="flex items-center gap-3">
+            <div className="hidden md:flex flex-col items-end">
+              <span className="text-xs font-semibold text-zinc-200">{currentUser.email}</span>
+              <span className="text-[10px] font-mono text-emerald-400">高级账户</span>
             </div>
-          ) : (
+            <div className="h-9 w-9 rounded-full bg-zinc-850 flex items-center justify-center border border-zinc-750">
+              <User className="h-4 w-4 text-zinc-400" />
+            </div>
             <button
-              onClick={() => {
-                setIsLoginModalOpen(true);
-                setIsSignUp(false);
-              }}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-900 text-zinc-100 text-xs font-medium font-sans tracking-wide border border-zinc-700 cursor-pointer transition-all"
-              id="btn-login-trigger"
+              onClick={handleLogout}
+              className="flex items-center justify-center p-2 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-950/20 transition-colors cursor-pointer"
+              title="登出"
+              id="btn-logout"
             >
-              <User className="h-3.5 w-3.5 text-emerald-400" />
-              <span>登录门户</span>
+              <LogOut className="h-5 w-5" />
             </button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Auth Modular Dialog */}
