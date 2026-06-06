@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Sparkles, BrainCircuit, RefreshCw, Layers, CheckCircle2, AlertTriangle, Key } from 'lucide-react';
-import { Kline, Stroke, Segment, Hub, BuySellPoint } from '../types/stock';
+import { Kline, Stroke, Segment, Hub } from '../types/stock';
 
 interface GeminiAdvisorProps {
   symbol: string;
@@ -8,10 +8,9 @@ interface GeminiAdvisorProps {
   strokes: Stroke[];
   segments: Segment[];
   hubs: Hub[];
-  buySellPoints: BuySellPoint[];
 }
 
-export default function GeminiAdvisor({ symbol, klines, strokes, segments, hubs, buySellPoints }: GeminiAdvisorProps) {
+export default function GeminiAdvisor({ symbol, klines, strokes, segments, hubs }: GeminiAdvisorProps) {
   const [report, setReport] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -28,14 +27,6 @@ export default function GeminiAdvisor({ symbol, klines, strokes, segments, hubs,
       segmentsCount: segments.length,
       hubsCount: hubs.length,
     };
-    
-    // Get recent 5 buy/sell points for commentary context
-    const currentSetup = buySellPoints.slice(-5).map(p => ({
-      type: p.type,
-      price: p.price,
-      date: p.date,
-      reason: p.reason
-    }));
 
     try {
       const response = await fetch('/api/gemini/analyze', {
@@ -44,8 +35,7 @@ export default function GeminiAdvisor({ symbol, klines, strokes, segments, hubs,
         body: JSON.stringify({
           symbol,
           lastKline,
-          stats,
-          currentSetup
+          stats
         })
       });
 

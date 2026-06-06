@@ -1,16 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { Play, TrendingUp, History, ShieldAlert, CheckCircle, Database, Trash2, Calendar } from 'lucide-react';
-import { Kline, Stroke, Segment, Hub, BuySellPoint, BacktestResult, BacktestTrade, BuySellSignalType } from '../types/stock';
+import { Kline, BacktestResult, BacktestTrade } from '../types/stock';
 import { saveBacktestResult, fetchBacktests, deleteBacktestResult, SupabaseUser } from '../utils/supabase';
 
 interface BacktestManagerProps {
   klines: Kline[];
-  buySellPoints: BuySellPoint[];
   symbol: string;
   currentUser: SupabaseUser | null;
 }
 
-export default function BacktestManager({ klines, buySellPoints, symbol, currentUser }: BacktestManagerProps) {
+export default function BacktestManager({ klines, symbol, currentUser }: BacktestManagerProps) {
   const [initialCapital, setInitialCapital] = useState(10000);
   const [stopLossPercent, setStopLossPercent] = useState(5);
   const [activeTab, setActiveTab] = useState<'run' | 'history'>('run');
@@ -33,118 +32,30 @@ export default function BacktestManager({ klines, buySellPoints, symbol, current
   }, [currentUser, backtest]);
 
   const handleRunBacktest = () => {
-    if (klines.length < 10) return;
+    // 买卖点功能已移除
     setLoading(true);
     setSaveStatus('idle');
 
-    // Simple delay to make simulation feel weighty and authoritative
     setTimeout(() => {
-      let balance = initialCapital;
-      let sharesHeld = 0;
-      let entryPrice = 0;
-      let activePositionVal = 0;
-      const trades: BacktestTrade[] = [];
-
-      // Sort buySellPoints chronologically
-      const sortedSignals = [...buySellPoints].sort((a, b) => a.originalIndex - b.originalIndex);
-
-      for (const sig of sortedSignals) {
-        const isUpwardSignal = sig.type.startsWith('BUY');
-
-        if (isUpwardSignal) {
-          // BUY Signal Trigger
-          if (sharesHeld === 0 && balance > 50) {
-            // Deploy 95% of active cash to prevent frictional over-drafts
-            const deployVal = balance * 0.95;
-            sharesHeld = Math.floor(deployVal / sig.price);
-            entryPrice = sig.price;
-            activePositionVal = sharesHeld * sig.price;
-            balance -= activePositionVal;
-
-            trades.push({
-              id: `tr-${Math.random().toString(36).substr(2, 9)}`,
-              type: 'BUY',
-              signalType: sig.type,
-              price: sig.price,
-              date: sig.date,
-              shares: sharesHeld,
-              value: activePositionVal
-            });
-          }
-        } else {
-          // SELL Signal Trigger
-          if (sharesHeld > 0) {
-            const releaseVal = sharesHeld * sig.price;
-            balance += releaseVal;
-            const entryRecord = trades.filter(t => t.type === 'BUY').pop();
-            const pnl = releaseVal - (entryRecord?.value || 0);
-            const pnlPercent = ((sig.price - entryPrice) / entryPrice) * 100;
-
-            trades.push({
-              id: `tr-${Math.random().toString(36).substr(2, 9)}`,
-              type: 'SELL',
-              signalType: sig.type,
-              price: sig.price,
-              date: sig.date,
-              shares: sharesHeld,
-              value: releaseVal,
-              pnl: parseFloat(pnl.toFixed(2)),
-              pnlPercent: parseFloat(pnlPercent.toFixed(2))
-            });
-
-            sharesHeld = 0;
-            entryPrice = 0;
-          }
-        }
-      }
-
-      // If holding shares at the end of the timeline, liquidate at final Kline close price
-      if (sharesHeld > 0) {
-        const lastCandle = klines[klines.length - 1];
-        const releaseVal = sharesHeld * lastCandle.close;
-        balance += releaseVal;
-        const entryRecord = trades.filter(t => t.type === 'BUY').pop();
-        const pnl = releaseVal - (entryRecord?.value || 0);
-        const pnlPercent = ((lastCandle.close - entryPrice) / entryPrice) * 100;
-
-        trades.push({
-          id: `tr-liq-${Math.random().toString(36).substr(2, 9)}`,
-          type: 'SELL',
-          signalType: 'MANUAL',
-          price: lastCandle.close,
-          date: lastCandle.date,
-          shares: sharesHeld,
-          value: releaseVal,
-          pnl: parseFloat(pnl.toFixed(2)),
-          pnlPercent: parseFloat(pnlPercent.toFixed(2))
-        });
-      }
-
-      // Compile stats
-      const totalTrades = trades.filter(t => t.type === 'SELL').length;
-      const winningTrades = trades.filter(t => t.type === 'SELL' && (t.pnl || 0) > 0).length;
-      const winRate = totalTrades > 0 ? parseFloat(((winningTrades / totalTrades) * 100).toFixed(1)) : 0;
-      const totalReturnPercent = parseFloat((((balance - initialCapital) / initialCapital) * 100).toFixed(2));
-
       const res: BacktestResult = {
         id: `bt-${Math.random().toString(36).substr(2, 9)}`,
         userId: currentUser?.id || 'anonymous',
-        symbol: symbol,
-        startDate: klines[0].date,
-        endDate: klines[klines.length - 1].date,
+        symbol,
+        startDate: klines[0]?.date || '',
+        endDate: klines[klines.length - 1]?.date || '',
         initialBalance: initialCapital,
-        finalBalance: parseFloat(balance.toFixed(2)),
-        totalReturnPercent: totalReturnPercent,
-        totalTrades: totalTrades,
-        winningTrades: winningTrades,
-        winRate: winRate,
-        trades: trades,
+        finalBalance: initialCapital,
+        totalReturnPercent: 0,
+        totalTrades: 0,
+        winningTrades: 0,
+        winRate: 0,
+        trades: [],
         createdAt: new Date().toISOString()
       };
 
       setBacktest(res);
       setLoading(false);
-    }, 850);
+    }, 500);
   };
 
   const handleSaveBacktest = async () => {

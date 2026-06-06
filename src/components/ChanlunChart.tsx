@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { createChart, createSeriesMarkers, CandlestickSeries, LineSeries, HistogramSeries, IChartApi, ISeriesApi, ISeriesMarkersPluginApi, CandlestickData, LineData, HistogramData, Time, ColorType, CrosshairMode } from 'lightweight-charts';
 import { AlertCircle } from 'lucide-react';
-import { Kline, Stroke, Segment, Hub, BuySellPoint } from '../types/stock';
+import { Kline, Stroke, Segment, Hub } from '../types/stock';
 import { calculateSMA, calculateBollingerBands, calculateMACD } from '../utils/indicators';
 
 interface ChanlunChartProps {
@@ -9,7 +9,6 @@ interface ChanlunChartProps {
   strokes: Stroke[];
   segments: Segment[];
   hubs: Hub[];
-  buySellPoints: BuySellPoint[];
   symbol: string;
 }
 
@@ -17,8 +16,9 @@ function dateToTime(dateStr: string): Time {
   return dateStr as Time;
 }
 
-export default function ChanlunChart({ klines, strokes, segments, hubs, buySellPoints, symbol }: ChanlunChartProps) {
+export default function ChanlunChart({ klines, strokes, segments, hubs, symbol }: ChanlunChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
@@ -32,7 +32,6 @@ export default function ChanlunChart({ klines, strokes, segments, hubs, buySellP
   const macdDeaRef = useRef<ISeriesApi<'Line'> | null>(null);
   const strokeSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const segmentSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
-  const hubSeriesRef = useRef<ISeriesApi<'Line'>[]>([]);
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
 
   // Display triggers
@@ -40,7 +39,6 @@ export default function ChanlunChart({ klines, strokes, segments, hubs, buySellP
   const [showStrokes, setShowStrokes] = useState(true);
   const [showSegments, setShowSegments] = useState(true);
   const [showHubs, setShowHubs] = useState(true);
-  const [showSignals, setShowSignals] = useState(true);
 
   // Display triggers for indicators
   const [showMA5, setShowMA5] = useState(false);
@@ -397,35 +395,6 @@ export default function ChanlunChart({ klines, strokes, segments, hubs, buySellP
     segmentSeriesRef.current?.setData(segData);
   }, [segments, klines]);
 
-  // Update buy/sell markers
-  useEffect(() => {
-    if (!markersPluginRef.current) return;
-
-    if (!showSignals || buySellPoints.length === 0) {
-      markersPluginRef.current.setMarkers([]);
-      return;
-    }
-
-    const markers = buySellPoints.map(pt => {
-      const isBuy = pt.type.startsWith('BUY');
-      const labelText = pt.type === 'BUY_1' ? '一买'
-        : pt.type === 'BUY_2' ? '二买'
-        : pt.type === 'BUY_3' ? '三买'
-        : pt.type === 'SELL_1' ? '一卖'
-        : pt.type === 'SELL_2' ? '二卖'
-        : '三卖';
-      return {
-        time: dateToTime(pt.date),
-        position: isBuy ? 'belowBar' as const : 'aboveBar' as const,
-        color: isBuy ? '#10b981' : '#f43f5e',
-        shape: isBuy ? 'arrowUp' as const : 'arrowDown' as const,
-        text: labelText,
-      };
-    }).sort((a, b) => (a.time as string).localeCompare(b.time as string));
-
-    markersPluginRef.current.setMarkers(markers);
-  }, [buySellPoints, showSignals]);
-
   // Toggle visibility
   useEffect(() => {
     if (candleSeriesRef.current) {
@@ -474,63 +443,134 @@ export default function ChanlunChart({ klines, strokes, segments, hubs, buySellP
     }
   }, [showMACD]);
 
-  // Draw hubs using line series
+  // Draw hubs with semi-transparent rectangles using Canvas API
   useEffect(() => {
-    if (!chartRef.current || !chartContainerRef.current || klines.length === 0) return;
+    if (!chartRef.current || !candleSeriesRef.current || klines.length === 0) return;
 
-    // Remove previous hub series
-    hubSeriesRef.current.forEach(s => {
-      try { chartRef.current?.removeSeries(s); } catch {}
-    });
-    hubSeriesRef.current = [];
+    if (!showHubs || hubs.length === 0) {
+      // Clear canvas if hubs are hidden
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+      }
+      return;
+    }
 
-    if (!showHubs || hubs.length === 0) return;
+    // Create or get canvas
+    let canvas = canvasRef.current;
+    if (!canvas && chartContainerRef.current) {
+      canvas = document.createElement('canvas');
+      canvas.style.position = 'absolute';
+      canvas.style.top = '0';
+      canvas.style.left = '0';
+      canvas.style.pointerEvents = 'none';
+      canvas.style.zIndex = '1';
+      chartContainerRef.current.appendChild(canvas);
+      canvasRef.current = canvas;
+    }
 
+    if (!canvas) return;
+
+    // Set canvas size
+    const container = chartContainerRef.current;
+    if (container) {
+      canvas.width = container.clientWidth;
+      canvas.height = container.clientHeight;
+    }
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Clear canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw each hub
     hubs.forEach(hub => {
-      const hubTop = chartRef.current!.addSeries(LineSeries, {
-        color: 'rgba(99, 102, 241, 0.5)',
-        lineWidth: 1,
-        lineStyle: 2,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-      });
-      const hubBottom = chartRef.current!.addSeries(LineSeries, {
-        color: 'rgba(99, 102, 241, 0.5)',
-        lineWidth: 1,
-        lineStyle: 2,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-      });
-      const hubMid = chartRef.current!.addSeries(LineSeries, {
-        color: 'rgba(99, 102, 241, 0.25)',
-        lineWidth: 1,
-        lineStyle: 2,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-      });
-
       const startK = klines[hub.startIndex];
       const endK = klines[Math.min(hub.endIndex, klines.length - 1)];
       if (!startK || !endK) return;
 
-      hubTop.setData([
-        { time: dateToTime(startK.date), value: hub.zg },
-        { time: dateToTime(endK.date), value: hub.zg },
-      ]);
-      hubBottom.setData([
-        { time: dateToTime(startK.date), value: hub.zd },
-        { time: dateToTime(endK.date), value: hub.zd },
-      ]);
-      hubMid.setData([
-        { time: dateToTime(startK.date), value: (hub.zg + hub.zd) / 2 },
-        { time: dateToTime(endK.date), value: (hub.zg + hub.zd) / 2 },
-      ]);
+      // Convert time to x coordinate
+      const x1 = chartRef.current!.timeScale().timeToCoordinate(startK.date as Time);
+      const x2 = chartRef.current!.timeScale().timeToCoordinate(endK.date as Time);
 
-      hubSeriesRef.current.push(hubTop, hubBottom, hubMid);
+      // Convert price to y coordinate
+      const y1 = candleSeriesRef.current!.priceToCoordinate(hub.zg);
+      const y2 = candleSeriesRef.current!.priceToCoordinate(hub.zd);
+
+      if (x1 === null || x2 === null || y1 === null || y2 === null) return;
+
+      // Draw filled rectangle with semi-transparent color
+      ctx.fillStyle = 'rgba(99, 102, 241, 0.15)';
+      ctx.fillRect(x1, Math.min(y1, y2), x2 - x1, Math.abs(y2 - y1));
+
+      // Draw border
+      ctx.strokeStyle = 'rgba(99, 102, 241, 0.6)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x1, Math.min(y1, y2), x2 - x1, Math.abs(y2 - y1));
+
+      // Draw middle line
+      const midY = (y1 + y2) / 2;
+      ctx.strokeStyle = 'rgba(99, 102, 241, 0.3)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath();
+      ctx.moveTo(x1, midY);
+      ctx.lineTo(x2, midY);
+      ctx.stroke();
+      ctx.setLineDash([]);
     });
+
+    // Redraw on chart changes
+    const redrawHubs = () => {
+      if (!chartRef.current || !candleSeriesRef.current || !ctx || !canvas) return;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      hubs.forEach(hub => {
+        const startK = klines[hub.startIndex];
+        const endK = klines[Math.min(hub.endIndex, klines.length - 1)];
+        if (!startK || !endK) return;
+
+        const x1 = chartRef.current!.timeScale().timeToCoordinate(startK.date as Time);
+        const x2 = chartRef.current!.timeScale().timeToCoordinate(endK.date as Time);
+        const y1 = candleSeriesRef.current!.priceToCoordinate(hub.zg);
+        const y2 = candleSeriesRef.current!.priceToCoordinate(hub.zd);
+
+        if (x1 === null || x2 === null || y1 === null || y2 === null) return;
+
+        ctx.fillStyle = 'rgba(99, 102, 241, 0.15)';
+        ctx.fillRect(x1, Math.min(y1, y2), x2 - x1, Math.abs(y2 - y1));
+
+        ctx.strokeStyle = 'rgba(99, 102, 241, 0.6)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x1, Math.min(y1, y2), x2 - x1, Math.abs(y2 - y1));
+
+        const midY = (y1 + y2) / 2;
+        ctx.strokeStyle = 'rgba(99, 102, 241, 0.3)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.moveTo(x1, midY);
+        ctx.lineTo(x2, midY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      });
+    };
+
+    // Subscribe to chart changes
+    chartRef.current.timeScale().subscribeVisibleLogicalRangeChange(redrawHubs);
+    chartRef.current.timeScale().subscribeVisibleTimeRangeChange(redrawHubs);
+
+    return () => {
+      if (chartRef.current) {
+        chartRef.current.timeScale().unsubscribeVisibleLogicalRangeChange(redrawHubs);
+        chartRef.current.timeScale().unsubscribeVisibleTimeRangeChange(redrawHubs);
+      }
+    };
   }, [hubs, klines, showHubs]);
 
   if (klines.length === 0) {
@@ -604,17 +644,6 @@ export default function ChanlunChart({ klines, strokes, segments, hubs, buySellP
               id="toggle-hubs"
             >
               <span>中枢</span>
-            </button>
-
-            <button
-              onClick={() => setShowSignals(!showSignals)}
-              className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans flex items-center gap-1.5 transition-all cursor-pointer ${
-                showSignals ? 'bg-emerald-500 text-zinc-950 font-bold shadow' : 'text-zinc-500 hover:text-zinc-300'
-              }`}
-              title="切换买卖点"
-              id="toggle-signals"
-            >
-              <span>买卖点</span>
             </button>
           </div>
 

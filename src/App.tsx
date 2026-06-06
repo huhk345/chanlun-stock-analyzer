@@ -6,16 +6,14 @@ import ChanlunChart from './components/ChanlunChart';
 import BacktestManager from './components/BacktestManager';
 import GeminiAdvisor from './components/GeminiAdvisor';
 import { SupabaseUser } from './utils/supabase';
-import { Kline, Stroke, Segment, Hub, BuySellPoint } from './types/stock';
+import { Kline, Stroke, Segment, Hub } from './types/stock';
 import {
   mergeKlines,
   findFractions,
   calculateStrokes,
   calculateSegments,
-  calculateHubs,
-  calculateBuySellPoints
+  calculateHubs
 } from './utils/chanlun';
-import { calculateMACD, calculateBollingerBands } from './utils/indicators';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<SupabaseUser | null>(null);
@@ -30,7 +28,6 @@ export default function App() {
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [hubs, setHubs] = useState<Hub[]>([]);
-  const [buySellPoints, setBuySellPoints] = useState<BuySellPoint[]>([]);
   const [dataSource, setDataSource] = useState('');
 
   const fetchAndProcessStock = async (querySymbol: string) => {
@@ -57,25 +54,12 @@ export default function App() {
       const computedSegments = calculateSegments(computedStrokes);
       const computedHubs = calculateHubs(computedStrokes);
 
-      // 计算MACD和BOLL指标用于买卖点动力学辅助判断
-      const macdData = calculateMACD(rawKlines, 12, 26, 9);
-      const bollData = calculateBollingerBands(rawKlines, 20, 2);
-
-      const computedSignals = calculateBuySellPoints(
-        computedStrokes,
-        computedHubs,
-        rawKlines,
-        macdData,
-        bollData
-      );
-
       // Sync React state
       setSymbol(data.symbol);
       setKlines(rawKlines);
       setStrokes(computedStrokes);
       setSegments(computedSegments);
       setHubs(computedHubs);
-      setBuySellPoints(computedSignals);
       setDataSource(data.source || 'TickFlow API');
 
     } catch (err: any) {
@@ -151,12 +135,11 @@ export default function App() {
           <div className="space-y-6 transition-all duration-300">
             
             {/* 1. Main visual chart */}
-            <ChanlunChart 
+            <ChanlunChart
               klines={klines}
               strokes={strokes}
               segments={segments}
               hubs={hubs}
-              buySellPoints={buySellPoints}
               symbol={symbol}
             />
 
@@ -171,23 +154,21 @@ export default function App() {
 
             {/* 2. Custom Bento Grid for Backtester & Gemini Advisor */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              
+
               {/* Backtester Side */}
-              <BacktestManager 
-                klines={klines} 
-                buySellPoints={buySellPoints} 
-                symbol={symbol} 
-                currentUser={currentUser} 
+              <BacktestManager
+                klines={klines}
+                symbol={symbol}
+                currentUser={currentUser}
               />
 
               {/* Gemini Advisor Side */}
-              <GeminiAdvisor 
+              <GeminiAdvisor
                 symbol={symbol}
                 klines={klines}
                 strokes={strokes}
                 segments={segments}
                 hubs={hubs}
-                buySellPoints={buySellPoints}
               />
 
             </div>
