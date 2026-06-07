@@ -1,12 +1,26 @@
 import { Kline } from '../types/stock';
 
+// Helper function to get API keys from localStorage or environment variables
+function getApiKey(key: string): string {
+  try {
+    const savedKeys = localStorage.getItem('api_keys');
+    if (savedKeys) {
+      const keys = JSON.parse(savedKeys);
+      if (keys[key]) {
+        return keys[key];
+      }
+    }
+  } catch (e) {
+    console.error('Failed to read API keys from localStorage');
+  }
+  return '';
+}
+
 // TickFlow API Configuration
 // 免费API无需API Key，使用 https://free-api.tickflow.org
 // 完整服务需要API Key，使用 https://api.tickflow.org
-const TICKFLOW_API_KEY = import.meta.env.VITE_TICKFLOW_API_KEY || '';
-const TICKFLOW_BASE_URL = TICKFLOW_API_KEY
-  ? 'https://api.tickflow.org'
-  : 'https://free-api.tickflow.org';
+const getTickFlowApiKey = () => getApiKey('tickflow') || import.meta.env.VITE_TICKFLOW_API_KEY || '';
+const getTickFlowBaseUrl = () => getTickFlowApiKey() ? 'https://api.tickflow.org' : 'https://free-api.tickflow.org';
 
 // Helper: Resolve stock symbols for TickFlow API (Chinese stocks only)
 function resolveSymbol(symbol: string): { resolved: string; displayName: string; isChinaStock: boolean } {
@@ -62,6 +76,8 @@ export async function fetchStockData(symbol: string): Promise<{
   // Always fetch 5 years of daily K-line data
   const period = '1d';
   const count = 365 * 5; // 5 years
+  const TICKFLOW_API_KEY = getTickFlowApiKey();
+  const TICKFLOW_BASE_URL = getTickFlowBaseUrl();
   const isFreeAPI = !TICKFLOW_API_KEY;
 
   // TickFlow API URL with query parameters
@@ -150,9 +166,10 @@ export async function fetchStockData(symbol: string): Promise<{
 }
 
 // Gemini API configuration
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
+const getGeminiApiKey = () => getApiKey('gemini') || import.meta.env.VITE_GEMINI_API_KEY || '';
+const getOpenRouterApiKey = () => getApiKey('openrouter') || import.meta.env.VITE_OPENROUTER_API_KEY || '';
 
-// Call Gemini API for technical analysis
+// Call Gemini API or OpenRouter API for technical analysis
 export async function analyzeWithGemini(params: {
   symbol: string;
   lastKline?: Kline;
@@ -163,8 +180,11 @@ export async function analyzeWithGemini(params: {
   };
   currentSetup?: any[];
 }): Promise<string> {
-  if (!GEMINI_API_KEY) {
-    throw new Error('Gemini API key is not configured. Please set VITE_GEMINI_API_KEY in your environment.');
+  const OPENROUTER_API_KEY = getOpenRouterApiKey();
+  const GEMINI_API_KEY = getGeminiApiKey();
+
+  if (!OPENROUTER_API_KEY && !GEMINI_API_KEY) {
+    throw new Error('未配置 AI API 密钥。请在配置中设置 Gemini API Key 或 OpenRouter API Key。');
   }
 
   const { symbol, lastKline, stats, currentSetup } = params;
@@ -186,38 +206,74 @@ export async function analyzeWithGemini(params: {
 
     Use strong technical prose. Respond in a highly legible and encouraging tone, strictly in the user's apparent context (Chinese language prefered since ChanLun is a traditional Chinese methodology). Make it look highly quantitative and authoritative.`;
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: prompt
-              }
-            ]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.7
-        }
-      })
+  // Use OpenRouter if available, otherwise use Gemini
+  if (OPENROUTER_API_KEY) {
+    console.log('[AI] Using OpenRouter API');
+    const response = await fetch(
+      'https://openrouter.ai/api/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+          'HTTP-Referer': window.location.origin,
+        },
+        body: JSON.stringify({
+          model: 'google/gemini-2.0-flash-exp:free',
+          messages: [
+            {
+              role: 'user',
+              content: prompt
+            }
+          ]
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('OpenRouter API error:', errorText);
+      throw new Error('OpenRouter 服务当前不可用。请检查 API 密钥是否有效。');
     }
-  );
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('Gemini API error:', errorText);
-    throw new Error('Gemini service is currently unavailable. Please check that VITE_GEMINI_API_KEY is active.');
+    const data = await response.json();
+    const report = data.choices?.[0]?.message?.content || '';
+    return report;
+  } else {
+    // Use Gemini API
+    console.log('[AI] Using Gemini API');
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: prompt
+                }
+              ]
+            }
+          ],
+          generationConfig: {
+            temperature: 0.7
+          }
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Gemini API error:', errorText);
+      throw new Error('Gemini 服务当前不可用。请检查 VITE_GEMINI_API_KEY 是否有效。');
+    }
+
+    const data = await response.json();
+    const report = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    return report;
   }
-
-  const data = await response.json();
-  const report = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  
-  return report;
 }

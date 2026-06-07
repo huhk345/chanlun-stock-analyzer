@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { Activity, LineChart, CheckCircle2 } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Activity, CheckCircle2 } from 'lucide-react';
 import Navbar from './components/Navbar';
-import StockSearch from './components/StockSearch';
 import ChanlunChart from './components/ChanlunChart';
 import BacktestManager from './components/BacktestManager';
 import GeminiAdvisor from './components/GeminiAdvisor';
+import ConfigView from './components/ConfigView';
 import { SupabaseUser } from './utils/supabase';
 import { Kline, Stroke, Segment, Hub } from './types/stock';
 import {
@@ -18,6 +18,7 @@ import { fetchStockData } from './utils/api';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<SupabaseUser | null>(null);
+  const [isConfigOpen, setIsConfigOpen] = useState(false);
   
   // Stock queries parameters
   const [symbol, setSymbol] = useState('600000');
@@ -75,37 +76,20 @@ export default function App() {
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans">
       
       {/* Dynamic Navbar */}
-      <Navbar onUserChanged={setCurrentUser} currentUser={currentUser} />
+      <Navbar
+        onUserChanged={setCurrentUser}
+        currentUser={currentUser}
+        onOpenConfig={() => setIsConfigOpen(true)}
+        onSearch={fetchAndProcessStock}
+        isLoading={isLoading}
+        activeSymbol={symbol}
+      />
+
+      {/* Config View Modal */}
+      <ConfigView isOpen={isConfigOpen} onClose={() => setIsConfigOpen(false)} />
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 md:p-8 space-y-6">
-        
-        {/* Welcome Header */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-zinc-900 border border-zinc-800 p-6 rounded-2xl text-zinc-100 shadow-md relative overflow-hidden">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.06),transparent_45%)]" />
-          <div className="space-y-1 relative">
-            <h2 className="text-xl font-bold font-sans tracking-tight uppercase">缠论量化交易工作台</h2>
-            <p className="text-zinc-400 text-xs font-normal max-w-2xl">
-              应用缠中说禅结构分析全球股票市场。追踪笔、线段和重叠中枢结构。
-            </p>
-          </div>
-          <div className="flex items-center gap-3 relative shrink-0">
-            <div className="h-10 w-10 bg-zinc-950 rounded-xl flex items-center justify-center border border-zinc-850">
-              <LineChart className="h-5 w-5 text-emerald-400 animate-pulse" />
-            </div>
-            <div className="text-left">
-              <span className="text-[10px] text-zinc-500 font-mono tracking-wider block uppercase font-sans">当前关注资产</span>
-              <span className="text-sm font-bold font-mono text-emerald-400">{symbol}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Search Panel */}
-        <StockSearch 
-          onSearch={fetchAndProcessStock} 
-          isLoading={isLoading} 
-          activeSymbol={symbol}
-        />
 
         {/* Global Loading / Error messages block */}
         {isLoading && (

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { createChart, createSeriesMarkers, CandlestickSeries, LineSeries, HistogramSeries, IChartApi, ISeriesApi, ISeriesMarkersPluginApi, CandlestickData, LineData, HistogramData, Time, ColorType, CrosshairMode } from 'lightweight-charts';
 import { AlertCircle } from 'lucide-react';
 import { Kline, Stroke, Segment, Hub } from '../types/stock';
@@ -467,17 +467,18 @@ export default function ChanlunChart({ klines, strokes, segments, hubs, symbol }
       canvas.style.top = '0';
       canvas.style.left = '0';
       canvas.style.pointerEvents = 'none';
-      canvas.style.zIndex = '1';
+      canvas.style.zIndex = '10'; // Increase z-index to be above the chart
       chartContainerRef.current.appendChild(canvas);
       canvasRef.current = canvas;
     }
 
     if (!canvas) return;
 
-    // Set canvas size
+    // Set canvas size (exclude price scale width)
     const container = chartContainerRef.current;
     if (container) {
-      canvas.width = container.clientWidth;
+      const priceScaleWidth = chartRef.current!.priceScale('right').width();
+      canvas.width = container.clientWidth - priceScaleWidth;
       canvas.height = container.clientHeight;
     }
 
@@ -528,6 +529,14 @@ export default function ChanlunChart({ klines, strokes, segments, hubs, symbol }
     const redrawHubs = () => {
       if (!chartRef.current || !candleSeriesRef.current || !ctx || !canvas) return;
 
+      // Update canvas size to match container (exclude price scale width)
+      const container = chartContainerRef.current;
+      if (container) {
+        const priceScaleWidth = chartRef.current!.priceScale('right').width();
+        canvas.width = container.clientWidth - priceScaleWidth;
+        canvas.height = container.clientHeight;
+      }
+
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       hubs.forEach(hub => {
@@ -561,17 +570,34 @@ export default function ChanlunChart({ klines, strokes, segments, hubs, symbol }
       });
     };
 
+    // Delayed redraw to ensure chart layout is fully updated
+    const delayedRedrawHubs = () => {
+      setTimeout(redrawHubs, 0);
+    };
+
     // Subscribe to chart changes
     chartRef.current.timeScale().subscribeVisibleLogicalRangeChange(redrawHubs);
     chartRef.current.timeScale().subscribeVisibleTimeRangeChange(redrawHubs);
+
+    // Subscribe to container size changes
+    const resizeObserver = new ResizeObserver(() => {
+      delayedRedrawHubs();
+    });
+    if (container) {
+      resizeObserver.observe(container);
+    }
+
+    // Initial delayed redraw to ensure chart is fully rendered
+    delayedRedrawHubs();
 
     return () => {
       if (chartRef.current) {
         chartRef.current.timeScale().unsubscribeVisibleLogicalRangeChange(redrawHubs);
         chartRef.current.timeScale().unsubscribeVisibleTimeRangeChange(redrawHubs);
       }
+      resizeObserver.disconnect();
     };
-  }, [hubs, klines, showHubs]);
+  }, [hubs, klines, showHubs, showMACD]);
 
   if (klines.length === 0) {
     return (
