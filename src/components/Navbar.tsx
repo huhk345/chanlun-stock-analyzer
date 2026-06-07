@@ -1,16 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User, LogOut, CheckCircle, AlertTriangle, Settings, Search, LineChart, Clock, X, Bell, ChevronDown } from 'lucide-react';
+import { User, LogOut, CheckCircle, AlertTriangle, Settings, Search, LineChart, Clock, X, ChevronDown, TrendingUp, TrendingDown, Info } from 'lucide-react';
 import { getCurrentUser, signInUser, signUpUser, signOutUser, isUsingMockDb, SupabaseUser } from '../utils/supabase';
-import { Kline } from '../types/stock';
+import { Kline, StockBasicInfo } from '../types/stock';
 
 interface NavbarProps {
   onUserChanged: (user: SupabaseUser | null) => void;
   currentUser: SupabaseUser | null;
   onOpenConfig: () => void;
+  onOpenAbout?: () => void;
   onSearch?: (symbol: string) => void;
   isLoading?: boolean;
   activeSymbol?: string;
   klines?: Kline[];
+  stockBasicInfo?: StockBasicInfo | null;
 }
 
 interface SearchHistoryItem {
@@ -28,7 +30,7 @@ const PRESET_STOCKS = [
 const MAX_HISTORY = 30;
 const SEARCH_HISTORY_KEY = 'chanlun_search_history';
 
-export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onSearch, isLoading, activeSymbol, klines }: NavbarProps) {
+export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpenAbout, onSearch, isLoading, activeSymbol, klines, stockBasicInfo }: NavbarProps) {
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -347,13 +349,46 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onSea
 
           {/* Active Symbol Badge */}
           {activeSymbol && (
-            <div className="hidden lg:flex items-center gap-2 h-9 px-3 rounded-md bg-gradient-to-r from-emerald-500/10 to-emerald-500/5 border border-emerald-500/30">
+            <div className="hidden lg:flex items-center gap-3 h-9 px-3 rounded-md bg-gradient-to-r from-emerald-500/10 to-emerald-500/5 border border-emerald-500/30">
               <LineChart className="h-3.5 w-3.5 text-emerald-400" strokeWidth={2.5} />
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider">Symbol</span>
-                <span className="text-xs font-bold font-mono text-emerald-300 tracking-tight">{activeSymbol}</span>
-              </div>
-              {klines && klines.length >= 2 && (
+              
+              {/* Stock Name & Symbol */}
+              {stockBasicInfo ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-zinc-200">{stockBasicInfo.name}</span>
+                  <span className="text-[9px] font-mono text-zinc-500">{stockBasicInfo.symbol}</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider">Symbol</span>
+                  <span className="text-xs font-bold font-mono text-emerald-300 tracking-tight">{activeSymbol}</span>
+                </div>
+              )}
+              
+              {/* Price & Change */}
+              {stockBasicInfo && (
+                <>
+                  <div className="h-4 w-px bg-zinc-800" />
+                  <div className="flex items-center gap-2">
+                    <span className={`text-sm font-bold font-mono ${stockBasicInfo.change >= 0 ? 'text-red-500' : 'text-green-500'}`}>
+                      {stockBasicInfo.price.toFixed(2)}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      {stockBasicInfo.change >= 0 ? (
+                        <TrendingUp className="h-3 w-3 text-red-400" />
+                      ) : (
+                        <TrendingDown className="h-3 w-3 text-green-400" />
+                      )}
+                      <span className={`text-[9px] font-mono font-semibold ${stockBasicInfo.change >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+                        {stockBasicInfo.change >= 0 ? '+' : ''}{stockBasicInfo.changePercent.toFixed(2)}%
+                      </span>
+                    </div>
+                  </div>
+                </>
+              )}
+              
+              {/* Kline Change (fallback) */}
+              {!stockBasicInfo && klines && klines.length >= 2 && (
                 <div className="flex items-center gap-0.5 ml-1">
                   <span className="h-1 w-1 rounded-full bg-emerald-400 animate-pulse" />
                   <span className={`text-[9px] font-mono ${
@@ -386,14 +421,16 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onSea
             </button>
           )}
 
-          {/* Notification */}
-          <button
-            className="hidden sm:flex items-center justify-center h-9 w-9 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60 transition-colors cursor-pointer relative"
-            title="通知"
-          >
-            <Bell className="h-4 w-4" />
-            <span className="absolute top-2 right-2 h-1.5 w-1.5 rounded-full bg-emerald-400" />
-          </button>
+          {/* About */}
+          {onOpenAbout && (
+            <button
+              onClick={onOpenAbout}
+              className="flex items-center justify-center h-9 w-9 rounded-md text-zinc-400 hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors cursor-pointer"
+              title="关于"
+            >
+              <Info className="h-4 w-4" />
+            </button>
+          )}
 
           {/* Settings */}
           <button

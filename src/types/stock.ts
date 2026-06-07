@@ -59,6 +59,23 @@ export interface StockInfo {
   currency: string;
 }
 
+export interface StockBasicInfo {
+  symbol: string;          // 股票代码
+  name: string;            // 股票名称
+  price: number;           // 当前价格
+  change: number;          // 涨跌额
+  changePercent: number;   // 涨跌幅
+  open: number;            // 开盘价
+  high: number;            // 最高价
+  low: number;             // 最低价
+  volume: number;          // 成交量
+  amount: number;          // 成交额
+  turnoverRate?: number;   // 换手率
+  peRatio?: number;        // 市盈率
+  totalMarketValue?: number; // 总市值
+  circulatingMarketValue?: number; // 流通市值
+}
+
 export interface BacktestTrade {
   id: string;
   type: 'BUY' | 'SELL';
