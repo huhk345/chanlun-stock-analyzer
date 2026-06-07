@@ -77,7 +77,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
     return klines.map(k => ({
       time: dateToTime(k.date),
       value: k.volume,
-      color: k.close >= k.open ? 'rgba(16, 185, 129, 0.25)' : 'rgba(244, 63, 94, 0.25)',
+      color: k.close >= k.open ? 'rgba(244, 63, 94, 0.25)' : 'rgba(16, 185, 129, 0.25)',
     }));
   }, [klines]);
 
@@ -120,12 +120,12 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
 
     // Candlestick series
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: '#10b981',
-      downColor: '#f43f5e',
-      borderUpColor: '#10b981',
-      borderDownColor: '#f43f5e',
-      wickUpColor: '#10b981',
-      wickDownColor: '#f43f5e',
+      upColor: '#f43f5e',
+      downColor: '#10b981',
+      borderUpColor: '#f43f5e',
+      borderDownColor: '#10b981',
+      wickUpColor: '#f43f5e',
+      wickDownColor: '#10b981',
     });
     candleSeriesRef.current = candleSeries;
 
@@ -641,11 +641,10 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
             {/* Left: Stock Name & Symbol */}
             <div className="flex items-center gap-4">
               <div className="flex flex-col">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-col gap-1">
                   <h2 className="text-xl font-bold text-zinc-100">{stockBasicInfo.name}</h2>
-                  <span className="text-sm font-mono text-zinc-500 bg-zinc-800/50 px-2 py-0.5 rounded">{stockBasicInfo.symbol}</span>
+                  <span className="text-sm font-mono text-zinc-500 bg-zinc-800/50 px-2 py-0.5 rounded self-start">{stockBasicInfo.symbol}</span>
                 </div>
-                <span className="text-[10px] text-zinc-500 mt-1">实时行情 · 缠论量化分析</span>
               </div>
             </div>
             

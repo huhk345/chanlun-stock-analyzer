@@ -246,7 +246,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
             <div className="flex items-center gap-1.5 mt-1">
               <span className="text-[9px] font-mono text-zinc-500 tracking-wider uppercase">ChanLun Pro</span>
               <span className="h-0.5 w-0.5 rounded-full bg-zinc-700" />
-              <span className="text-[9px] font-mono text-emerald-500/80 tracking-wider">v2.6.0</span>
+              <span className="text-[9px] font-mono text-emerald-500/80 tracking-wider">v0.0.1</span>
             </div>
           </div>
         </div>

@@ -1,11 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Activity, BrainCircuit, GripVertical } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Activity, BrainCircuit, GripVertical, Building2 } from 'lucide-react';
 import Navbar from './components/Navbar';
 import ChanlunChart from './components/ChanlunChart';
 import BacktestManager from './components/BacktestManager';
 import GeminiAdvisor from './components/GeminiAdvisor';
 import ConfigView from './components/ConfigView';
 import AboutView from './components/AboutView';
+import StockInfoPanel from './components/StockInfoPanel';
 import { SupabaseUser } from './utils/supabase';
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo } from './types/stock';
 import {
@@ -28,6 +29,10 @@ export default function App() {
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [isChatVisible, setIsChatVisible] = useState(true);
+  const [showStockInfo, setShowStockInfo] = useState(true);
+
+  // Prevent double API calls in StrictMode
+  const hasInitialized = useRef(false);
 
   // Resizable right-rail width (persisted)
   const [chatWidth, setChatWidth] = useState<number>(() => {
@@ -43,6 +48,17 @@ export default function App() {
     return CHAT_RAIL_DEFAULT;
   });
   const [isResizingRail, setIsResizingRail] = useState(false);
+
+  // Mobile breakpoint: < 768px -> AI panel flows under the chart
+  const [isMobile, setIsMobile] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.innerWidth < 768;
+  });
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Stock queries parameters
   const [symbol, setSymbol] = useState('600000');
@@ -105,6 +121,8 @@ export default function App() {
 
   // Run on mount to display a majestic default chart
   useEffect(() => {
+    if (hasInitialized.current) return;
+    hasInitialized.current = true;
     fetchAndProcessStock('600000');
   }, []);
 
@@ -150,7 +168,21 @@ export default function App() {
   // The chart re-renders when its container width changes via ResizeObserver,
   // so no extra wiring is needed when chatWidth toggles or drags.
 
-  const railOffset = isChatVisible ? chatWidth : 0;
+  const railOffset = isChatVisible && !isMobile ? chatWidth : 0;
+
+  const renderAdvisor = (extraWrapperClassName = '') => (
+    <div className={extraWrapperClassName}>
+      <GeminiAdvisor
+        symbol={symbol}
+        klines={klines}
+        strokes={strokes}
+        segments={segments}
+        hubs={hubs}
+        fractions={fractions}
+        onClose={isMobile ? () => setIsChatVisible(false) : undefined}
+      />
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans">
@@ -220,6 +252,35 @@ export default function App() {
               />
             </div>
 
+            {/* AI Advisor - flows inline below the chart on mobile */}
+            {isChatVisible && isMobile && renderAdvisor()}
+
+            {/* Stock Info Panel */}
+            {showStockInfo && (
+              <div className="relative">
+                <div className="absolute top-0 right-0 z-10">
+                  <button
+                    onClick={() => setShowStockInfo(false)}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-700/50 rounded-lg text-zinc-400 hover:text-zinc-200 transition-all text-[10px] font-semibold uppercase tracking-wider backdrop-blur-sm"
+                  >
+                    <Building2 className="h-3 w-3" />
+                    <span>隐藏详情</span>
+                  </button>
+                </div>
+                <StockInfoPanel stockCode={symbol} />
+              </div>
+            )}
+
+            {!showStockInfo && (
+              <button
+                onClick={() => setShowStockInfo(true)}
+                className="flex items-center gap-2 px-4 py-2.5 bg-zinc-900/50 hover:bg-zinc-800/60 border border-zinc-800/60 rounded-xl text-zinc-400 hover:text-zinc-200 transition-all text-xs font-semibold backdrop-blur-sm"
+              >
+                <Building2 className="h-4 w-4" />
+                <span>显示股票详情</span>
+              </button>
+            )}
+
             {/* Backtest Manager */}
             <BacktestManager
               klines={klines}
@@ -232,8 +293,8 @@ export default function App() {
 
       </main>
 
-      {/* Fixed AI Right Rail - always-on-top side panel */}
-      {isChatVisible && (
+      {/* Fixed AI Right Rail - always-on-top side panel (desktop only) */}
+      {isChatVisible && !isMobile && (
         <aside
           className="fixed right-0 z-40 flex shadow-[-12px_0_32px_-12px_rgba(0,0,0,0.6)]"
           style={{
@@ -272,8 +333,8 @@ export default function App() {
         </aside>
       )}
 
-      {/* Floating tab to re-open the rail when collapsed */}
-      {!isChatVisible && (
+      {/* Floating tab to re-open the rail when collapsed (desktop only) */}
+      {!isChatVisible && !isMobile && (
         <button
           type="button"
           onClick={() => setIsChatVisible(true)}
