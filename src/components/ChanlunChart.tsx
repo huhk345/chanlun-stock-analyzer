@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { createChart, createSeriesMarkers, CandlestickSeries, LineSeries, HistogramSeries, IChartApi, ISeriesApi, ISeriesMarkersPluginApi, CandlestickData, LineData, HistogramData, Time, ColorType, CrosshairMode } from 'lightweight-charts';
-import { AlertCircle, TrendingUp, TrendingDown, Activity, DollarSign } from 'lucide-react';
+import { AlertCircle, TrendingUp, TrendingDown, Activity, DollarSign, Briefcase, Users, User, ChevronRight } from 'lucide-react';
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo } from '../types/stock';
 import { calculateSMA, calculateBollingerBands, calculateMACD } from '../utils/indicators';
 
@@ -12,13 +12,15 @@ interface ChanlunChartProps {
   hubs: Hub[];
   symbol: string;
   stockBasicInfo?: StockBasicInfo | null;
+  industry?: string;
+  actualController?: string;
 }
 
 function dateToTime(dateStr: string): Time {
   return dateStr as Time;
 }
 
-export default function ChanlunChart({ klines, fractions, strokes, segments, hubs, symbol, stockBasicInfo }: ChanlunChartProps) {
+export default function ChanlunChart({ klines, fractions, strokes, segments, hubs, symbol, stockBasicInfo, industry, actualController }: ChanlunChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -410,7 +412,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
     const markers = fractions.map(fraction => ({
       time: dateToTime(fraction.date),
       position: fraction.type === 'TOP' ? 'aboveBar' as const : 'belowBar' as const,
-      color: fraction.type === 'TOP' ? '#ef4444' : '#22c55e',
+      color: fraction.type === 'TOP' ? '#ef4444' : '#3b82f6',
       shape: fraction.type === 'TOP' ? 'arrowDown' as const : 'arrowUp' as const,
     }));
 
@@ -1028,68 +1030,106 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
       )}
 
       {/* Floating Price Data Header panels */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 bg-zinc-950 p-3 rounded-xl border border-zinc-800">
-        <div>
-          <span className="text-[10px] font-mono text-zinc-500 uppercase">交易日期</span>
-          <div className="flex items-center gap-2 mt-0.5">
-            <p className="text-xs font-bold font-mono tracking-wide text-zinc-300">
-              {hoveredData ? hoveredData.date : klines[klines.length - 1].date}
+      <div className="bg-zinc-950 p-3 rounded-xl border border-zinc-800">
+        {/* Row 1: Price Data */}
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <div>
+            <span className="text-[10px] font-mono text-zinc-500 uppercase">交易日期</span>
+            <div className="flex items-center gap-2 mt-0.5">
+              <p className="text-xs font-bold font-mono tracking-wide text-zinc-300">
+                {hoveredData ? hoveredData.date : klines[klines.length - 1].date}
+              </p>
+              {(() => {
+                const data = hoveredData ?? klines[klines.length - 1];
+                if (!data) return null;
+
+                const currentIndex = hoveredData
+                  ? klines.findIndex(k => k.date === hoveredData.date)
+                  : klines.length - 1;
+
+                if (currentIndex <= 0) return null;
+
+                const prevClose = klines[currentIndex - 1].close;
+                const change = data.close - prevClose;
+                const pct = (change / prevClose) * 100;
+                const isUp = pct >= 0;
+
+                return (
+                  <span className={`text-[10px] font-mono font-bold tracking-wide px-1.5 py-0.5 rounded ${
+                    isUp ? 'text-red-400 bg-red-500/10' : 'text-blue-400 bg-blue-500/10'
+                  }`}>
+                    {isUp ? '+' : ''}{pct.toFixed(2)}%
+                  </span>
+                );
+              })()}
+            </div>
+          </div>
+          <div>
+            <span className="text-[10px] font-mono text-zinc-500 uppercase">开盘价</span>
+            <p className="text-xs font-bold font-mono tracking-wide text-zinc-200 mt-0.5">
+              {hoveredData ? hoveredData.open.toFixed(2) : klines[klines.length - 1].open.toFixed(2)}
             </p>
-            {(() => {
-              const data = hoveredData ?? klines[klines.length - 1];
-              if (!data) return null;
-
-              // Find the index of current data
-              const currentIndex = hoveredData
-                ? klines.findIndex(k => k.date === hoveredData.date)
-                : klines.length - 1;
-
-              // Need previous day's close price
-              if (currentIndex <= 0) return null;
-
-              const prevClose = klines[currentIndex - 1].close;
-              const change = data.close - prevClose;
-              const pct = (change / prevClose) * 100;
-              const isUp = pct >= 0;
-
-              return (
-                <span className={`text-[10px] font-mono font-bold tracking-wide px-1.5 py-0.5 rounded ${
-                  isUp ? 'text-emerald-400 bg-emerald-500/10' : 'text-red-400 bg-red-500/10'
-                }`}>
-                  {isUp ? '+' : ''}{pct.toFixed(2)}%
-                </span>
-              );
-            })()}
+          </div>
+          <div>
+            <span className="text-[10px] font-mono text-zinc-500 uppercase">收盘价</span>
+            <p className="text-xs font-bold font-mono tracking-wide mt-0.5 text-blue-400">
+              {hoveredData ? hoveredData.close.toFixed(2) : klines[klines.length - 1].close.toFixed(2)}
+            </p>
+          </div>
+          <div>
+            <span className="text-[10px] font-mono text-zinc-500 uppercase">最高/最低价</span>
+            <p className="text-xs font-bold font-mono tracking-wide text-zinc-400 mt-0.5">
+              {hoveredData
+                ? `${hoveredData.high.toFixed(2)} / ${hoveredData.low.toFixed(2)}`
+                : `${klines[klines.length - 1].high.toFixed(2)} / ${klines[klines.length - 1].low.toFixed(2)}`}
+            </p>
+          </div>
+          <div className="col-span-2 sm:col-span-1">
+            <span className="text-[10px] font-mono text-zinc-500 uppercase">成交量</span>
+            <p className="text-xs font-bold font-mono tracking-wide text-amber-400 mt-0.5">
+              {hoveredData
+                ? (hoveredData.volume / 1000).toFixed(1) + 'K'
+                : (klines[klines.length - 1].volume / 1000).toFixed(1) + 'K'}
+            </p>
           </div>
         </div>
-        <div>
-          <span className="text-[10px] font-mono text-zinc-500 uppercase">开盘价</span>
-          <p className="text-xs font-bold font-mono tracking-wide text-zinc-200 mt-0.5">
-            {hoveredData ? hoveredData.open.toFixed(2) : klines[klines.length - 1].open.toFixed(2)}
-          </p>
-        </div>
-        <div>
-          <span className="text-[10px] font-mono text-zinc-500 uppercase">收盘价</span>
-          <p className="text-xs font-bold font-mono tracking-wide mt-0.5 text-emerald-400">
-            {hoveredData ? hoveredData.close.toFixed(2) : klines[klines.length - 1].close.toFixed(2)}
-          </p>
-        </div>
-        <div>
-          <span className="text-[10px] font-mono text-zinc-500 uppercase">最高/最低价</span>
-          <p className="text-xs font-bold font-mono tracking-wide text-zinc-400 mt-0.5">
-            {hoveredData
-              ? `${hoveredData.high.toFixed(2)} / ${hoveredData.low.toFixed(2)}`
-              : `${klines[klines.length - 1].high.toFixed(2)} / ${klines[klines.length - 1].low.toFixed(2)}`}
-          </p>
-        </div>
-        <div className="col-span-2 sm:col-span-1">
-          <span className="text-[10px] font-mono text-zinc-500 uppercase">成交量</span>
-          <p className="text-xs font-bold font-mono tracking-wide text-amber-400 mt-0.5">
-            {hoveredData
-              ? (hoveredData.volume / 1000).toFixed(1) + 'K'
-              : (klines[klines.length - 1].volume / 1000).toFixed(1) + 'K'}
-          </p>
-        </div>
+
+        {/* Row 2: Industry & Controller */}
+        {industry && (
+          <div className="mt-2.5 pt-2.5 border-t border-zinc-800/60 flex flex-wrap items-center gap-x-5 gap-y-1.5">
+            <div className="flex items-center gap-2 min-w-0">
+              <Briefcase className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
+              <div className="flex flex-wrap items-center gap-1 min-w-0">
+                {industry.split(' > ').map((part, index, parts) => (
+                  <span key={index} className="flex items-center gap-1">
+                    <span className={`text-[11px] font-medium truncate ${
+                      index === parts.length - 1
+                        ? 'text-blue-400 font-semibold'
+                        : 'text-zinc-400'
+                    }`}>
+                      {part}
+                    </span>
+                    {index < parts.length - 1 && (
+                      <ChevronRight className="h-2.5 w-2.5 text-zinc-600 shrink-0" />
+                    )}
+                  </span>
+                ))}
+              </div>
+            </div>
+            {actualController && (
+              <div className="flex items-center gap-1.5">
+                <User className="h-3 w-3 text-zinc-500 shrink-0" />
+                <span className={`text-[11px] font-medium ${
+                  actualController === '无'
+                    ? 'text-zinc-500 italic'
+                    : 'text-zinc-300'
+                }`}>
+                  {actualController}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* TradingView Chart Container */}

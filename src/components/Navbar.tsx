@@ -230,14 +230,14 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
   };
 
   return (
-    <nav className="sticky top-0 z-50 text-zinc-100 bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 border-b border-zinc-800/80 shadow-[0_1px_0_0_rgba(16,185,129,0.08),0_4px_24px_-8px_rgba(0,0,0,0.6)] backdrop-blur-xl">
+    <nav className="sticky top-0 z-50 text-zinc-100 bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 border-b border-zinc-800/80 shadow-[0_1px_0_0_rgba(59,130,246,0.08),0_4px_24px_-8px_rgba(0,0,0,0.6)] backdrop-blur-xl">
       <div className="w-full h-14 flex items-center">
 
         {/* Left: Brand */}
         <div className="flex items-center gap-3 shrink-0 pl-4 md:pl-5 pr-3 h-full border-r border-zinc-800/60">
-          <div className="relative h-9 w-9 rounded-lg bg-gradient-to-br from-emerald-400 via-emerald-500 to-emerald-600 flex items-center justify-center shadow-[0_0_0_1px_rgba(16,185,129,0.3),0_4px_12px_-2px_rgba(16,185,129,0.4)]">
+          <div className="relative h-9 w-9 rounded-lg bg-gradient-to-br from-blue-400 via-blue-500 to-blue-600 flex items-center justify-center shadow-[0_0_0_1px_rgba(59,130,246,0.3),0_4px_12px_-2px_rgba(59,130,246,0.4)]">
             <span className="text-zinc-950 font-mono font-black text-lg leading-none">缠</span>
-            <div className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-300 ring-2 ring-zinc-950 animate-pulse" />
+            <div className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-blue-300 ring-2 ring-zinc-950 animate-pulse" />
           </div>
           <div className="hidden sm:flex flex-col leading-none">
             <h1 className="text-[15px] font-bold tracking-tight text-zinc-50 font-sans">
@@ -246,7 +246,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
             <div className="flex items-center gap-1.5 mt-1">
               <span className="text-[9px] font-mono text-zinc-500 tracking-wider uppercase">ChanLun Pro</span>
               <span className="h-0.5 w-0.5 rounded-full bg-zinc-700" />
-              <span className="text-[9px] font-mono text-emerald-500/80 tracking-wider">v0.0.1</span>
+              <span className="text-[9px] font-mono text-blue-500/80 tracking-wider">v0.0.1</span>
             </div>
           </div>
         </div>
@@ -259,7 +259,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
           <div className="hidden md:flex items-center flex-1 max-w-2xl relative px-4">
             <form onSubmit={handleSearchSubmit} className="relative w-full group">
               <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 pointer-events-none">
-                <Search className="h-3.5 w-3.5 text-zinc-500 group-focus-within:text-emerald-400 transition-colors" />
+                <Search className="h-3.5 w-3.5 text-zinc-500 group-focus-within:text-blue-400 transition-colors" />
               </div>
               <input
                 ref={searchInputRef}
@@ -270,7 +270,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
                 onBlur={() => setTimeout(() => setShowHistory(false), 200)}
                 placeholder="搜索股票代码 — 例如 600519, 000001, AAPL..."
                 disabled={isLoading}
-                className="w-full h-9 pl-9 pr-24 text-[13px] bg-zinc-900/70 text-zinc-100 border border-zinc-800 rounded-md focus:outline-none focus:bg-zinc-900 focus:border-emerald-500/60 focus:shadow-[0_0_0_3px_rgba(16,185,129,0.08)] font-mono transition-all placeholder:text-zinc-600"
+                className="w-full h-9 pl-9 pr-24 text-[13px] bg-zinc-900/70 text-zinc-100 border border-zinc-800 rounded-md focus:outline-none focus:bg-zinc-900 focus:border-blue-500/60 focus:shadow-[0_0_0_3px_rgba(59,130,246,0.08)] font-mono transition-all placeholder:text-zinc-600"
               />
               <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
                 <kbd className="hidden lg:inline-block px-1.5 py-0.5 text-[9px] font-mono text-zinc-500 bg-zinc-800/80 border border-zinc-700/50 rounded">
@@ -279,7 +279,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className="p-1.5 rounded bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-zinc-950 transition-all disabled:opacity-50 cursor-pointer shadow-sm shadow-emerald-500/20"
+                  className="p-1.5 rounded bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-zinc-950 transition-all disabled:opacity-50 cursor-pointer shadow-sm shadow-blue-500/20"
                 >
                   <Search className="h-3 w-3" strokeWidth={2.5} />
                 </button>
@@ -309,10 +309,10 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
                       className="flex items-center justify-between px-3 py-2 hover:bg-zinc-800/60 cursor-pointer transition-colors group"
                     >
                       <div className="flex items-center gap-3">
-                        <div className="h-6 w-6 rounded bg-zinc-800 group-hover:bg-emerald-500/10 flex items-center justify-center transition-colors">
-                          <LineChart className="h-3 w-3 text-zinc-500 group-hover:text-emerald-400" />
+                        <div className="h-6 w-6 rounded bg-zinc-800 group-hover:bg-blue-500/10 flex items-center justify-center transition-colors">
+                          <LineChart className="h-3 w-3 text-zinc-500 group-hover:text-blue-400" />
                         </div>
-                        <span className="text-xs font-mono font-semibold text-zinc-200 group-hover:text-emerald-400 transition-colors">{item.symbol}</span>
+                        <span className="text-xs font-mono font-semibold text-zinc-200 group-hover:text-blue-400 transition-colors">{item.symbol}</span>
                         <span className="text-[10px] text-zinc-500">{formatTime(item.timestamp)}</span>
                       </div>
                       <button
@@ -335,7 +335,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
           {/* Market Status */}
           <div className="hidden xl:flex items-center gap-2 h-9 px-3 rounded-md bg-zinc-900/50 border border-zinc-800/60">
             <div className="flex items-center gap-1.5">
-              <div className={`h-1.5 w-1.5 rounded-full ${isMarketOpen() ? 'bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.6)]' : 'bg-zinc-600'} ${isMarketOpen() ? 'animate-pulse' : ''}`} />
+              <div className={`h-1.5 w-1.5 rounded-full ${isMarketOpen() ? 'bg-blue-400 shadow-[0_0_8px_rgba(59,130,246,0.6)]' : 'bg-zinc-600'} ${isMarketOpen() ? 'animate-pulse' : ''}`} />
               <span className="text-[10px] font-mono font-semibold tracking-wider uppercase text-zinc-400">
                 {isMarketOpen() ? 'Live' : 'Closed'}
               </span>
@@ -349,8 +349,8 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
 
           {/* Active Symbol Badge */}
           {activeSymbol && (
-            <div className="hidden lg:flex items-center gap-3 h-9 px-3 rounded-md bg-gradient-to-r from-emerald-500/10 to-emerald-500/5 border border-emerald-500/30">
-              <LineChart className="h-3.5 w-3.5 text-emerald-400" strokeWidth={2.5} />
+            <div className="hidden lg:flex items-center gap-3 h-9 px-3 rounded-md bg-gradient-to-r from-blue-500/10 to-blue-500/5 border border-blue-500/30">
+              <LineChart className="h-3.5 w-3.5 text-blue-400" strokeWidth={2.5} />
               
               {/* Stock Name & Symbol */}
               {stockBasicInfo ? (
@@ -361,7 +361,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
               ) : (
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider">Symbol</span>
-                  <span className="text-xs font-bold font-mono text-emerald-300 tracking-tight">{activeSymbol}</span>
+                  <span className="text-xs font-bold font-mono text-blue-300 tracking-tight">{activeSymbol}</span>
                 </div>
               )}
               
@@ -390,13 +390,13 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
               {/* Kline Change (fallback) */}
               {!stockBasicInfo && klines && klines.length >= 2 && (
                 <div className="flex items-center gap-0.5 ml-1">
-                  <span className="h-1 w-1 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="h-1 w-1 rounded-full bg-blue-400 animate-pulse" />
                   <span className={`text-[9px] font-mono ${
                     (() => {
                       const last = klines[klines.length - 1];
                       const prev = klines[klines.length - 2];
                       const change = ((last.close - prev.close) / prev.close) * 100;
-                      return change >= 0 ? 'text-emerald-400/80' : 'text-red-400/80';
+                      return change >= 0 ? 'text-blue-400/80' : 'text-red-400/80';
                     })()
                   }`}>
                     {(() => {
@@ -415,7 +415,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
           {onSearch && (
             <button
               onClick={() => setShowSearch(!showSearch)}
-              className="md:hidden flex items-center justify-center h-9 w-9 rounded-md text-zinc-400 hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors cursor-pointer"
+              className="md:hidden flex items-center justify-center h-9 w-9 rounded-md text-zinc-400 hover:text-blue-400 hover:bg-blue-500/10 transition-colors cursor-pointer"
             >
               <Search className="h-4 w-4" />
             </button>
@@ -425,7 +425,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
           {onOpenAbout && (
             <button
               onClick={onOpenAbout}
-              className="flex items-center justify-center h-9 w-9 rounded-md text-zinc-400 hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors cursor-pointer"
+              className="flex items-center justify-center h-9 w-9 rounded-md text-zinc-400 hover:text-blue-400 hover:bg-blue-500/10 transition-colors cursor-pointer"
               title="关于"
             >
               <Info className="h-4 w-4" />
@@ -435,7 +435,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
           {/* Settings */}
           <button
             onClick={onOpenConfig}
-            className="flex items-center justify-center h-9 w-9 rounded-md text-zinc-400 hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors cursor-pointer"
+            className="flex items-center justify-center h-9 w-9 rounded-md text-zinc-400 hover:text-blue-400 hover:bg-blue-500/10 transition-colors cursor-pointer"
             title="API 配置"
           >
             <Settings className="h-4 w-4" />
@@ -448,14 +448,14 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
                 onClick={() => setUserMenuOpen(!userMenuOpen)}
                 className="flex items-center gap-2 h-9 pl-1.5 pr-2.5 rounded-md hover:bg-zinc-800/60 transition-colors cursor-pointer border border-transparent hover:border-zinc-800"
               >
-                <div className="h-7 w-7 rounded-md bg-gradient-to-br from-emerald-500/20 to-emerald-600/10 border border-emerald-500/30 flex items-center justify-center">
-                  <User className="h-3.5 w-3.5 text-emerald-400" />
+                <div className="h-7 w-7 rounded-md bg-gradient-to-br from-blue-500/20 to-blue-600/10 border border-blue-500/30 flex items-center justify-center">
+                  <User className="h-3.5 w-3.5 text-blue-400" />
                 </div>
                 <div className="hidden md:flex flex-col items-start leading-none">
                   <span className="text-[11px] font-semibold text-zinc-200 max-w-[120px] truncate">
                     {currentUser.email?.split('@')[0] || 'Quant'}
                   </span>
-                  <span className="text-[9px] font-mono text-emerald-400/80 mt-0.5">PRO</span>
+                  <span className="text-[9px] font-mono text-blue-400/80 mt-0.5">PRO</span>
                 </div>
                 <ChevronDown className={`h-3 w-3 text-zinc-500 transition-transform ${userMenuOpen ? 'rotate-180' : ''}`} />
               </button>
@@ -464,7 +464,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
                 <div className="absolute right-0 top-full mt-2 w-56 bg-zinc-900/95 border border-zinc-800 rounded-lg shadow-2xl shadow-black/60 overflow-hidden z-50 backdrop-blur-xl">
                   <div className="p-3 border-b border-zinc-800">
                     <p className="text-xs font-semibold text-zinc-200 truncate">{currentUser.email}</p>
-                    <p className="text-[10px] font-mono text-emerald-400 mt-0.5">高级量化账户</p>
+                    <p className="text-[10px] font-mono text-blue-400 mt-0.5">高级量化账户</p>
                   </div>
                   <div className="p-1">
                     <button
@@ -492,7 +492,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
               onChange={(e) => setTicker(e.target.value)}
               placeholder="股票代码: 600519, 000001..."
               disabled={isLoading}
-              className="w-full h-9 pl-3 pr-10 text-[13px] bg-zinc-900 text-zinc-100 border border-zinc-800 rounded-md focus:outline-none focus:border-emerald-500/60 focus:shadow-[0_0_0_3px_rgba(16,185,129,0.08)] font-mono"
+              className="w-full h-9 pl-3 pr-10 text-[13px] bg-zinc-900 text-zinc-100 border border-zinc-800 rounded-md focus:outline-none focus:border-blue-500/60 focus:shadow-[0_0_0_3px_rgba(59,130,246,0.08)] font-mono"
             />
           </form>
 
@@ -516,7 +516,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
                     key={item.symbol}
                     type="button"
                     onClick={() => handleHistoryClick(item.symbol)}
-                    className="px-2.5 py-1 rounded-md border border-zinc-800 bg-zinc-900 text-[11px] font-mono font-semibold text-emerald-400 hover:border-emerald-500/60 transition-all cursor-pointer"
+                    className="px-2.5 py-1 rounded-md border border-zinc-800 bg-zinc-900 text-[11px] font-mono font-semibold text-blue-400 hover:border-blue-500/60 transition-all cursor-pointer"
                   >
                     {item.symbol}
                   </button>
@@ -537,8 +537,8 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
                   onClick={() => handlePresetClick(item.symbol)}
                   className={`px-2.5 py-1 rounded-md border text-[11px] font-medium transition-all cursor-pointer ${
                     activeSymbol === item.symbol
-                      ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400'
-                      : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-emerald-500/60 hover:text-emerald-400'
+                      ? 'border-blue-500 bg-blue-500/10 text-blue-400'
+                      : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-blue-500/60 hover:text-blue-400'
                   }`}
                 >
                   {item.symbol}
@@ -554,7 +554,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4">
           <div className="w-full max-w-md bg-zinc-900 text-zinc-100 rounded-2xl shadow-2xl border border-zinc-800 p-6 relative overflow-hidden animate-fade-in" id="login-modal-box">
             
-            <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-emerald-400 via-emerald-500 to-emerald-600" />
+            <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600" />
 
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-lg font-bold text-zinc-100">
@@ -587,7 +587,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full px-3 py-2.5 text-sm bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
+                  className="w-full px-3 py-2.5 text-sm bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
                   placeholder="name@company.com"
                   required
                 />
@@ -599,7 +599,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full px-3 py-2.5 text-sm bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
+                  className="w-full px-3 py-2.5 text-sm bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
                   placeholder="最少6个字符"
                   required
                 />
@@ -613,8 +613,8 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
               )}
 
               {successMsg && (
-                <div className="p-3 bg-emerald-950/20 text-emerald-400 text-xs rounded-xl border border-emerald-900/30 flex items-center gap-2">
-                  <CheckCircle className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                <div className="p-3 bg-blue-950/20 text-blue-400 text-xs rounded-xl border border-blue-900/30 flex items-center gap-2">
+                  <CheckCircle className="h-3.5 w-3.5 shrink-0 text-blue-500" />
                   <span>{successMsg}</span>
                 </div>
               )}
@@ -622,7 +622,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full py-2.5 mt-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-zinc-950 font-bold text-sm transition-all cursor-pointer flex items-center justify-center shadow-lg shadow-emerald-500/10"
+                className="w-full py-2.5 mt-2 rounded-xl bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-zinc-950 font-bold text-sm transition-all cursor-pointer flex items-center justify-center shadow-lg shadow-blue-500/10"
               >
                 {loading ? '处理工作空间...' : isSignUp ? '注册新账户' : '验证身份'}
               </button>
@@ -634,7 +634,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
                   setIsSignUp(!isSignUp);
                   setErrorMsg('');
                 }}
-                className="text-xs text-zinc-500 hover:text-emerald-400 transition-colors font-medium cursor-pointer"
+                className="text-xs text-zinc-500 hover:text-blue-400 transition-colors font-medium cursor-pointer"
               >
                 {isSignUp ? '已注册?在此登录' : '新量化交易者?立即创建账户'}
               </button>

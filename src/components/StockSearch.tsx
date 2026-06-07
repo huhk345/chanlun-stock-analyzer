@@ -37,7 +37,7 @@ export default function StockSearch({ onSearch, isLoading, activeSymbol }: Stock
         {/* Left Search input */}
         <div className="w-full lg:max-w-md">
           <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-widest flex items-center gap-2 mb-2 font-sans">
-            <Compass className="h-4 w-4 text-emerald-400" />
+            <Compass className="h-4 w-4 text-blue-400" />
             <span>搜索A股股票代码</span>
           </h2>
           <form onSubmit={handleSubmit} className="relative flex items-center">
@@ -47,7 +47,7 @@ export default function StockSearch({ onSearch, isLoading, activeSymbol }: Stock
               onChange={(e) => setTicker(e.target.value)}
               placeholder="例如: 600519, 000001, 002594..."
               disabled={isLoading}
-              className="w-full pl-4 pr-12 py-2.5 text-sm bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
+              className="w-full pl-4 pr-12 py-2.5 text-sm bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
             />
             <button
                type="submit"
@@ -62,8 +62,8 @@ export default function StockSearch({ onSearch, isLoading, activeSymbol }: Stock
 
         {/* Info Badge */}
         <div className="flex items-center gap-3 px-4 py-2 bg-zinc-950 rounded-xl border border-zinc-800">
-          <div className="h-8 w-8 bg-emerald-500/10 rounded-lg flex items-center justify-center">
-            <Globe className="h-4 w-4 text-emerald-400" />
+          <div className="h-8 w-8 bg-blue-500/10 rounded-lg flex items-center justify-center">
+            <Globe className="h-4 w-4 text-blue-400" />
           </div>
           <div>
             <span className="text-[10px] text-zinc-500 font-mono tracking-wider block uppercase font-sans">数据范围</span>
@@ -85,9 +85,9 @@ export default function StockSearch({ onSearch, isLoading, activeSymbol }: Stock
               key={item.symbol}
               type="button"
               onClick={() => handlePresetClick(item.symbol)}
-              className={`px-3 py-1.5 rounded-xl border text-[11px] font-sans font-medium hover:border-emerald-500 hover:text-emerald-400 transition-all cursor-pointer ${
+              className={`px-3 py-1.5 rounded-xl border text-[11px] font-sans font-medium hover:border-blue-500 hover:text-blue-400 transition-all cursor-pointer ${
                 activeSymbol === item.symbol || activeSymbol === `${item.symbol}.SS` || activeSymbol === `${item.symbol}.SZ`
-                  ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400 font-bold'
+                  ? 'border-blue-500 bg-blue-500/10 text-blue-400 font-bold'
                   : 'border-zinc-805 bg-zinc-950 text-zinc-400 border-zinc-800 hover:bg-zinc-800'
               }`}
               id={`preset-${item.symbol}`}

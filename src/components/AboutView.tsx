@@ -46,16 +46,16 @@ export default function AboutView({ isOpen, onClose, dataSource }: AboutViewProp
       <div className="w-full max-w-2xl bg-zinc-900 text-zinc-100 rounded-2xl shadow-2xl border border-zinc-800 relative overflow-hidden animate-fade-in">
 
         {/* Header */}
-        <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-emerald-400 via-emerald-500 to-emerald-600" />
+        <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600" />
         <div className="p-6 border-b border-zinc-800">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-emerald-400 via-emerald-500 to-emerald-600 flex items-center justify-center shadow-[0_0_0_1px_rgba(16,185,129,0.3),0_4px_12px_-2px_rgba(16,185,129,0.4)]">
+              <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-blue-400 via-blue-500 to-blue-600 flex items-center justify-center shadow-[0_0_0_1px_rgba(59,130,246,0.3),0_4px_12px_-2px_rgba(59,130,246,0.4)]">
                 <Info className="h-5 w-5 text-zinc-950" />
               </div>
               <div>
                 <h3 className="text-lg font-bold text-zinc-100">关于缠论量化工作台</h3>
-                <p className="text-[10px] font-mono text-emerald-400/80 tracking-wider uppercase mt-0.5">ChanLun Pro · v2.6.0</p>
+                <p className="text-[10px] font-mono text-blue-400/80 tracking-wider uppercase mt-0.5">ChanLun Pro · v2.6.0</p>
               </div>
             </div>
             <button
@@ -83,11 +83,11 @@ export default function AboutView({ isOpen, onClose, dataSource }: AboutViewProp
             </div>
             <div className="p-3.5 bg-zinc-950/60 border border-zinc-800 rounded-xl">
               <div className="flex items-center gap-2 mb-1.5">
-                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                <CheckCircle2 className="h-3.5 w-3.5 text-blue-400" />
                 <span className="text-[10px] font-mono font-semibold uppercase tracking-wider text-zinc-500">结构分析</span>
               </div>
-              <p className="text-sm font-mono font-bold text-emerald-400 flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <p className="text-sm font-mono font-bold text-blue-400 flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" />
                 结构分析完成
               </p>
             </div>
@@ -97,7 +97,7 @@ export default function AboutView({ isOpen, onClose, dataSource }: AboutViewProp
           <div className="space-y-2">
             <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400">项目简介</h4>
             <p className="text-sm text-zinc-300 leading-relaxed">
-              缠论量化工作台是一款基于 <strong className="text-emerald-400">ChanLun (缠论)</strong> 理论构建的 A 股技术分析平台。
+              缠论量化工作台是一款基于 <strong className="text-blue-400">ChanLun (缠论)</strong> 理论构建的 A 股技术分析平台。
               通过自动识别分型、笔、线段、中枢等核心结构, 结合 AI 大模型进行多因子量化解读,
               帮助交易者客观理解市场走势、定位关键支撑压力位并识别潜在买卖点。
             </p>
@@ -110,7 +110,7 @@ export default function AboutView({ isOpen, onClose, dataSource }: AboutViewProp
               {FEATURES.map((f) => (
                 <div key={f.title} className="p-3.5 bg-zinc-950/60 border border-zinc-800 rounded-xl">
                   <div className="flex items-center gap-2 mb-1.5">
-                    <f.icon className="h-3.5 w-3.5 text-emerald-400" />
+                    <f.icon className="h-3.5 w-3.5 text-blue-400" />
                     <span className="text-xs font-semibold text-zinc-200">{f.title}</span>
                   </div>
                   <p className="text-[11px] text-zinc-400 leading-relaxed">{f.desc}</p>
@@ -142,7 +142,7 @@ export default function AboutView({ isOpen, onClose, dataSource }: AboutViewProp
                 href="https://github.com"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-zinc-300 bg-zinc-950/60 border border-zinc-800 hover:border-emerald-500/60 hover:text-emerald-400 rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-zinc-300 bg-zinc-950/60 border border-zinc-800 hover:border-blue-500/60 hover:text-blue-400 rounded-lg transition-colors"
               >
                 <Github className="h-3.5 w-3.5" />
                 <span>源代码</span>
@@ -152,7 +152,7 @@ export default function AboutView({ isOpen, onClose, dataSource }: AboutViewProp
                 href="https://aistudio.google.com/app/apikey"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-zinc-300 bg-zinc-950/60 border border-zinc-800 hover:border-emerald-500/60 hover:text-emerald-400 rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-zinc-300 bg-zinc-950/60 border border-zinc-800 hover:border-blue-500/60 hover:text-blue-400 rounded-lg transition-colors"
               >
                 <Sparkles className="h-3.5 w-3.5" />
                 <span>Google AI Studio</span>
@@ -162,7 +162,7 @@ export default function AboutView({ isOpen, onClose, dataSource }: AboutViewProp
                 href="https://openrouter.ai/keys"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-zinc-300 bg-zinc-950/60 border border-zinc-800 hover:border-emerald-500/60 hover:text-emerald-400 rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-zinc-300 bg-zinc-950/60 border border-zinc-800 hover:border-blue-500/60 hover:text-blue-400 rounded-lg transition-colors"
               >
                 <Sparkles className="h-3.5 w-3.5" />
                 <span>OpenRouter</span>

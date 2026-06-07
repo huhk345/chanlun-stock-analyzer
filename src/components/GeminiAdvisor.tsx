@@ -341,7 +341,7 @@ export default function GeminiAdvisor({
         return (
           <h3
             key={`h3-${idx}`}
-            className="text-lg font-black text-emerald-400 font-sans mt-7 mb-3 flex items-center gap-2"
+            className="text-lg font-black text-blue-400 font-sans mt-7 mb-3 flex items-center gap-2"
           >
             {line.replace('# ', '')}
           </h3>
@@ -354,7 +354,7 @@ export default function GeminiAdvisor({
         processedComponent = parts.map((part, pIdx) => {
           if (pIdx % 2 === 1) {
             return (
-              <strong key={`str-${pIdx}`} className="text-emerald-400 font-semibold font-sans">
+              <strong key={`str-${pIdx}`} className="text-blue-400 font-semibold font-sans">
                 {part}
               </strong>
             );
@@ -378,7 +378,7 @@ export default function GeminiAdvisor({
         return (
           <div
             key={`blk-${idx}`}
-            className="p-3 bg-zinc-900 border-l-4 border-emerald-500 rounded text-xs text-zinc-300 my-2 font-serif italic"
+            className="p-3 bg-zinc-900 border-l-4 border-blue-500 rounded text-xs text-zinc-300 my-2 font-serif italic"
           >
             {line.trim().substring(2)}
           </div>
@@ -414,8 +414,8 @@ export default function GeminiAdvisor({
       <div className="flex-shrink-0 px-4 py-3 border-b border-zinc-800/50 bg-zinc-900/60">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center">
-              <BrainCircuit className="h-4 w-4 text-emerald-400" />
+            <div className="w-8 h-8 rounded-lg bg-blue-500/15 border border-blue-500/30 flex items-center justify-center">
+              <BrainCircuit className="h-4 w-4 text-blue-400" />
             </div>
             <div>
               <h3 className="text-xs font-bold text-zinc-100 font-sans">AI 缠论顾问</h3>
@@ -428,7 +428,7 @@ export default function GeminiAdvisor({
               <button
                 type="button"
                 onClick={() => setModelDropdownOpen((o) => !o)}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-950/50 border border-zinc-800 hover:border-emerald-500/50 rounded-lg text-[10px] font-mono text-zinc-400 transition-all cursor-pointer"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-950/50 border border-zinc-800 hover:border-blue-500/50 rounded-lg text-[10px] font-mono text-zinc-400 transition-all cursor-pointer"
               >
                 <Cpu className="h-3 w-3" />
                 <span className="max-w-[80px] truncate">{selectedModelMeta?.id.split('/')[1] || '模型'}</span>
@@ -450,7 +450,7 @@ export default function GeminiAdvisor({
                     type="button"
                     onClick={handleRefreshModels}
                     disabled={modelsLoading}
-                    className="text-zinc-500 hover:text-emerald-400 transition-colors disabled:opacity-50"
+                    className="text-zinc-500 hover:text-blue-400 transition-colors disabled:opacity-50"
                   >
                     <RefreshCw className={`h-3 w-3 ${modelsLoading ? 'animate-spin' : ''}`} />
                   </button>
@@ -470,7 +470,7 @@ export default function GeminiAdvisor({
                         type="button"
                         onClick={() => handleSelectModel(m.id)}
                         className={`w-full text-left px-3 py-2 text-[10px] font-mono transition-colors cursor-pointer flex items-center gap-2 ${
-                          active ? 'bg-emerald-500/10 text-emerald-400' : 'text-zinc-300 hover:bg-zinc-900'
+                          active ? 'bg-blue-500/10 text-blue-400' : 'text-zinc-300 hover:bg-zinc-900'
                         }`}
                       >
                         <span className="flex-1 truncate">{m.id}</span>
@@ -518,7 +518,7 @@ export default function GeminiAdvisor({
       {chatMessages.length === 0 && !chatLoading && (
         <div className="flex-shrink-0 p-4 border-b border-zinc-800/50 bg-zinc-900/20">
           <div className="text-[10px] font-mono uppercase tracking-widest text-zinc-500 mb-3 flex items-center gap-1.5">
-            <Wand2 className="h-3 w-3 text-emerald-400" />
+            <Wand2 className="h-3 w-3 text-blue-400" />
             推荐提问
           </div>
           <div className="grid grid-cols-1 gap-2">
@@ -528,12 +528,12 @@ export default function GeminiAdvisor({
                 type="button"
                 onClick={() => handleSuggestedQuestion(q.text)}
                 disabled={klines.length === 0 || chatLoading}
-                className="text-left p-2.5 rounded-lg bg-zinc-950/50 hover:bg-zinc-900 border border-zinc-800/50 hover:border-emerald-500/30 transition-all cursor-pointer group disabled:opacity-50 disabled:cursor-not-allowed"
+                className="text-left p-2.5 rounded-lg bg-zinc-950/50 hover:bg-zinc-900 border border-zinc-800/50 hover:border-blue-500/30 transition-all cursor-pointer group disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <div className="flex items-start gap-2">
                   <span className="text-sm shrink-0">{q.icon}</span>
                   <div className="flex-1 min-w-0">
-                    <div className="text-[9px] font-mono uppercase tracking-wider text-zinc-600 group-hover:text-emerald-500 transition-colors">
+                    <div className="text-[9px] font-mono uppercase tracking-wider text-zinc-600 group-hover:text-blue-500 transition-colors">
                       {q.category}
                     </div>
                     <div className="text-[11px] text-zinc-300 leading-snug mt-0.5 line-clamp-2">
@@ -562,14 +562,14 @@ export default function GeminiAdvisor({
         ))}
         {chatLoading && (
           <div className="flex items-start gap-2">
-            <div className="shrink-0 w-7 h-7 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center">
-              <Bot className="h-3.5 w-3.5 text-emerald-400" />
+            <div className="shrink-0 w-7 h-7 rounded-lg bg-blue-500/15 border border-blue-500/30 flex items-center justify-center">
+              <Bot className="h-3.5 w-3.5 text-blue-400" />
             </div>
             <div className="flex-1 bg-zinc-900/50 border border-zinc-800/50 rounded-2xl rounded-tl-sm px-3.5 py-2.5">
               <div className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 bg-emerald-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                <span className="h-1.5 w-1.5 bg-emerald-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                <span className="h-1.5 w-1.5 bg-emerald-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                <span className="h-1.5 w-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                <span className="h-1.5 w-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                <span className="h-1.5 w-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                 <span className="text-[10px] font-mono text-zinc-500 ml-2">思考中...</span>
               </div>
             </div>
@@ -587,7 +587,7 @@ export default function GeminiAdvisor({
                 type="button"
                 onClick={handleRegenerateLast}
                 disabled={chatLoading}
-                className="text-[10px] font-mono text-zinc-500 hover:text-emerald-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 px-2 py-1 rounded bg-zinc-950/50 border border-zinc-800/50 hover:border-emerald-500/30"
+                className="text-[10px] font-mono text-zinc-500 hover:text-blue-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 px-2 py-1 rounded bg-zinc-950/50 border border-zinc-800/50 hover:border-blue-500/30"
               >
                 <Wand2 className="h-3 w-3" />
                 重生成
@@ -616,7 +616,7 @@ export default function GeminiAdvisor({
             placeholder={klines.length === 0 ? '请先加载股票数据…' : '向 AI 提问...'}
             disabled={klines.length === 0 || chatLoading}
             rows={1}
-            className="flex-1 resize-none bg-zinc-950/50 border border-zinc-800/50 rounded-xl px-3 py-2.5 text-xs font-sans text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/50 transition-colors disabled:opacity-50 max-h-24"
+            className="flex-1 resize-none bg-zinc-950/50 border border-zinc-800/50 rounded-xl px-3 py-2.5 text-xs font-sans text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-blue-500/50 transition-colors disabled:opacity-50 max-h-24"
             style={{ minHeight: '38px' }}
             onInput={(e) => {
               const target = e.currentTarget;
@@ -628,7 +628,7 @@ export default function GeminiAdvisor({
             type="button"
             onClick={handleSendChat}
             disabled={chatLoading || chatInput.trim().length === 0 || klines.length === 0}
-            className="shrink-0 flex items-center justify-center w-10 h-10 bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-zinc-950 rounded-xl shadow-lg shadow-emerald-500/20 cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            className="shrink-0 flex items-center justify-center w-10 h-10 bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-zinc-950 rounded-xl shadow-lg shadow-blue-500/20 cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             title="发送 (Enter)"
           >
             <Send className="h-4 w-4" />
@@ -661,11 +661,11 @@ function ChatBubble({ role, content, renderMarkdown }: ChatBubbleProps) {
   if (role === 'user') {
     return (
       <div className="flex items-start gap-2 justify-end">
-        <div className="max-w-[85%] bg-emerald-500/10 border border-emerald-500/30 text-zinc-100 rounded-2xl rounded-tr-sm px-3.5 py-2.5 text-xs font-sans leading-relaxed whitespace-pre-wrap break-words">
+        <div className="max-w-[85%] bg-blue-500/10 border border-blue-500/30 text-zinc-100 rounded-2xl rounded-tr-sm px-3.5 py-2.5 text-xs font-sans leading-relaxed whitespace-pre-wrap break-words">
           {content}
         </div>
-        <div className="shrink-0 w-7 h-7 rounded-lg bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center">
-          <User className="h-3.5 w-3.5 text-emerald-300" />
+        <div className="shrink-0 w-7 h-7 rounded-lg bg-blue-500/20 border border-blue-500/40 flex items-center justify-center">
+          <User className="h-3.5 w-3.5 text-blue-300" />
         </div>
       </div>
     );
@@ -675,7 +675,7 @@ function ChatBubble({ role, content, renderMarkdown }: ChatBubbleProps) {
   return (
     <div className="flex items-start gap-2">
       <div className="shrink-0 w-7 h-7 rounded-lg bg-zinc-800 border border-zinc-700 flex items-center justify-center">
-        <Bot className="h-3.5 w-3.5 text-emerald-400" />
+        <Bot className="h-3.5 w-3.5 text-blue-400" />
       </div>
       <div className="flex-1 min-w-0 bg-zinc-900 border border-zinc-800 rounded-2xl rounded-tl-sm px-3.5 py-2.5 text-zinc-100">
         {renderMarkdown(content)}

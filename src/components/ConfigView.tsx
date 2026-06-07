@@ -64,11 +64,11 @@ export default function ConfigView({ isOpen, onClose }: ConfigViewProps) {
       <div className="w-full max-w-2xl bg-zinc-900 text-zinc-100 rounded-2xl shadow-2xl border border-zinc-800 relative overflow-hidden animate-fade-in">
         
         {/* Header */}
-        <div className="absolute top-0 left-0 w-full h-1.5 bg-emerald-500" />
+        <div className="absolute top-0 left-0 w-full h-1.5 bg-blue-500" />
         <div className="p-6 border-b border-zinc-800">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-3">
-              <Settings className="h-6 w-6 text-emerald-400" />
+              <Settings className="h-6 w-6 text-blue-400" />
               <h3 className="text-lg font-bold text-zinc-100">API 密钥配置</h3>
             </div>
             <button
@@ -96,7 +96,7 @@ export default function ConfigView({ isOpen, onClose }: ConfigViewProps) {
                 type={showKeys.tickflow ? 'text' : 'password'}
                 value={apiKeys.tickflow}
                 onChange={(e) => setApiKeys(prev => ({ ...prev, tickflow: e.target.value }))}
-                className="w-full px-3 py-2.5 pr-20 text-sm bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 font-mono"
+                className="w-full px-3 py-2.5 pr-20 text-sm bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 font-mono"
                 placeholder="留空使用免费 API"
               />
               <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
@@ -117,7 +117,7 @@ export default function ConfigView({ isOpen, onClose }: ConfigViewProps) {
               </div>
             </div>
             <p className="text-[11px] text-zinc-500 leading-relaxed">
-              获取完整服务 API Key: <a href="https://api.tickflow.org" target="_blank" className="text-emerald-400 hover:underline">https://api.tickflow.org</a>
+              获取完整服务 API Key: <a href="https://api.tickflow.org" target="_blank" className="text-blue-400 hover:underline">https://api.tickflow.org</a>
             </p>
           </div>
 
@@ -133,7 +133,7 @@ export default function ConfigView({ isOpen, onClose }: ConfigViewProps) {
                 type={showKeys.gemini ? 'text' : 'password'}
                 value={apiKeys.gemini}
                 onChange={(e) => setApiKeys(prev => ({ ...prev, gemini: e.target.value }))}
-                className="w-full px-3 py-2.5 pr-20 text-sm bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 font-mono"
+                className="w-full px-3 py-2.5 pr-20 text-sm bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 font-mono"
                 placeholder="从 Google AI Studio 获取"
               />
               <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
@@ -154,7 +154,7 @@ export default function ConfigView({ isOpen, onClose }: ConfigViewProps) {
               </div>
             </div>
             <p className="text-[11px] text-zinc-500 leading-relaxed">
-              从 Google AI Studio 获取: <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-emerald-400 hover:underline">https://aistudio.google.com/app/apikey</a>
+              从 Google AI Studio 获取: <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-blue-400 hover:underline">https://aistudio.google.com/app/apikey</a>
             </p>
           </div>
 
@@ -170,7 +170,7 @@ export default function ConfigView({ isOpen, onClose }: ConfigViewProps) {
                 type={showKeys.openrouter ? 'text' : 'password'}
                 value={apiKeys.openrouter}
                 onChange={(e) => setApiKeys(prev => ({ ...prev, openrouter: e.target.value }))}
-                className="w-full px-3 py-2.5 pr-20 text-sm bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 font-mono"
+                className="w-full px-3 py-2.5 pr-20 text-sm bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 font-mono"
                 placeholder="使用 OpenRouter 的 AI 模型"
               />
               <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
@@ -191,13 +191,13 @@ export default function ConfigView({ isOpen, onClose }: ConfigViewProps) {
               </div>
             </div>
             <p className="text-[11px] text-zinc-500 leading-relaxed">
-              OpenRouter 支持多种 AI 模型: <a href="https://openrouter.ai/keys" target="_blank" className="text-emerald-400 hover:underline">https://openrouter.ai/keys</a>
+              OpenRouter 支持多种 AI 模型: <a href="https://openrouter.ai/keys" target="_blank" className="text-blue-400 hover:underline">https://openrouter.ai/keys</a>
             </p>
           </div>
 
           {/* Status Messages */}
           {saved && (
-            <div className="p-3 bg-emerald-950/20 border border-emerald-900/30 rounded-xl flex items-center gap-2 text-emerald-400">
+            <div className="p-3 bg-blue-950/20 border border-blue-900/30 rounded-xl flex items-center gap-2 text-blue-400">
               <CheckCircle2 className="h-4 w-4" />
               <span className="text-xs font-semibold">配置已保存</span>
             </div>
@@ -233,7 +233,7 @@ export default function ConfigView({ isOpen, onClose }: ConfigViewProps) {
           </button>
           <button
             onClick={handleSave}
-            className="px-6 py-2.5 bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-zinc-950 font-bold text-sm rounded-xl shadow-lg shadow-emerald-500/10 cursor-pointer transition-all"
+            className="px-6 py-2.5 bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-zinc-950 font-bold text-sm rounded-xl shadow-lg shadow-blue-500/10 cursor-pointer transition-all"
           >
             保存配置
           </button>

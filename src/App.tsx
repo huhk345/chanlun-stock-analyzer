@@ -18,6 +18,22 @@ import {
 } from './utils/chanlun';
 import { fetchStockData, fetchStockBasicInfo } from './utils/api';
 
+interface ReductionPlan {
+  title: string;
+  url: string;
+  reduction_date: string;
+  announcement_type: string;
+  announcement_date: string;
+}
+
+interface StockMeta {
+  stock_code: string;
+  stock_name: string;
+  industry: string;
+  actual_controller: string;
+  reduction_plans: ReductionPlan[];
+}
+
 const CHAT_RAIL_WIDTH_KEY = 'chanlun_chat_rail_width';
 const CHAT_RAIL_MIN = 320;
 const CHAT_RAIL_MAX = 800;
@@ -73,6 +89,7 @@ export default function App() {
   const [hubs, setHubs] = useState<Hub[]>([]);
   const [dataSource, setDataSource] = useState('');
   const [stockBasicInfo, setStockBasicInfo] = useState<StockBasicInfo | null>(null);
+  const [stockMeta, setStockMeta] = useState<StockMeta | null>(null);
 
   const fetchAndProcessStock = async (querySymbol: string) => {
     setIsLoading(true);
@@ -101,8 +118,23 @@ export default function App() {
 
       // Wait for basic info and sync React state
       const basicInfo = await basicInfoPromise;
-      
-      setSymbol(data.symbol);
+
+      // Fetch stock metadata (industry, controller, reduction plans)
+      const resolvedSymbol = data.symbol;
+      const pureCode = resolvedSymbol.split('.')[0];
+      let meta: StockMeta | null = null;
+      try {
+        const resp = await fetch('/merged_stock_data.json');
+        if (resp.ok) {
+          const cache = await resp.json();
+          meta = cache[pureCode] || null;
+        }
+      } catch {
+        // non-critical
+      }
+
+      setSymbol(resolvedSymbol);
+      setStockMeta(meta);
       setKlines(rawKlines);
       setFractions(fractions);
       setStrokes(computedStrokes);
@@ -219,7 +251,7 @@ export default function App() {
         {/* Global Loading / Error messages block */}
         {isLoading && (
           <div className="p-12 text-center bg-zinc-900/50 backdrop-blur-sm border border-zinc-800/50 rounded-2xl shadow-lg flex flex-col items-center justify-center">
-            <div className="h-8 w-8 rounded-full border-2 border-emerald-500 border-t-transparent animate-spin mb-4" />
+            <div className="h-8 w-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin mb-4" />
             <h4 className="text-sm font-semibold text-zinc-200">编译技术市场画布</h4>
             <p className="text-xs text-zinc-400 mt-1">合并K线包含关系并定位分型极值...</p>
           </div>
@@ -249,6 +281,8 @@ export default function App() {
                 hubs={hubs}
                 symbol={symbol}
                 stockBasicInfo={stockBasicInfo}
+                industry={stockMeta?.industry}
+                actualController={stockMeta?.actual_controller}
               />
             </div>
 
@@ -267,7 +301,7 @@ export default function App() {
                     <span>隐藏详情</span>
                   </button>
                 </div>
-                <StockInfoPanel stockCode={symbol} />
+                <StockInfoPanel stockData={stockMeta} />
               </div>
             )}
 
@@ -308,8 +342,8 @@ export default function App() {
             role="separator"
             aria-orientation="vertical"
             onMouseDown={startResizingRail}
-            className={`group relative w-1.5 shrink-0 cursor-col-resize bg-zinc-800/60 hover:bg-emerald-500/40 transition-colors ${
-              isResizingRail ? '!bg-emerald-500/70' : ''
+            className={`group relative w-1.5 shrink-0 cursor-col-resize bg-zinc-800/60 hover:bg-blue-500/40 transition-colors ${
+              isResizingRail ? '!bg-blue-500/70' : ''
             }`}
             title="拖动以调整宽度"
           >
@@ -338,7 +372,7 @@ export default function App() {
         <button
           type="button"
           onClick={() => setIsChatVisible(true)}
-          className="fixed right-0 top-1/2 -translate-y-1/2 z-40 flex flex-col items-center gap-2 px-2 py-4 bg-emerald-500/10 hover:bg-emerald-500/20 border-y border-l border-emerald-500/30 rounded-l-lg text-emerald-400 transition-all cursor-pointer shadow-[-6px_0_16px_-6px_rgba(16,185,129,0.25)]"
+          className="fixed right-0 top-1/2 -translate-y-1/2 z-40 flex flex-col items-center gap-2 px-2 py-4 bg-blue-500/10 hover:bg-blue-500/20 border-y border-l border-blue-500/30 rounded-l-lg text-blue-400 transition-all cursor-pointer shadow-[-6px_0_16px_-6px_rgba(59,130,246,0.25)]"
           title="显示 AI 对话"
         >
           <BrainCircuit className="h-4 w-4" />

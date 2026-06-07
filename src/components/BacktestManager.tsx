@@ -92,12 +92,12 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
           onClick={() => setActiveTab('run')}
           className={`pb-3 text-xs font-bold font-sans flex items-center gap-2 border-b-2 cursor-pointer transition-all ${
             activeTab === 'run'
-              ? 'border-emerald-500 text-zinc-100'
+              ? 'border-blue-500 text-zinc-100'
               : 'border-transparent text-zinc-500 hover:text-zinc-300'
           }`}
           id="tab-run-backtest"
         >
-          <Play className="h-4 w-4 text-emerald-400" />
+          <Play className="h-4 w-4 text-blue-400" />
           <span>交互式回测器</span>
         </button>
 
@@ -105,12 +105,12 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
           onClick={() => setActiveTab('history')}
           className={`pb-3 text-xs font-bold font-sans flex items-center gap-2 border-b-2 cursor-pointer transition-all ${
             activeTab === 'history'
-              ? 'border-emerald-500 text-zinc-100'
+              ? 'border-blue-500 text-zinc-100'
               : 'border-transparent text-zinc-500 hover:text-zinc-300'
           }`}
           id="tab-history-backtests"
         >
-          <History className="h-4 w-4 text-emerald-400" />
+          <History className="h-4 w-4 text-blue-400" />
           <span>模拟账本 ({currentUser ? records.length : '需要登录'})</span>
         </button>
       </div>
@@ -128,7 +128,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
                   type="number"
                   value={initialCapital}
                   onChange={(e) => setInitialCapital(Math.max(100, parseInt(e.target.value) || 1000))}
-                  className="w-full pl-7 pr-3 py-2 text-xs bg-zinc-900 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
+                  className="w-full pl-7 pr-3 py-2 text-xs bg-zinc-900 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
                 />
               </div>
             </div>
@@ -140,7 +140,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
                   type="number"
                   value={stopLossPercent}
                   onChange={(e) => setStopLossPercent(Math.max(1, parseInt(e.target.value) || 5))}
-                  className="w-full px-3 py-2 text-xs bg-zinc-900 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
+                  className="w-full px-3 py-2 text-xs bg-zinc-900 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
                 />
                 <span className="absolute inset-y-0 right-0 pr-3 flex items-center text-xs font-bold text-zinc-650 font-mono">%</span>
               </div>
@@ -150,7 +150,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
               <button
                 onClick={handleRunBacktest}
                 disabled={loading || klines.length === 0}
-                className="w-full py-2 bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-zinc-950 font-bold text-xs rounded-xl shadow-lg shadow-emerald-500/10 cursor-pointer transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                className="w-full py-2 bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-zinc-950 font-bold text-xs rounded-xl shadow-lg shadow-blue-500/10 cursor-pointer transition-all disabled:opacity-50 flex items-center justify-center gap-2"
                 id="btn-run-simulation"
               >
                 <Play className="h-4.5 w-4.5 fill-current text-zinc-955" />
@@ -161,7 +161,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
 
           {/* Strategy Details Explanation */}
           <div className="flex gap-3 p-3.5 bg-zinc-950/40 border border-zinc-855 rounded-xl">
-            <ShieldAlert className="h-4.5 w-4.5 text-emerald-400 shrink-0 mt-0.5" />
+            <ShieldAlert className="h-4.5 w-4.5 text-blue-400 shrink-0 mt-0.5" />
             <p className="text-[11px] text-zinc-400 leading-relaxed font-sans">
               <strong>缠论交易规则设置:</strong> 在一类或二类买入信号(一买/二买)触发时建立100%多头仓位。在一类或二类卖出信号(一卖/二卖)或跟踪止损触发时完全平仓。使用日线收盘历史价格。
             </p>
@@ -185,7 +185,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
 
                 <div className="p-4 bg-zinc-950 border border-zinc-850 rounded-xl">
                   <span className="text-[10px] text-zinc-500 font-mono uppercase">净总收益</span>
-                  <p className={`text-sm font-extrabold font-mono mt-1 ${backtest.totalReturnPercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  <p className={`text-sm font-extrabold font-mono mt-1 ${backtest.totalReturnPercent >= 0 ? 'text-blue-400' : 'text-red-400'}`}>
                     {backtest.totalReturnPercent >= 0 ? '+' : ''}{backtest.totalReturnPercent}%
                   </p>
                 </div>
@@ -201,7 +201,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
               {/* Action Save Results options */}
               <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl bg-zinc-950 border border-zinc-850 text-zinc-100">
                 <div className="flex gap-2 items-center">
-                  <Database className="h-4.5 w-4.5 text-emerald-400" />
+                  <Database className="h-4.5 w-4.5 text-blue-400" />
                   <span className="text-xs font-semibold">保存此回测配置</span>
                 </div>
                 
@@ -211,7 +211,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
                     disabled={saveStatus === 'success'}
                     className={`px-4 py-2 font-semibold text-xs rounded-lg shadow cursor-pointer transition-all ${
                       saveStatus === 'success' 
-                        ? 'bg-emerald-500 text-zinc-950 font-bold' 
+                        ? 'bg-blue-500 text-zinc-950 font-bold' 
                         : 'bg-zinc-800 text-zinc-100 hover:bg-zinc-700 border border-zinc-705'
                     }`}
                     id="btn-save-report"
@@ -251,7 +251,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
                             <td className="px-4 py-2 text-zinc-400 font-sans">{tr.date}</td>
                             <td className="px-4 py-2">
                               <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold ${
-                                tr.type === 'BUY' ? 'bg-emerald-950/30 text-emerald-400 border border-emerald-900/20' : 'bg-red-950/30 text-red-400 border border-red-900/20'
+                                tr.type === 'BUY' ? 'bg-blue-950/30 text-blue-400 border border-blue-900/20' : 'bg-red-950/30 text-red-400 border border-red-900/20'
                               }`}>
                                 {tr.type}
                               </span>
@@ -261,7 +261,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
                             <td className="px-4 py-2 text-zinc-500">{tr.shares} shares (${tr.value})</td>
                             <td className={`px-4 py-2 text-right font-extrabold ${
                               tr.pnl !== undefined 
-                                ? (tr.pnl >= 0 ? 'text-emerald-400' : 'text-red-400') 
+                                ? (tr.pnl >= 0 ? 'text-blue-400' : 'text-red-400') 
                                 : 'text-zinc-500 font-normal'
                             }`}>
                               {tr.pnl !== undefined ? `${tr.pnl >= 0 ? '+' : ''}$${tr.pnl} (${tr.pnlPercent}%)` : '--'}
@@ -304,7 +304,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
 
                   <div className="flex items-center gap-4">
                     <div className="text-right">
-                      <p className={`text-base font-extrabold font-mono leading-none ${rec.totalReturnPercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      <p className={`text-base font-extrabold font-mono leading-none ${rec.totalReturnPercent >= 0 ? 'text-blue-400' : 'text-red-400'}`}>
                         {rec.totalReturnPercent >= 0 ? '+' : ''}{rec.totalReturnPercent}%
                       </p>
                       <p className="text-[10px] text-zinc-500 font-mono mt-1">胜率: {rec.winRate}%</p>
