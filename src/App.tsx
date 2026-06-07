@@ -6,7 +6,7 @@ import BacktestManager from './components/BacktestManager';
 import GeminiAdvisor from './components/GeminiAdvisor';
 import ConfigView from './components/ConfigView';
 import { SupabaseUser } from './utils/supabase';
-import { Kline, Stroke, Segment, Hub } from './types/stock';
+import { Kline, Stroke, Segment, Hub, Fraction } from './types/stock';
 import {
   mergeKlines,
   findFractions,
@@ -27,6 +27,7 @@ export default function App() {
 
   // Processed ChanLun arrays
   const [klines, setKlines] = useState<Kline[]>([]);
+  const [fractions, setFractions] = useState<Fraction[]>([]);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [hubs, setHubs] = useState<Hub[]>([]);
@@ -54,6 +55,7 @@ export default function App() {
       // Sync React state
       setSymbol(data.symbol);
       setKlines(rawKlines);
+      setFractions(fractions);
       setStrokes(computedStrokes);
       setSegments(computedSegments);
       setHubs(computedHubs);
@@ -83,6 +85,7 @@ export default function App() {
         onSearch={fetchAndProcessStock}
         isLoading={isLoading}
         activeSymbol={symbol}
+        klines={klines}
       />
 
       {/* Config View Modal */}
@@ -117,6 +120,7 @@ export default function App() {
             {/* 1. Main visual chart */}
             <ChanlunChart
               klines={klines}
+              fractions={fractions}
               strokes={strokes}
               segments={segments}
               hubs={hubs}

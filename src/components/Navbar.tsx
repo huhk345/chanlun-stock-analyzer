@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User, LogOut, CheckCircle, AlertTriangle, Settings, Search, LineChart, Clock, X, Bell, ChevronDown } from 'lucide-react';
 import { getCurrentUser, signInUser, signUpUser, signOutUser, isUsingMockDb, SupabaseUser } from '../utils/supabase';
+import { Kline } from '../types/stock';
 
 interface NavbarProps {
   onUserChanged: (user: SupabaseUser | null) => void;
@@ -9,6 +10,7 @@ interface NavbarProps {
   onSearch?: (symbol: string) => void;
   isLoading?: boolean;
   activeSymbol?: string;
+  klines?: Kline[];
 }
 
 interface SearchHistoryItem {
@@ -26,7 +28,7 @@ const PRESET_STOCKS = [
 const MAX_HISTORY = 30;
 const SEARCH_HISTORY_KEY = 'chanlun_search_history';
 
-export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onSearch, isLoading, activeSymbol }: NavbarProps) {
+export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onSearch, isLoading, activeSymbol, klines }: NavbarProps) {
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -351,10 +353,26 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onSea
                 <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider">Symbol</span>
                 <span className="text-xs font-bold font-mono text-emerald-300 tracking-tight">{activeSymbol}</span>
               </div>
-              <div className="flex items-center gap-0.5 ml-1">
-                <span className="h-1 w-1 rounded-full bg-emerald-400 animate-pulse" />
-                <span className="text-[9px] font-mono text-emerald-400/80">+2.4%</span>
-              </div>
+              {klines && klines.length >= 2 && (
+                <div className="flex items-center gap-0.5 ml-1">
+                  <span className="h-1 w-1 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className={`text-[9px] font-mono ${
+                    (() => {
+                      const last = klines[klines.length - 1];
+                      const prev = klines[klines.length - 2];
+                      const change = ((last.close - prev.close) / prev.close) * 100;
+                      return change >= 0 ? 'text-emerald-400/80' : 'text-red-400/80';
+                    })()
+                  }`}>
+                    {(() => {
+                      const last = klines[klines.length - 1];
+                      const prev = klines[klines.length - 2];
+                      const change = ((last.close - prev.close) / prev.close) * 100;
+                      return `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
+                    })()}
+                  </span>
+                </div>
+              )}
             </div>
           )}
 

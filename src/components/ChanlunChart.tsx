@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { createChart, createSeriesMarkers, CandlestickSeries, LineSeries, HistogramSeries, IChartApi, ISeriesApi, ISeriesMarkersPluginApi, CandlestickData, LineData, HistogramData, Time, ColorType, CrosshairMode } from 'lightweight-charts';
 import { AlertCircle } from 'lucide-react';
-import { Kline, Stroke, Segment, Hub } from '../types/stock';
+import { Kline, Stroke, Segment, Hub, Fraction } from '../types/stock';
 import { calculateSMA, calculateBollingerBands, calculateMACD } from '../utils/indicators';
 
 interface ChanlunChartProps {
   klines: Kline[];
+  fractions: Fraction[];
   strokes: Stroke[];
   segments: Segment[];
   hubs: Hub[];
@@ -16,7 +17,7 @@ function dateToTime(dateStr: string): Time {
   return dateStr as Time;
 }
 
-export default function ChanlunChart({ klines, strokes, segments, hubs, symbol }: ChanlunChartProps) {
+export default function ChanlunChart({ klines, fractions, strokes, segments, hubs, symbol }: ChanlunChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -39,6 +40,7 @@ export default function ChanlunChart({ klines, strokes, segments, hubs, symbol }
   const [showStrokes, setShowStrokes] = useState(true);
   const [showSegments, setShowSegments] = useState(true);
   const [showHubs, setShowHubs] = useState(true);
+  const [showFractions, setShowFractions] = useState(true);
 
   // Display triggers for indicators
   const [showMA5, setShowMA5] = useState(false);
@@ -395,6 +397,25 @@ export default function ChanlunChart({ klines, strokes, segments, hubs, symbol }
     segmentSeriesRef.current?.setData(segData);
   }, [segments, klines]);
 
+  // Update fraction markers on candlestick series
+  useEffect(() => {
+    if (!markersPluginRef.current || klines.length === 0) return;
+
+    if (!showFractions) {
+      markersPluginRef.current.setMarkers([]);
+      return;
+    }
+
+    const markers = fractions.map(fraction => ({
+      time: dateToTime(fraction.date),
+      position: fraction.type === 'TOP' ? 'aboveBar' as const : 'belowBar' as const,
+      color: fraction.type === 'TOP' ? '#ef4444' : '#22c55e',
+      shape: fraction.type === 'TOP' ? 'arrowDown' as const : 'arrowUp' as const,
+    }));
+
+    markersPluginRef.current.setMarkers(markers);
+  }, [fractions, klines, showFractions]);
+
   // Toggle visibility
   useEffect(() => {
     if (candleSeriesRef.current) {
@@ -597,7 +618,7 @@ export default function ChanlunChart({ klines, strokes, segments, hubs, symbol }
       }
       resizeObserver.disconnect();
     };
-  }, [hubs, klines, showHubs, showMACD]);
+  }, [hubs, klines, showHubs, showMACD, showCandles, showFractions, showStrokes, showSegments, showMA5, showMA20, showBOLL]);
 
   if (klines.length === 0) {
     return (
@@ -637,6 +658,17 @@ export default function ChanlunChart({ klines, strokes, segments, hubs, symbol }
               id="toggle-candles"
             >
               <span>K线</span>
+            </button>
+
+            <button
+              onClick={() => setShowFractions(!showFractions)}
+              className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans flex items-center gap-1.5 transition-all cursor-pointer ${
+                showFractions ? 'bg-rose-500 text-zinc-950 font-bold shadow' : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+              title="切换顶底分型"
+              id="toggle-fractions"
+            >
+              <span>分型</span>
             </button>
 
             <button
@@ -728,7 +760,7 @@ export default function ChanlunChart({ klines, strokes, segments, hubs, symbol }
       {/* Floating Price Data Header panels */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 bg-zinc-950 p-3 rounded-xl border border-zinc-800">
         <div>
-          <span className="text-[10px] font-mono text-zinc-500 uppercase">交互日期</span>
+          <span className="text-[10px] font-mono text-zinc-500 uppercase">交易日期</span>
           <div className="flex items-center gap-2 mt-0.5">
             <p className="text-xs font-bold font-mono tracking-wide text-zinc-300">
               {hoveredData ? hoveredData.date : klines[klines.length - 1].date}
@@ -736,9 +768,20 @@ export default function ChanlunChart({ klines, strokes, segments, hubs, symbol }
             {(() => {
               const data = hoveredData ?? klines[klines.length - 1];
               if (!data) return null;
-              const change = data.close - data.open;
-              const pct = (change / data.open) * 100;
+
+              // Find the index of current data
+              const currentIndex = hoveredData
+                ? klines.findIndex(k => k.date === hoveredData.date)
+                : klines.length - 1;
+
+              // Need previous day's close price
+              if (currentIndex <= 0) return null;
+
+              const prevClose = klines[currentIndex - 1].close;
+              const change = data.close - prevClose;
+              const pct = (change / prevClose) * 100;
               const isUp = pct >= 0;
+
               return (
                 <span className={`text-[10px] font-mono font-bold tracking-wide px-1.5 py-0.5 rounded ${
                   isUp ? 'text-emerald-400 bg-emerald-500/10' : 'text-red-400 bg-red-500/10'
