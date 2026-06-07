@@ -729,9 +729,25 @@ export default function ChanlunChart({ klines, strokes, segments, hubs, symbol }
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 bg-zinc-950 p-3 rounded-xl border border-zinc-800">
         <div>
           <span className="text-[10px] font-mono text-zinc-500 uppercase">交互日期</span>
-          <p className="text-xs font-bold font-mono tracking-wide text-zinc-300 mt-0.5">
-            {hoveredData ? hoveredData.date : klines[klines.length - 1].date}
-          </p>
+          <div className="flex items-center gap-2 mt-0.5">
+            <p className="text-xs font-bold font-mono tracking-wide text-zinc-300">
+              {hoveredData ? hoveredData.date : klines[klines.length - 1].date}
+            </p>
+            {(() => {
+              const data = hoveredData ?? klines[klines.length - 1];
+              if (!data) return null;
+              const change = data.close - data.open;
+              const pct = (change / data.open) * 100;
+              const isUp = pct >= 0;
+              return (
+                <span className={`text-[10px] font-mono font-bold tracking-wide px-1.5 py-0.5 rounded ${
+                  isUp ? 'text-emerald-400 bg-emerald-500/10' : 'text-red-400 bg-red-500/10'
+                }`}>
+                  {isUp ? '+' : ''}{pct.toFixed(2)}%
+                </span>
+              );
+            })()}
+          </div>
         </div>
         <div>
           <span className="text-[10px] font-mono text-zinc-500 uppercase">开盘价</span>
