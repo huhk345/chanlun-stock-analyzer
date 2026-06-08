@@ -745,209 +745,221 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
               
             </div>
 
-            {/* Controls - Right side, single line */}
-            <div className="hidden xl:flex items-center gap-1 ml-auto whitespace-nowrap">
-              <button
-                onClick={() => setShowCandles(!showCandles)}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium font-sans transition-all cursor-pointer ${
-                  showCandles ? 'bg-zinc-800 text-zinc-100 border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'
-                }`}
-                title="切换原始K线"
-                id="toggle-candles"
-              >
-                K线
-              </button>
-              <button
-                onClick={() => setShowFractions(!showFractions)}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium font-sans transition-all cursor-pointer ${
-                  showFractions ? 'bg-rose-500 text-zinc-950 font-bold' : 'text-zinc-500 hover:text-zinc-300'
-                }`}
-                title="切换顶底分型"
-                id="toggle-fractions"
-              >
-                分型
-              </button>
-              <button
-                onClick={() => setShowStrokes(!showStrokes)}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium font-sans transition-all cursor-pointer ${
-                  showStrokes ? 'bg-amber-500 text-zinc-950 font-bold' : 'text-zinc-500 hover:text-zinc-300'
-                }`}
-                title="切换缠论笔"
-                id="toggle-strokes"
-              >
-                笔
-              </button>
-              <button
-                onClick={() => setShowSegments(!showSegments)}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium font-sans transition-all cursor-pointer ${
-                  showSegments ? 'bg-cyan-500 text-zinc-950 font-bold' : 'text-zinc-500 hover:text-zinc-300'
-                }`}
-                title="切换缠论线段"
-                id="toggle-segments"
-              >
-                线段
-              </button>
-              <button
-                onClick={() => setShowHubs(!showHubs)}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium font-sans transition-all cursor-pointer ${
-                  showHubs ? 'bg-indigo-650 text-white' : 'text-zinc-500 hover:text-zinc-300'
-                }`}
-                title="切换中枢"
-                id="toggle-hubs"
-              >
-                中枢
-              </button>
-              <span className="w-px h-4 bg-zinc-800 mx-1" />
-              <button
-                onClick={() => setShowMA5(!showMA5)}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium font-sans transition-all cursor-pointer ${
-                  showMA5 ? 'bg-cyan-500 text-zinc-950 font-bold' : 'text-zinc-500 hover:text-zinc-300'
-                }`}
-                title="显示5周期移动平均线"
-                id="toggle-ma5"
-              >
-                MA5
-              </button>
-              <button
-                onClick={() => setShowMA20(!showMA20)}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium font-sans transition-all cursor-pointer ${
-                  showMA20 ? 'bg-pink-500 text-zinc-950 font-bold' : 'text-zinc-500 hover:text-zinc-300'
-                }`}
-                title="显示20周期移动平均线"
-                id="toggle-ma20"
-              >
-                MA20
-              </button>
-              <button
-                onClick={() => setShowBOLL(!showBOLL)}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium font-sans transition-all cursor-pointer ${
-                  showBOLL ? 'bg-purple-650 text-white border border-purple-500' : 'text-zinc-500 hover:text-zinc-300'
-                }`}
-                title="显示布林带(20, 2)"
-                id="toggle-boll"
-              >
-                BOLL
-              </button>
-              <button
-                onClick={() => setShowMACD(!showMACD)}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium font-sans transition-all cursor-pointer ${
-                  showMACD ? 'bg-amber-500 text-zinc-950 font-bold' : 'text-zinc-500 hover:text-zinc-300'
-                }`}
-                title="激活MACD(12, 26, 9)指标"
-                id="toggle-macd"
-              >
-                MACD
-              </button>
+            {/* Controls - Right side */}
+            <div className="hidden xl:flex flex-col gap-1 ml-auto">
+              <div className="flex items-center gap-1 bg-zinc-800/15 rounded-xl px-2.5 py-1.5 border border-zinc-700/20">
+                <span className="text-[9px] font-bold text-zinc-500 tracking-wider mr-0.5 bg-zinc-800/60 px-1.5 py-0.5 rounded-md leading-none">缠</span>
+                <button
+                  onClick={() => setShowCandles(!showCandles)}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                    showCandles ? 'bg-zinc-700/80 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                  }`}
+                  title="切换原始K线"
+                  id="toggle-candles"
+                >
+                  <span className={`w-1 h-1 rounded-full ${showCandles ? 'bg-zinc-100' : 'bg-zinc-500'}`} />
+                  K线
+                </button>
+                <button
+                  onClick={() => setShowFractions(!showFractions)}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                    showFractions ? 'bg-rose-500/90 text-white shadow-sm shadow-rose-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                  }`}
+                  title="切换顶底分型"
+                  id="toggle-fractions"
+                >
+                  <span className={`w-1 h-1 rounded-full ${showFractions ? 'bg-white' : 'bg-rose-400'}`} />
+                  分型
+                </button>
+                <button
+                  onClick={() => setShowStrokes(!showStrokes)}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                    showStrokes ? 'bg-amber-500/90 text-white shadow-sm shadow-amber-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                  }`}
+                  title="切换缠论笔"
+                  id="toggle-strokes"
+                >
+                  <span className={`w-1 h-1 rounded-full ${showStrokes ? 'bg-white' : 'bg-amber-400'}`} />
+                  笔
+                </button>
+                <button
+                  onClick={() => setShowSegments(!showSegments)}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                    showSegments ? 'bg-cyan-500/90 text-white shadow-sm shadow-cyan-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                  }`}
+                  title="切换缠论线段"
+                  id="toggle-segments"
+                >
+                  <span className={`w-1 h-1 rounded-full ${showSegments ? 'bg-white' : 'bg-cyan-400'}`} />
+                  线段
+                </button>
+                <button
+                  onClick={() => setShowHubs(!showHubs)}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                    showHubs ? 'bg-indigo-500/80 text-white shadow-sm shadow-indigo-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                  }`}
+                  title="切换中枢"
+                  id="toggle-hubs"
+                >
+                  <span className={`w-1 h-1 rounded-full ${showHubs ? 'bg-white' : 'bg-indigo-400'}`} />
+                  中枢
+                </button>
+              </div>
+              <div className="flex items-center gap-1 bg-zinc-800/15 rounded-xl px-2.5 py-1.5 border border-zinc-700/20">
+                <span className="text-[9px] font-bold text-zinc-500 tracking-wider mr-0.5 bg-zinc-800/60 px-1.5 py-0.5 rounded-md leading-none">指</span>
+                <button
+                  onClick={() => setShowMA5(!showMA5)}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                    showMA5 ? 'bg-cyan-500/90 text-white shadow-sm shadow-cyan-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                  }`}
+                  title="显示5周期移动平均线"
+                  id="toggle-ma5"
+                >
+                  <span className={`w-1 h-1 rounded-full ${showMA5 ? 'bg-white' : 'bg-cyan-400'}`} />
+                  MA5
+                </button>
+                <button
+                  onClick={() => setShowMA20(!showMA20)}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                    showMA20 ? 'bg-pink-500/90 text-white shadow-sm shadow-pink-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                  }`}
+                  title="显示20周期移动平均线"
+                  id="toggle-ma20"
+                >
+                  <span className={`w-1 h-1 rounded-full ${showMA20 ? 'bg-white' : 'bg-pink-400'}`} />
+                  MA20
+                </button>
+                <button
+                  onClick={() => setShowBOLL(!showBOLL)}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                    showBOLL ? 'bg-purple-500/80 text-white shadow-sm shadow-purple-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                  }`}
+                  title="显示布林带(20, 2)"
+                  id="toggle-boll"
+                >
+                  <span className={`w-1 h-1 rounded-full ${showBOLL ? 'bg-white' : 'bg-purple-400'}`} />
+                  BOLL
+                </button>
+                <button
+                  onClick={() => setShowMACD(!showMACD)}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                    showMACD ? 'bg-amber-500/90 text-white shadow-sm shadow-amber-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                  }`}
+                  title="激活MACD(12, 26, 9)指标"
+                  id="toggle-macd"
+                >
+                  <span className={`w-1 h-1 rounded-full ${showMACD ? 'bg-white' : 'bg-amber-400'}`} />
+                  MACD
+                </button>
+              </div>
             </div>
           </div>
           
           {/* Mobile Controls */}
-          <div className="xl:hidden flex flex-wrap items-center gap-3 mt-4 pt-4 border-t border-zinc-800">
-            {/* Zen Structure Controls */}
-            <div className="flex flex-wrap items-center gap-1.5 bg-zinc-950 p-1.5 rounded-xl border border-zinc-850">
-              <span className="text-[9px] font-mono font-semibold text-zinc-500 uppercase tracking-widest px-1.5">Zen:</span>
+          <div className="xl:hidden flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-zinc-800">
+            <div className="flex flex-wrap items-center gap-1 bg-zinc-800/15 rounded-xl px-2.5 py-1.5 border border-zinc-700/20">
+              <span className="text-[9px] font-bold text-zinc-500 tracking-wider mr-0.5 bg-zinc-800/60 px-1.5 py-0.5 rounded-md leading-none">缠</span>
               <button
                 onClick={() => setShowCandles(!showCandles)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans flex items-center gap-1.5 transition-all cursor-pointer ${
-                  showCandles ? 'bg-zinc-800 text-zinc-100 shadow border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showCandles ? 'bg-zinc-700/80 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="切换原始K线"
                 id="toggle-candles"
               >
-                <span>K线</span>
+                <span className={`w-1 h-1 rounded-full ${showCandles ? 'bg-zinc-100' : 'bg-zinc-500'}`} />
+                K线
               </button>
-
               <button
                 onClick={() => setShowFractions(!showFractions)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans flex items-center gap-1.5 transition-all cursor-pointer ${
-                  showFractions ? 'bg-rose-500 text-zinc-950 font-bold shadow' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showFractions ? 'bg-rose-500/90 text-white shadow-sm shadow-rose-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="切换顶底分型"
                 id="toggle-fractions"
               >
-                <span>分型</span>
+                <span className={`w-1 h-1 rounded-full ${showFractions ? 'bg-white' : 'bg-rose-400'}`} />
+                分型
               </button>
-
               <button
                 onClick={() => setShowStrokes(!showStrokes)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans flex items-center gap-1.5 transition-all cursor-pointer ${
-                  showStrokes ? 'bg-amber-500 text-zinc-950 font-bold shadow' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showStrokes ? 'bg-amber-500/90 text-white shadow-sm shadow-amber-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="切换缠论笔"
                 id="toggle-strokes"
               >
-                <span>笔</span>
+                <span className={`w-1 h-1 rounded-full ${showStrokes ? 'bg-white' : 'bg-amber-400'}`} />
+                笔
               </button>
-
               <button
                 onClick={() => setShowSegments(!showSegments)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans flex items-center gap-1.5 transition-all cursor-pointer ${
-                  showSegments ? 'bg-cyan-500 text-zinc-950 font-bold shadow' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showSegments ? 'bg-cyan-500/90 text-white shadow-sm shadow-cyan-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="切换缠论线段"
                 id="toggle-segments"
               >
-                <span>线段</span>
+                <span className={`w-1 h-1 rounded-full ${showSegments ? 'bg-white' : 'bg-cyan-400'}`} />
+                线段
               </button>
-
               <button
                 onClick={() => setShowHubs(!showHubs)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans flex items-center gap-1.5 transition-all cursor-pointer ${
-                  showHubs ? 'bg-indigo-650 text-white shadow' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showHubs ? 'bg-indigo-500/80 text-white shadow-sm shadow-indigo-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="切换中枢"
                 id="toggle-hubs"
               >
-                <span>中枢</span>
+                <span className={`w-1 h-1 rounded-full ${showHubs ? 'bg-white' : 'bg-indigo-400'}`} />
+                中枢
               </button>
             </div>
-
-            {/* Technical Indicators */}
-            <div className="flex flex-wrap items-center gap-1.5 bg-zinc-950 p-1.5 rounded-xl border border-zinc-855">
-              <span className="text-[9px] font-mono font-semibold text-zinc-500 uppercase tracking-widest px-1.5">Indicators:</span>
-
+            <div className="flex flex-wrap items-center gap-1 bg-zinc-800/15 rounded-xl px-2.5 py-1.5 border border-zinc-700/20">
+              <span className="text-[9px] font-bold text-zinc-500 tracking-wider mr-0.5 bg-zinc-800/60 px-1.5 py-0.5 rounded-md leading-none">指</span>
               <button
                 onClick={() => setShowMA5(!showMA5)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans transition-all cursor-pointer ${
-                  showMA5 ? 'bg-cyan-500 text-zinc-950 font-bold shadow' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showMA5 ? 'bg-cyan-500/90 text-white shadow-sm shadow-cyan-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="显示5周期移动平均线"
                 id="toggle-ma5"
               >
-                <span>MA5</span>
+                <span className={`w-1 h-1 rounded-full ${showMA5 ? 'bg-white' : 'bg-cyan-400'}`} />
+                MA5
               </button>
-
               <button
                 onClick={() => setShowMA20(!showMA20)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans transition-all cursor-pointer ${
-                  showMA20 ? 'bg-pink-500 text-zinc-950 font-bold shadow' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showMA20 ? 'bg-pink-500/90 text-white shadow-sm shadow-pink-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="显示20周期移动平均线"
                 id="toggle-ma20"
               >
-                <span>MA20</span>
+                <span className={`w-1 h-1 rounded-full ${showMA20 ? 'bg-white' : 'bg-pink-400'}`} />
+                MA20
               </button>
-
               <button
                 onClick={() => setShowBOLL(!showBOLL)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans transition-all cursor-pointer ${
-                  showBOLL ? 'bg-purple-650 text-white shadow border border-purple-500' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showBOLL ? 'bg-purple-500/80 text-white shadow-sm shadow-purple-500/20 border border-purple-400/30' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="显示布林带(20, 2)"
                 id="toggle-boll"
               >
-                <span>BOLL</span>
+                <span className={`w-1 h-1 rounded-full ${showBOLL ? 'bg-white' : 'bg-purple-400'}`} />
+                BOLL
               </button>
-
               <button
                 onClick={() => setShowMACD(!showMACD)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans transition-all cursor-pointer ${
-                  showMACD ? 'bg-amber-500 text-zinc-950 font-bold shadow' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showMACD ? 'bg-amber-500/90 text-white shadow-sm shadow-amber-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="激活MACD(12, 26, 9)指标"
                 id="toggle-macd"
               >
-                <span>MACD</span>
+                <span className={`w-1 h-1 rounded-full ${showMACD ? 'bg-white' : 'bg-amber-400'}`} />
+                MACD
               </button>
             </div>
           </div>
@@ -961,111 +973,109 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
           {/* Visibility Toggles */}
           <div className="flex flex-wrap items-center gap-4">
 
-            {/* Zen Structure Controls */}
-            <div className="flex flex-wrap items-center gap-1.5 bg-zinc-950 p-1.5 rounded-xl border border-zinc-850">
-              <span className="text-[9px] font-mono font-semibold text-zinc-500 uppercase tracking-widest px-1.5">Zen:</span>
+            <div className="flex flex-wrap items-center gap-1 bg-zinc-800/15 rounded-xl px-2.5 py-1.5 border border-zinc-700/20">
+              <span className="text-[9px] font-bold text-zinc-500 tracking-wider mr-0.5 bg-zinc-800/60 px-1.5 py-0.5 rounded-md leading-none">缠</span>
               <button
                 onClick={() => setShowCandles(!showCandles)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans flex items-center gap-1.5 transition-all cursor-pointer ${
-                  showCandles ? 'bg-zinc-800 text-zinc-100 shadow border border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showCandles ? 'bg-zinc-700/80 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="切换原始K线"
                 id="toggle-candles"
               >
-                <span>K线</span>
+                <span className={`w-1 h-1 rounded-full ${showCandles ? 'bg-zinc-100' : 'bg-zinc-500'}`} />
+                K线
               </button>
-
               <button
                 onClick={() => setShowFractions(!showFractions)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans flex items-center gap-1.5 transition-all cursor-pointer ${
-                  showFractions ? 'bg-rose-500 text-zinc-950 font-bold shadow' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showFractions ? 'bg-rose-500/90 text-white shadow-sm shadow-rose-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="切换顶底分型"
                 id="toggle-fractions"
               >
-                <span>分型</span>
+                <span className={`w-1 h-1 rounded-full ${showFractions ? 'bg-white' : 'bg-rose-400'}`} />
+                分型
               </button>
-
               <button
                 onClick={() => setShowStrokes(!showStrokes)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans flex items-center gap-1.5 transition-all cursor-pointer ${
-                  showStrokes ? 'bg-amber-500 text-zinc-950 font-bold shadow' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showStrokes ? 'bg-amber-500/90 text-white shadow-sm shadow-amber-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="切换缠论笔"
                 id="toggle-strokes"
               >
-                <span>笔</span>
+                <span className={`w-1 h-1 rounded-full ${showStrokes ? 'bg-white' : 'bg-amber-400'}`} />
+                笔
               </button>
-
               <button
                 onClick={() => setShowSegments(!showSegments)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans flex items-center gap-1.5 transition-all cursor-pointer ${
-                  showSegments ? 'bg-cyan-500 text-zinc-950 font-bold shadow' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showSegments ? 'bg-cyan-500/90 text-white shadow-sm shadow-cyan-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="切换缠论线段"
                 id="toggle-segments"
               >
-                <span>线段</span>
+                <span className={`w-1 h-1 rounded-full ${showSegments ? 'bg-white' : 'bg-cyan-400'}`} />
+                线段
               </button>
-
               <button
                 onClick={() => setShowHubs(!showHubs)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans flex items-center gap-1.5 transition-all cursor-pointer ${
-                  showHubs ? 'bg-indigo-650 text-white shadow' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showHubs ? 'bg-indigo-500/80 text-white shadow-sm shadow-indigo-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="切换中枢"
                 id="toggle-hubs"
               >
-                <span>中枢</span>
+                <span className={`w-1 h-1 rounded-full ${showHubs ? 'bg-white' : 'bg-indigo-400'}`} />
+                中枢
               </button>
             </div>
-
-            {/* Technical Indicators */}
-            <div className="flex flex-wrap items-center gap-1.5 bg-zinc-950 p-1.5 rounded-xl border border-zinc-855">
-              <span className="text-[9px] font-mono font-semibold text-zinc-500 uppercase tracking-widest px-1.5">Indicators:</span>
-
+            <div className="flex flex-wrap items-center gap-1 bg-zinc-800/15 rounded-xl px-2.5 py-1.5 border border-zinc-700/20">
+              <span className="text-[9px] font-bold text-zinc-500 tracking-wider mr-0.5 bg-zinc-800/60 px-1.5 py-0.5 rounded-md leading-none">指</span>
               <button
                 onClick={() => setShowMA5(!showMA5)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans transition-all cursor-pointer ${
-                  showMA5 ? 'bg-cyan-500 text-zinc-950 font-bold shadow' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showMA5 ? 'bg-cyan-500/90 text-white shadow-sm shadow-cyan-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="显示5周期移动平均线"
                 id="toggle-ma5"
               >
-                <span>MA5</span>
+                <span className={`w-1 h-1 rounded-full ${showMA5 ? 'bg-white' : 'bg-cyan-400'}`} />
+                MA5
               </button>
-
               <button
                 onClick={() => setShowMA20(!showMA20)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans transition-all cursor-pointer ${
-                  showMA20 ? 'bg-pink-500 text-zinc-950 font-bold shadow' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showMA20 ? 'bg-pink-500/90 text-white shadow-sm shadow-pink-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="显示20周期移动平均线"
                 id="toggle-ma20"
               >
-                <span>MA20</span>
+                <span className={`w-1 h-1 rounded-full ${showMA20 ? 'bg-white' : 'bg-pink-400'}`} />
+                MA20
               </button>
-
               <button
                 onClick={() => setShowBOLL(!showBOLL)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans transition-all cursor-pointer ${
-                  showBOLL ? 'bg-purple-650 text-white shadow border border-purple-500' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showBOLL ? 'bg-purple-500/80 text-white shadow-sm shadow-purple-500/20 border border-purple-400/30' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="显示布林带(20, 2)"
                 id="toggle-boll"
               >
-                <span>BOLL</span>
+                <span className={`w-1 h-1 rounded-full ${showBOLL ? 'bg-white' : 'bg-purple-400'}`} />
+                BOLL
               </button>
-
               <button
                 onClick={() => setShowMACD(!showMACD)}
-                className={`px-2 py-1.5 rounded-lg text-xs font-medium font-sans transition-all cursor-pointer ${
-                  showMACD ? 'bg-amber-500 text-zinc-950 font-bold shadow' : 'text-zinc-500 hover:text-zinc-300'
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showMACD ? 'bg-amber-500/90 text-white shadow-sm shadow-amber-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                 }`}
                 title="激活MACD(12, 26, 9)指标"
                 id="toggle-macd"
               >
-                <span>MACD</span>
+                <span className={`w-1 h-1 rounded-full ${showMACD ? 'bg-white' : 'bg-amber-400'}`} />
+                MACD
               </button>
             </div>
 
