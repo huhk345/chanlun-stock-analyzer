@@ -3,6 +3,8 @@
 const OPENROUTER_MODELS_ENDPOINT = 'https://openrouter.ai/api/v1/models';
 const SELECTED_MODEL_KEY = 'openrouter_selected_model';
 
+let cachedModelsPromise: Promise<OpenRouterModel[]> | null = null;
+
 export interface OpenRouterModel {
   id: string;
   name?: string;
@@ -35,6 +37,10 @@ export interface OpenRouterModelsResponse {
  * when available to lift per-key rate limits.
  */
 export async function fetchOpenRouterFreeModels(apiKey?: string): Promise<OpenRouterModel[]> {
+  if (cachedModelsPromise) {
+    return cachedModelsPromise;
+  }
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
@@ -42,20 +48,28 @@ export async function fetchOpenRouterFreeModels(apiKey?: string): Promise<OpenRo
     headers['Authorization'] = `Bearer ${apiKey}`;
   }
 
-  const response = await fetch(OPENROUTER_MODELS_ENDPOINT, { headers });
-  if (!response.ok) {
-    const text = await response.text();
-    console.error('[OpenRouter] models fetch failed:', response.status, text);
-    throw new Error(`无法获取 OpenRouter 模型列表 (HTTP ${response.status})`);
-  }
+  cachedModelsPromise = (async () => {
+    const response = await fetch(OPENROUTER_MODELS_ENDPOINT, { headers });
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('[OpenRouter] models fetch failed:', response.status, text);
+      throw new Error(`无法获取 OpenRouter 模型列表 (HTTP ${response.status})`);
+    }
 
-  const json: OpenRouterModelsResponse = await response.json();
-  const models = (json.data || []).filter((m) => typeof m?.id === 'string' && m.id.endsWith(':free'));
+    const json: OpenRouterModelsResponse = await response.json();
+    const models = (json.data || []).filter((m) => typeof m?.id === 'string' && m.id.endsWith(':free'));
 
-  // Newest first to surface fresh releases at the top of the dropdown.
-  models.sort((a, b) => (b.created || 0) - (a.created || 0));
+    // Newest first to surface fresh releases at the top of the dropdown.
+    models.sort((a, b) => (b.created || 0) - (a.created || 0));
 
-  return models;
+    return models;
+  })();
+
+  return cachedModelsPromise;
+}
+
+export function clearCachedModels(): void {
+  cachedModelsPromise = null;
 }
 
 export function getStoredSelectedModel(): string {

@@ -21,91 +21,67 @@ interface StockInfoPanelProps {
 }
 
 export default function StockInfoPanel({ stockData }: StockInfoPanelProps) {
-  if (!stockData) {
-    return (
-      <div className="bg-zinc-900/30 border border-zinc-800/40 rounded-xl p-4">
-        <p className="text-xs text-zinc-500">暂无股票详情数据</p>
-      </div>
-    );
+  if (!stockData || !stockData.reduction_plans || stockData.reduction_plans.length === 0) {
+    return null;
   }
-
-  const hasReductionPlans = stockData.reduction_plans && stockData.reduction_plans.length > 0;
 
   return (
     <div className="space-y-4">
-      {/* Reduction Plans Card */}
-      {hasReductionPlans && (
-        <div className="bg-orange-950/10 border border-orange-900/30 rounded-xl overflow-hidden backdrop-blur-sm">
-          <div className="px-5 py-3 border-b border-orange-900/20 bg-gradient-to-r from-orange-950/20 to-orange-950/10">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <TrendingDown className="h-4 w-4 text-orange-400" />
-                <h4 className="text-xs font-bold text-orange-300">减持计划</h4>
-              </div>
-              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-orange-500/10 border border-orange-500/20">
-                <span className="text-[10px] font-semibold text-orange-400">
-                  {stockData.reduction_plans.length} 条公告
-                </span>
-              </div>
+      <div className="bg-orange-950/10 border border-orange-900/30 rounded-xl overflow-hidden backdrop-blur-sm">
+        <div className="px-5 py-3 border-b border-orange-900/20 bg-gradient-to-r from-orange-950/20 to-orange-950/10">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <TrendingDown className="h-4 w-4 text-orange-400" />
+              <h4 className="text-xs font-bold text-orange-300">减持计划</h4>
+            </div>
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-orange-500/10 border border-orange-500/20">
+              <span className="text-[10px] font-semibold text-orange-400">
+                {stockData.reduction_plans.length} 条公告
+              </span>
             </div>
           </div>
+        </div>
 
-          <div className="divide-y divide-orange-900/20">
-            {stockData.reduction_plans.map((plan, index) => (
-              <div
-                key={index}
-                className="px-5 py-3 hover:bg-orange-950/20 transition-colors group"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1 min-w-0">
-                    <a
-                      href={plan.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs font-medium text-zinc-200 hover:text-orange-400 transition-colors line-clamp-2 flex items-start gap-1.5 group/link"
-                    >
-                      <FileText className="h-3.5 w-3.5 text-zinc-500 shrink-0 mt-0.5 group-hover/link:text-orange-400 transition-colors" />
-                      <span className="flex-1">{plan.title}</span>
-                      <ExternalLink className="h-3 w-3 text-zinc-600 shrink-0 mt-0.5 opacity-0 group-hover/link:opacity-100 transition-opacity" />
-                    </a>
+        <div className="divide-y divide-orange-900/20">
+          {stockData.reduction_plans.map((plan, index) => (
+            <div
+              key={index}
+              className="px-5 py-3 hover:bg-orange-950/20 transition-colors group"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <a
+                    href={plan.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs font-medium text-zinc-200 hover:text-orange-400 transition-colors line-clamp-2 flex items-start gap-1.5 group/link"
+                  >
+                    <FileText className="h-3.5 w-3.5 text-zinc-500 shrink-0 mt-0.5 group-hover/link:text-orange-400 transition-colors" />
+                    <span className="flex-1">{plan.title}</span>
+                    <ExternalLink className="h-3 w-3 text-zinc-600 shrink-0 mt-0.5 opacity-0 group-hover/link:opacity-100 transition-opacity" />
+                  </a>
 
-                    <div className="flex items-center gap-3 mt-2 ml-5">
-                      <div className="flex items-center gap-1.5">
-                        <Calendar className="h-3 w-3 text-orange-400/60" />
-                        <span className="text-[10px] text-zinc-500">减持日期</span>
-                        <span className="text-[10px] font-mono font-semibold text-orange-400">
-                          {plan.reduction_date}
-                        </span>
-                      </div>
-
-                      <div className="h-3 w-px bg-orange-900/30"></div>
-
-                      <span className="text-[10px] text-zinc-500 bg-zinc-800/50 px-2 py-0.5 rounded">
-                        {plan.announcement_type}
+                  <div className="flex items-center gap-3 mt-2 ml-5">
+                    <div className="flex items-center gap-1.5">
+                      <Calendar className="h-3 w-3 text-orange-400/60" />
+                      <span className="text-[10px] text-zinc-500">减持日期</span>
+                      <span className="text-[10px] font-mono font-semibold text-orange-400">
+                        {plan.reduction_date}
                       </span>
                     </div>
+
+                    <div className="h-3 w-px bg-orange-900/30"></div>
+
+                    <span className="text-[10px] text-zinc-500 bg-zinc-800/50 px-2 py-0.5 rounded">
+                      {plan.announcement_type}
+                    </span>
                   </div>
                 </div>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* No Reduction Plans Notice */}
-      {!hasReductionPlans && (
-        <div className="bg-zinc-900/30 border border-zinc-800/40 rounded-xl p-4">
-          <div className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded-md bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
-              <TrendingDown className="h-4 w-4 text-blue-400" />
             </div>
-            <div>
-              <p className="text-xs font-semibold text-zinc-300">暂无减持计划</p>
-              <p className="text-[10px] text-zinc-500 mt-0.5">该股票目前没有披露减持计划公告</p>
-            </div>
-          </div>
+          ))}
         </div>
-      )}
+      </div>
     </div>
   );
 }

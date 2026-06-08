@@ -1,8 +1,16 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { createChart, createSeriesMarkers, CandlestickSeries, LineSeries, HistogramSeries, IChartApi, ISeriesApi, ISeriesMarkersPluginApi, CandlestickData, LineData, HistogramData, Time, ColorType, CrosshairMode } from 'lightweight-charts';
-import { AlertCircle, TrendingUp, TrendingDown, Activity, DollarSign, Briefcase, Users, User, ChevronRight } from 'lucide-react';
+import { AlertCircle, TrendingUp, TrendingDown, Activity, DollarSign, Briefcase, Users, User, ChevronRight, AlertTriangle, ExternalLink, Calendar, FileText } from 'lucide-react';
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo } from '../types/stock';
 import { calculateSMA, calculateBollingerBands, calculateMACD } from '../utils/indicators';
+
+interface ReductionPlan {
+  title: string;
+  url: string;
+  reduction_date: string;
+  announcement_type: string;
+  announcement_date: string;
+}
 
 interface ChanlunChartProps {
   klines: Kline[];
@@ -14,13 +22,14 @@ interface ChanlunChartProps {
   stockBasicInfo?: StockBasicInfo | null;
   industry?: string;
   actualController?: string;
+  reductionPlans?: ReductionPlan[];
 }
 
 function dateToTime(dateStr: string): Time {
   return dateStr as Time;
 }
 
-export default function ChanlunChart({ klines, fractions, strokes, segments, hubs, symbol, stockBasicInfo, industry, actualController }: ChanlunChartProps) {
+export default function ChanlunChart({ klines, fractions, strokes, segments, hubs, symbol, stockBasicInfo, industry, actualController, reductionPlans }: ChanlunChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -644,7 +653,42 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
             <div className="flex items-center gap-4">
               <div className="flex flex-col">
                 <div className="flex flex-col gap-1">
-                  <h2 className="text-xl font-bold text-zinc-100">{stockBasicInfo.name}</h2>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-xl font-bold text-zinc-100">{stockBasicInfo.name}</h2>
+                    {reductionPlans && reductionPlans.length > 0 && (
+                      <div className="group/badge relative">
+                        <span className="flex items-center justify-center h-5 w-5 rounded-full bg-orange-500/20 border border-orange-500/40 text-orange-400 cursor-help">
+                          <AlertTriangle className="h-3 w-3" />
+                        </span>
+                        <div className="absolute left-1/2 -translate-x-1/2 top-full mt-2 w-72 opacity-0 invisible group-hover/badge:opacity-100 group-hover/badge:visible transition-all duration-200 z-50 pointer-events-none">
+                          <div className="bg-zinc-900 border border-orange-900/40 rounded-xl shadow-xl overflow-hidden">
+                            <div className="px-3 py-2 border-b border-orange-900/20 bg-gradient-to-r from-orange-950/30 to-orange-950/10 flex items-center gap-2">
+                              <TrendingDown className="h-3.5 w-3.5 text-orange-400" />
+                              <span className="text-[10px] font-bold text-orange-300 uppercase tracking-wider">减持计划</span>
+                              <span className="ml-auto text-[10px] font-semibold text-orange-400 bg-orange-500/10 px-1.5 py-0.5 rounded">{reductionPlans.length} 条</span>
+                            </div>
+                            <div className="divide-y divide-orange-900/20 max-h-48 overflow-y-auto">
+                              {reductionPlans.map((plan, i) => (
+                                <a key={i} href={plan.url} target="_blank" rel="noopener noreferrer" className="block px-3 py-2 hover:bg-orange-950/20 transition-colors group/link">
+                                  <div className="flex items-start gap-2">
+                                    <FileText className="h-3 w-3 text-zinc-500 mt-0.5 shrink-0 group-hover/link:text-orange-400 transition-colors" />
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-[11px] text-zinc-200 leading-snug line-clamp-2 group-hover/link:text-orange-300 transition-colors">{plan.title}</p>
+                                      <div className="flex items-center gap-2 mt-1">
+                                        <span className="text-[10px] text-zinc-500">减持日期</span>
+                                        <span className="text-[10px] font-mono text-orange-400 font-semibold">{plan.reduction_date}</span>
+                                      </div>
+                                    </div>
+                                    <ExternalLink className="h-3 w-3 text-zinc-600 shrink-0 mt-1 opacity-0 group-hover/link:opacity-100 transition-opacity" />
+                                  </div>
+                                </a>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                   <span className="text-sm font-mono text-zinc-500 bg-zinc-800/50 px-2 py-0.5 rounded self-start">{stockBasicInfo.symbol}</span>
                 </div>
               </div>

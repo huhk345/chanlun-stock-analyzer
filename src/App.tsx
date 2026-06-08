@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Activity, BrainCircuit, GripVertical, Building2 } from 'lucide-react';
+import { Activity, BrainCircuit, GripVertical } from 'lucide-react';
 import Navbar from './components/Navbar';
 import ChanlunChart from './components/ChanlunChart';
 import BacktestManager from './components/BacktestManager';
@@ -45,7 +45,6 @@ export default function App() {
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [isChatVisible, setIsChatVisible] = useState(true);
-  const [showStockInfo, setShowStockInfo] = useState(true);
 
   // Prevent double API calls in StrictMode
   const hasInitialized = useRef(false);
@@ -283,37 +282,14 @@ export default function App() {
                 stockBasicInfo={stockBasicInfo}
                 industry={stockMeta?.industry}
                 actualController={stockMeta?.actual_controller}
+                reductionPlans={stockMeta?.reduction_plans}
               />
             </div>
 
             {/* AI Advisor - flows inline below the chart on mobile */}
             {isChatVisible && isMobile && renderAdvisor()}
 
-            {/* Stock Info Panel */}
-            {showStockInfo && (
-              <div className="relative">
-                <div className="absolute top-0 right-0 z-10">
-                  <button
-                    onClick={() => setShowStockInfo(false)}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-700/50 rounded-lg text-zinc-400 hover:text-zinc-200 transition-all text-[10px] font-semibold uppercase tracking-wider backdrop-blur-sm"
-                  >
-                    <Building2 className="h-3 w-3" />
-                    <span>隐藏详情</span>
-                  </button>
-                </div>
-                <StockInfoPanel stockData={stockMeta} />
-              </div>
-            )}
-
-            {!showStockInfo && (
-              <button
-                onClick={() => setShowStockInfo(true)}
-                className="flex items-center gap-2 px-4 py-2.5 bg-zinc-900/50 hover:bg-zinc-800/60 border border-zinc-800/60 rounded-xl text-zinc-400 hover:text-zinc-200 transition-all text-xs font-semibold backdrop-blur-sm"
-              >
-                <Building2 className="h-4 w-4" />
-                <span>显示股票详情</span>
-              </button>
-            )}
+            <StockInfoPanel stockData={stockMeta} />
 
             {/* Backtest Manager */}
             <BacktestManager

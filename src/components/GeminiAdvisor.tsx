@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   BrainCircuit,
   RefreshCw,
@@ -17,6 +19,7 @@ import {
 import { Kline, Stroke, Segment, Hub, Fraction } from '../types/stock';
 import { chatWithAI, ChatMessage } from '../utils/api';
 import {
+  clearCachedModels,
   fetchOpenRouterFreeModels,
   getStoredSelectedModel,
   setStoredSelectedModel,
@@ -49,8 +52,6 @@ const SUGGESTED_QUESTIONS: { category: string; icon: string; text: string }[] = 
   { category: '复盘', icon: '🔁', text: '最近一笔的买卖点事后看是否成立? 给出复盘结论' },
   { category: '对比', icon: '🧪', text: 'MACD / 均线 / 布林带 是否与缠论结构互相印证?' },
 ];
-
-const CHAT_STORAGE_KEY = 'chanlun_ai_chat_history';
 
 function getApiKey(key: string): string {
   try {
@@ -89,18 +90,7 @@ export default function GeminiAdvisor({
   const [recentWindow] = useState<number>(90);
 
   // Chat state
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
-    try {
-      const raw = localStorage.getItem(CHAT_STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed as ChatMessage[];
-      }
-    } catch {
-      // ignore
-    }
-    return [];
-  });
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState('');
@@ -151,17 +141,6 @@ export default function GeminiAdvisor({
     return () => document.removeEventListener('mousedown', handler);
   }, [modelDropdownOpen]);
 
-  // Persist chat history.
-  useEffect(() => {
-    try {
-      // Cap history at last 40 messages to keep storage reasonable.
-      const trimmed = chatMessages.slice(-40);
-      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(trimmed));
-    } catch {
-      // ignore
-    }
-  }, [chatMessages]);
-
   // Auto-scroll the chat window to the latest message.
   useEffect(() => {
     if (!chatScrollRef.current) return;
@@ -176,6 +155,7 @@ export default function GeminiAdvisor({
 
   const handleRefreshModels = async () => {
     setModelsLoading(true);
+    clearCachedModels();
     try {
       const list = await fetchOpenRouterFreeModels(getOpenRouterApiKey());
       setModels(list);
@@ -318,84 +298,123 @@ export default function GeminiAdvisor({
 
   const renderFormattedReport = (rawText: string) => {
     if (!rawText) return null;
-    const lines = rawText.split('\n');
-    return lines.map((line, idx) => {
-      if (line.startsWith('### ')) {
-        return (
-          <h5 key={`h5-${idx}`} className="text-sm font-bold text-zinc-200 font-sans mt-5 mb-2 flex items-center gap-2">
-            {line.replace('### ', '')}
-          </h5>
-        );
-      }
-      if (line.startsWith('## ')) {
-        return (
-          <h4
-            key={`h4-${idx}`}
-            className="text-base font-extrabold text-zinc-100 font-sans mt-6 border-b border-zinc-800 pb-1.5 flex items-center gap-2"
-          >
-            {line.replace('## ', '')}
-          </h4>
-        );
-      }
-      if (line.startsWith('# ')) {
-        return (
-          <h3
-            key={`h3-${idx}`}
-            className="text-lg font-black text-blue-400 font-sans mt-7 mb-3 flex items-center gap-2"
-          >
-            {line.replace('# ', '')}
-          </h3>
-        );
-      }
-
-      let processedComponent: React.ReactNode = line;
-      if (line.includes('**')) {
-        const parts = line.split('**');
-        processedComponent = parts.map((part, pIdx) => {
-          if (pIdx % 2 === 1) {
+    return (
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          h1: ({ children }) => (
+            <h3 className="text-lg font-black text-blue-400 font-sans mt-7 mb-3 flex items-center gap-2">
+              {children}
+            </h3>
+          ),
+          h2: ({ children }) => (
+            <h4 className="text-base font-extrabold text-zinc-100 font-sans mt-6 border-b border-zinc-800 pb-1.5 flex items-center gap-2">
+              {children}
+            </h4>
+          ),
+          h3: ({ children }) => (
+            <h5 className="text-sm font-bold text-zinc-200 font-sans mt-5 mb-2 flex items-center gap-2">
+              {children}
+            </h5>
+          ),
+          h4: ({ children }) => (
+            <h5 className="text-sm font-bold text-zinc-200 font-sans mt-4 mb-2">
+              {children}
+            </h5>
+          ),
+          h5: ({ children }) => (
+            <h5 className="text-sm font-semibold text-zinc-300 font-sans mt-3 mb-1">
+              {children}
+            </h5>
+          ),
+          h6: ({ children }) => (
+            <h6 className="text-xs font-semibold text-zinc-400 font-sans mt-3 mb-1">
+              {children}
+            </h6>
+          ),
+          p: ({ children }) => (
+            <p className="text-xs font-sans text-zinc-300 leading-relaxed py-1.5 pl-1.5">
+              {children}
+            </p>
+          ),
+          strong: ({ children }) => (
+            <strong className="text-blue-400 font-semibold font-sans">
+              {children}
+            </strong>
+          ),
+          li: ({ children }) => (
+            <li className="list-disc list-inside text-xs font-sans text-zinc-400 pl-4 py-1.5 leading-relaxed">
+              {children}
+            </li>
+          ),
+          blockquote: ({ children }) => (
+            <div className="p-3 bg-zinc-900 border-l-4 border-blue-500 rounded text-xs text-zinc-300 my-2 font-serif italic">
+              {children}
+            </div>
+          ),
+          code: ({ children, className }) => {
+            const isInline = !className;
+            if (isInline) {
+              return (
+                <code className="bg-zinc-800 text-pink-300 px-1 py-0.5 rounded text-[11px] font-mono">
+                  {children}
+                </code>
+              );
+            }
             return (
-              <strong key={`str-${pIdx}`} className="text-blue-400 font-semibold font-sans">
-                {part}
-              </strong>
+              <pre className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 my-2 overflow-x-auto">
+                <code className="text-xs font-mono text-zinc-200 leading-relaxed">
+                  {children}
+                </code>
+              </pre>
             );
-          }
-          return part;
-        });
-      }
-
-      if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
-        return (
-          <li
-            key={`li-${idx}`}
-            className="list-disc list-inside text-xs font-sans text-zinc-400 pl-4 py-1.5 leading-relaxed"
-          >
-            {processedComponent}
-          </li>
-        );
-      }
-
-      if (line.trim().startsWith('> ')) {
-        return (
-          <div
-            key={`blk-${idx}`}
-            className="p-3 bg-zinc-900 border-l-4 border-blue-500 rounded text-xs text-zinc-300 my-2 font-serif italic"
-          >
-            {line.trim().substring(2)}
-          </div>
-        );
-      }
-
-      if (line.trim() === '') return <div key={`sp-${idx}`} className="h-2" />;
-
-      return (
-        <p
-          key={`p-${idx}`}
-          className="text-xs font-sans text-zinc-300 leading-relaxed py-1.5 pl-1.5"
-        >
-          {processedComponent}
-        </p>
-      );
-    });
+          },
+          a: ({ children, href }) => (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-400 underline hover:text-blue-300"
+            >
+              {children}
+            </a>
+          ),
+          hr: () => <hr className="border-zinc-800 my-4" />,
+          table: ({ children }) => (
+            <div className="overflow-x-auto my-2">
+              <table className="w-full text-xs border-collapse border border-zinc-800 rounded-lg">
+                {children}
+              </table>
+            </div>
+          ),
+          thead: ({ children }) => (
+            <thead className="bg-zinc-900">{children}</thead>
+          ),
+          tbody: ({ children }) => <tbody>{children}</tbody>,
+          tr: ({ children }) => (
+            <tr className="border-b border-zinc-800">{children}</tr>
+          ),
+          th: ({ children }) => (
+            <th className="px-3 py-2 text-left font-semibold text-zinc-200 border-r border-zinc-800 last:border-r-0">
+              {children}
+            </th>
+          ),
+          td: ({ children }) => (
+            <td className="px-3 py-2 text-zinc-300 border-r border-zinc-800 last:border-r-0">
+              {children}
+            </td>
+          ),
+          ul: ({ children }) => (
+            <ul className="list-disc list-inside space-y-0.5 py-1">{children}</ul>
+          ),
+          ol: ({ children }) => (
+            <ol className="list-decimal list-inside space-y-0.5 py-1">{children}</ol>
+          ),
+        }}
+      >
+        {rawText}
+      </Markdown>
+    );
   };
 
   const contextSummary = useMemo(() => {
@@ -661,8 +680,8 @@ function ChatBubble({ role, content, renderMarkdown }: ChatBubbleProps) {
   if (role === 'user') {
     return (
       <div className="flex items-start gap-2 justify-end">
-        <div className="max-w-[85%] bg-blue-500/10 border border-blue-500/30 text-zinc-100 rounded-2xl rounded-tr-sm px-3.5 py-2.5 text-xs font-sans leading-relaxed whitespace-pre-wrap break-words">
-          {content}
+        <div className="max-w-[85%] bg-blue-500/10 border border-blue-500/30 text-zinc-100 rounded-2xl rounded-tr-sm px-3.5 py-2.5 text-xs font-sans leading-relaxed break-words">
+          {renderMarkdown(content)}
         </div>
         <div className="shrink-0 w-7 h-7 rounded-lg bg-blue-500/20 border border-blue-500/40 flex items-center justify-center">
           <User className="h-3.5 w-3.5 text-blue-300" />
