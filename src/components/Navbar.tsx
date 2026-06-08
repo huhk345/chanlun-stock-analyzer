@@ -484,7 +484,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
 
       {/* Mobile Search Panel */}
       {showSearch && onSearch && (
-        <div className="md:hidden w-full border-t border-zinc-800/80 bg-zinc-950/95 px-4 py-3 space-y-3">
+        <div className="md:hidden w-full border-t border-zinc-800/80 bg-zinc-950/95 px-2 py-2 space-y-2">
           <form onSubmit={handleSearchSubmit}>
             <input
               type="text"

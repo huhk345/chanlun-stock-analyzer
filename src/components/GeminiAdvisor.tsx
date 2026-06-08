@@ -18,7 +18,7 @@ import {
   Settings,
 } from 'lucide-react';
 import { Kline, Stroke, Segment, Hub, Fraction } from '../types/stock';
-import { chatWithAI, ChatMessage } from '../utils/api';
+import { chatWithAIStream, ChatMessage } from '../utils/api';
 import {
   clearCachedModels,
   fetchOpenRouterFreeModels,
@@ -99,6 +99,7 @@ export default function GeminiAdvisor({
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState('');
+  const [streamingContent, setStreamingContent] = useState('');
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -150,7 +151,7 @@ export default function GeminiAdvisor({
   useEffect(() => {
     if (!chatScrollRef.current) return;
     chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
-  }, [chatMessages, chatLoading]);
+  }, [chatMessages, chatLoading, streamingContent]);
 
   const handleSelectModel = (modelId: string) => {
     setSelectedModel(modelId);
@@ -189,10 +190,11 @@ export default function GeminiAdvisor({
     setChatMessages(nextHistory);
     setChatInput('');
     setChatError('');
+    setStreamingContent('');
     setChatLoading(true);
 
     try {
-      const reply = await chatWithAI({
+      const reply = await chatWithAIStream({
         symbol,
         klines,
         strokes,
@@ -202,14 +204,18 @@ export default function GeminiAdvisor({
         model: selectedModel,
         recentWindow,
         messages: nextHistory,
+      }, (chunk) => {
+        setStreamingContent((prev) => prev + chunk);
       });
       const assistantMsg: ChatMessage = {
         role: 'assistant',
         content: reply || '(空回复)',
       };
+      setStreamingContent('');
       setChatMessages((prev) => [...prev, assistantMsg]);
     } catch (err: any) {
       setChatError(err.message || 'AI 调用失败');
+      setStreamingContent('');
       // Roll back the optimistic user message on hard failure.
       setChatMessages((prev) => prev.filter((m) => m !== userMsg));
       setChatInput(trimmed);
@@ -245,8 +251,6 @@ export default function GeminiAdvisor({
 
   const handleRegenerateLast = async () => {
     if (chatLoading) return;
-    // Find the last user message and re-send it after dropping the trailing
-    // assistant reply.
     let lastUserIdx = -1;
     for (let i = chatMessages.length - 1; i >= 0; i--) {
       if (chatMessages[i].role === 'user') {
@@ -261,9 +265,10 @@ export default function GeminiAdvisor({
     const userMsg = chatMessages[lastUserIdx];
     setChatMessages(trimmed);
     setChatError('');
+    setStreamingContent('');
     setChatLoading(true);
     try {
-      const reply = await chatWithAI({
+      const reply = await chatWithAIStream({
         symbol,
         klines,
         strokes,
@@ -273,14 +278,17 @@ export default function GeminiAdvisor({
         model: selectedModel,
         recentWindow,
         messages: trimmed,
+      }, (chunk) => {
+        setStreamingContent((prev) => prev + chunk);
       });
+      setStreamingContent('');
       setChatMessages((prev) => [
         ...prev,
         { role: 'assistant', content: reply || '(空回复)' },
       ]);
     } catch (err: any) {
       setChatError(err.message || 'AI 调用失败');
-      // Restore the original user message on failure.
+      setStreamingContent('');
       setChatMessages(chatMessages);
       void userMsg;
     } finally {
@@ -433,9 +441,9 @@ export default function GeminiAdvisor({
   }, [klines, strokes, segments, hubs, fractions]);
 
   return (
-    <div className="h-full flex flex-col bg-zinc-900/95 backdrop-blur-xl border-l border-zinc-800/80 shadow-lg overflow-hidden">
+    <div className="h-full flex flex-col bg-zinc-900/95 md:backdrop-blur-xl md:border-l md:border-zinc-800/80 md:shadow-lg overflow-hidden mobile-rounded-2xl mobile-mt-4 mobile-mb-4">
       {/* Compact Header */}
-      <div className="flex-shrink-0 px-4 py-3 border-b border-zinc-800/50 bg-zinc-900/60">
+      <div className="flex-shrink-0 px-2 py-2 md:px-4 md:py-3 border-b border-zinc-800/50 bg-zinc-900/60">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-blue-500/15 border border-blue-500/30 flex items-center justify-center">
@@ -532,14 +540,14 @@ export default function GeminiAdvisor({
       </div>
 
       {!hasApiKey && !chatError && (
-        <div className="flex-shrink-0 px-4 py-2 bg-amber-950/20 border-b border-amber-900/30 text-amber-400 text-[10px] flex gap-2 items-center">
+        <div className="flex-shrink-0 px-2 py-1.5 md:px-4 md:py-2 bg-amber-950/20 border-b border-amber-900/30 text-amber-400 text-[10px] flex gap-2 items-center">
           <Settings className="h-3.5 w-3.5 shrink-0" />
           <span>请先在设置中配置 Gemini API Key 或 OpenRouter API Key 才能使用 AI 问答</span>
         </div>
       )}
 
       {chatError && (
-        <div className="flex-shrink-0 px-4 py-2 bg-red-950/20 border-b border-red-900/30 text-red-400 text-[10px] flex gap-2 items-center">
+        <div className="flex-shrink-0 px-2 py-1.5 md:px-4 md:py-2 bg-red-950/20 border-b border-red-900/30 text-red-400 text-[10px] flex gap-2 items-center">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
           <span>{chatError}</span>
         </div>
@@ -547,7 +555,7 @@ export default function GeminiAdvisor({
 
       {/* Suggested Questions (when chat is empty) */}
       {chatMessages.length === 0 && !chatLoading && (
-        <div className="flex-shrink-0 p-4 border-b border-zinc-800/50 bg-zinc-900/20">
+        <div className="flex-shrink-0 p-2 md:p-4 border-b border-zinc-800/50 bg-zinc-900/20">
           <div className="text-[10px] font-mono uppercase tracking-widest text-zinc-500 mb-3 flex items-center gap-1.5">
             <Wand2 className="h-3 w-3 text-blue-400" />
             推荐提问
@@ -581,7 +589,7 @@ export default function GeminiAdvisor({
       {/* Chat Messages Area */}
       <div
         ref={chatScrollRef}
-        className="flex-1 overflow-y-auto px-4 py-4 space-y-3 bg-zinc-950/30"
+        className="flex-1 overflow-y-auto px-2 py-2 md:px-4 md:py-4 space-y-3 bg-zinc-950/30"
       >
         {chatMessages.map((msg, idx) => (
           <ChatBubble
@@ -591,7 +599,15 @@ export default function GeminiAdvisor({
             renderMarkdown={renderFormattedReport}
           />
         ))}
-        {chatLoading && (
+        {chatLoading && streamingContent && (
+          <ChatBubble
+            role="assistant"
+            content={streamingContent}
+            renderMarkdown={renderFormattedReport}
+            isStreaming
+          />
+        )}
+        {chatLoading && !streamingContent && (
           <div className="flex items-start gap-2">
             <div className="shrink-0 w-7 h-7 rounded-lg bg-blue-500/15 border border-blue-500/30 flex items-center justify-center">
               <Bot className="h-3.5 w-3.5 text-blue-400" />
@@ -609,7 +625,7 @@ export default function GeminiAdvisor({
       </div>
 
       {/* Chat Input Area - Sticky at bottom */}
-      <div className="sticky bottom-0 flex-shrink-0 p-3 border-t border-zinc-800/50 bg-zinc-900/95 backdrop-blur-sm">
+      <div className="sticky bottom-0 flex-shrink-0 p-2 md:p-3 border-t border-zinc-800/50 bg-zinc-900/95 md:backdrop-blur-sm">
         {/* Action buttons */}
         {chatMessages.length > 0 && (
           <div className="flex items-center gap-2 mb-2">
@@ -686,9 +702,10 @@ interface ChatBubbleProps {
   role: 'user' | 'assistant' | 'system';
   content: string;
   renderMarkdown: (text: string) => React.ReactNode;
+  isStreaming?: boolean;
 }
 
-function ChatBubble({ role, content, renderMarkdown }: ChatBubbleProps) {
+function ChatBubble({ role, content, renderMarkdown, isStreaming }: ChatBubbleProps) {
   if (role === 'user') {
     return (
       <div className="flex items-start gap-2 justify-end">
@@ -702,7 +719,6 @@ function ChatBubble({ role, content, renderMarkdown }: ChatBubbleProps) {
     );
   }
 
-  // assistant (or system fallback)
   return (
     <div className="flex items-start gap-2">
       <div className="shrink-0 w-7 h-7 rounded-lg bg-zinc-800 border border-zinc-700 flex items-center justify-center">
@@ -710,6 +726,7 @@ function ChatBubble({ role, content, renderMarkdown }: ChatBubbleProps) {
       </div>
       <div className="flex-1 min-w-0 bg-zinc-900 border border-zinc-800 rounded-2xl rounded-tl-sm px-3.5 py-2.5 text-zinc-100">
         {renderMarkdown(content)}
+        {isStreaming && <span className="inline-block w-1.5 h-4 bg-blue-400 ml-0.5 animate-pulse rounded-sm align-text-bottom" />}
       </div>
     </div>
   );

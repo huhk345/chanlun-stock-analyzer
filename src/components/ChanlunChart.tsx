@@ -635,7 +635,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
 
   if (klines.length === 0) {
     return (
-      <div className="bg-zinc-900 rounded-2xl border border-zinc-800 p-8 h-96 flex flex-col items-center justify-center text-center">
+      <div className="mobile-flat bg-zinc-900 md:rounded-2xl md:border md:border-zinc-8 md:p-8 h-96 flex flex-col items-center justify-center text-center">
         <AlertCircle className="h-10 w-10 text-gray-300 mb-2 animate-bounce" />
         <h4 className="text-zinc-500 font-medium font-sans">无市场数据</h4>
         <p className="text-xs text-zinc-400 mt-1">请在上方搜索框输入有效的股票代码。</p>
@@ -644,12 +644,12 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
   }
 
   return (
-    <div className="bg-zinc-900 rounded-2xl border border-zinc-800 p-6 text-zinc-100 shadow-xl flex flex-col gap-4">
+    <div className="mobile-flat bg-zinc-900 md:rounded-2xl md:border md:border-zinc-800 md:p-6 md:shadow-xl text-zinc-100 flex flex-col gap-2 md:gap-4">
 
       {/* Stock Basic Info Header */}
       {stockBasicInfo && (
-        <div className="bg-gradient-to-r from-zinc-950 via-zinc-900 to-zinc-950 rounded-xl border border-zinc-800/80 p-4">
-          <div className="flex flex-row xl:flex-row items-start xl:items-center justify-between gap-4">
+        <div className="mobile-flat bg-gradient-to-r from-zinc-950 via-zinc-900 to-zinc-950 md:rounded-xl md:border md:border-zinc-800/80 md:p-4 p-0">
+          <div className="flex flex-row xl:flex-row items-start xl:items-center justify-between gap-2 md:gap-4">
             {/* Left: Stock Name & Symbol */}
             <div className="flex items-center gap-4 min-w-0">
               <div className="flex flex-col min-w-0">
@@ -857,8 +857,8 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
           </div>
           
           {/* Mobile Controls */}
-          <div className="xl:hidden flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-zinc-800">
-            <div className="flex flex-wrap items-center gap-1 bg-zinc-800/15 rounded-xl px-2.5 py-1.5 border border-zinc-700/20">
+          <div className="xl:hidden flex flex-wrap items-center gap-2 mt-2 md:mt-3 pt-2 md:pt-3 border-t border-zinc-800 px-2 md:px-0">
+            <div className="flex flex-wrap items-center gap-1 mobile-flat bg-zinc-800/15 md:rounded-xl px-1.5 md:px-2.5 py-1 md:py-1.5 md:border md:border-zinc-700/20">
               <span className="text-[9px] font-bold text-zinc-500 tracking-wider mr-0.5 bg-zinc-800/60 px-1.5 py-0.5 rounded-md leading-none">缠</span>
               <button
                 onClick={() => setShowCandles(!showCandles)}
@@ -916,7 +916,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
                 中枢
               </button>
             </div>
-            <div className="flex flex-wrap items-center gap-1 bg-zinc-800/15 rounded-xl px-2.5 py-1.5 border border-zinc-700/20">
+            <div className="flex flex-wrap items-center gap-1 mobile-flat bg-zinc-800/15 md:rounded-xl px-1.5 md:px-2.5 py-1 md:py-1.5 md:border md:border-zinc-700/20">
               <span className="text-[9px] font-bold text-zinc-500 tracking-wider mr-0.5 bg-zinc-800/60 px-1.5 py-0.5 rounded-md leading-none">指</span>
               <button
                 onClick={() => setShowMA5(!showMA5)}
@@ -972,9 +972,9 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
         <div className="flex flex-col xl:flex-row items-stretch xl:items-center justify-end gap-4">
 
           {/* Visibility Toggles */}
-          <div className="flex flex-wrap items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4 px-2 md:px-0">
 
-            <div className="flex flex-wrap items-center gap-1 bg-zinc-800/15 rounded-xl px-2.5 py-1.5 border border-zinc-700/20">
+            <div className="flex flex-wrap items-center gap-1 mobile-flat bg-zinc-800/15 md:rounded-xl px-1.5 md:px-2.5 py-1 md:py-1.5 md:border md:border-zinc-700/20">
               <span className="text-[9px] font-bold text-zinc-500 tracking-wider mr-0.5 bg-zinc-800/60 px-1.5 py-0.5 rounded-md leading-none">缠</span>
               <button
                 onClick={() => setShowCandles(!showCandles)}
@@ -1032,7 +1032,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
                 中枢
               </button>
             </div>
-            <div className="flex flex-wrap items-center gap-1 bg-zinc-800/15 rounded-xl px-2.5 py-1.5 border border-zinc-700/20">
+            <div className="flex flex-wrap items-center gap-1 mobile-flat bg-zinc-800/15 md:rounded-xl px-1.5 md:px-2.5 py-1 md:py-1.5 md:border md:border-zinc-700/20">
               <span className="text-[9px] font-bold text-zinc-500 tracking-wider mr-0.5 bg-zinc-800/60 px-1.5 py-0.5 rounded-md leading-none">指</span>
               <button
                 onClick={() => setShowMA5(!showMA5)}
@@ -1087,13 +1087,13 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
       {/* Chart and its header group */}
       <div className="flex flex-col">
         {/* Floating Price Data Header panels */}
-        <div className="bg-zinc-950 p-3 rounded-t-xl border border-zinc-800 border-b-0">
+        <div className="mobile-flat mobile-px-2 mobile-py-2 bg-zinc-950 md:p-3 md:rounded-t-xl md:border md:border-zinc-800 md:border-b-0">
           {/* Row 1: Price Data */}
-          <div className="grid grid-cols-6 gap-3">
-            <div>
+          <div className="grid grid-cols-3 md:grid-cols-6 gap-2 md:gap-3 py-2 mobile-text-center">
+            <div className="min-w-0">
               <span className="text-[10px] font-mono text-zinc-500 uppercase">交易日期</span>
-              <div className="flex items-center gap-2 mt-0.5">
-                <p className="text-xs font-bold font-mono tracking-wide text-zinc-300">
+              <div className="flex items-center gap-1 mt-0.5 mobile-justify-center">
+                <p className="text-xs font-bold font-mono tracking-wide text-zinc-300 truncate">
                   {hoveredData ? hoveredData.date : klines[klines.length - 1].date}
                 </p>
                 {(() => {
@@ -1121,27 +1121,27 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
                 })()}
               </div>
             </div>
-            <div>
+            <div className="min-w-0">
               <span className="text-[10px] font-mono text-zinc-500 uppercase">开盘价</span>
               <p className="text-xs font-bold font-mono tracking-wide text-zinc-200 mt-0.5">
                 {hoveredData ? hoveredData.open.toFixed(2) : klines[klines.length - 1].open.toFixed(2)}
               </p>
             </div>
-            <div>
+            <div className="min-w-0">
               <span className="text-[10px] font-mono text-zinc-500 uppercase">收盘价</span>
               <p className="text-xs font-bold font-mono tracking-wide mt-0.5 text-blue-400">
                 {hoveredData ? hoveredData.close.toFixed(2) : klines[klines.length - 1].close.toFixed(2)}
               </p>
             </div>
-            <div>
+            <div className="min-w-0">
               <span className="text-[10px] font-mono text-zinc-500 uppercase">最高/最低价</span>
-              <p className="text-xs font-bold font-mono tracking-wide text-zinc-400 mt-0.5">
+              <p className="text-xs font-bold font-mono tracking-wide text-zinc-400 mt-0.5 truncate">
                 {hoveredData
                   ? `${hoveredData.high.toFixed(2)} / ${hoveredData.low.toFixed(2)}`
                   : `${klines[klines.length - 1].high.toFixed(2)} / ${klines[klines.length - 1].low.toFixed(2)}`}
               </p>
             </div>
-            <div>
+            <div className="min-w-0">
               <span className="text-[10px] font-mono text-zinc-500 uppercase">成交量</span>
               <p className="text-xs font-bold font-mono tracking-wide text-amber-400 mt-0.5">
                 {hoveredData
@@ -1149,7 +1149,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
                   : (klines[klines.length - 1].volume / 1000).toFixed(1) + 'K'}
               </p>
             </div>
-            <div>
+            <div className="min-w-0">
               <span className="text-[10px] font-mono text-zinc-500 uppercase">成交额</span>
               <p className="text-xs font-bold font-mono tracking-wide text-sky-400 mt-0.5">
                 {(() => {
@@ -1203,13 +1203,13 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
         {/* TradingView Chart Container */}
         <div
           ref={chartContainerRef}
-          className="w-full h-96 sm:h-[480px] bg-zinc-950/80 rounded-b-xl border border-zinc-800 relative overflow-hidden select-none"
+          className="w-full h-72 sm:h-96 md:sm:h-[480px] bg-zinc-950/80 md:rounded-b-xl md:border md:border-zinc-800 relative overflow-hidden select-none"
         />
       </div>
 
       {/* Indicator details on hover */}
       {hoveredData && (showMA5 || showMA20 || showBOLL || showMACD) && (
-        <div className="bg-zinc-950 p-3 rounded-xl border border-zinc-800 text-[11px] font-mono text-zinc-400 space-y-0.5">
+        <div className="mobile-flat mobile-px-2 mobile-py-2 bg-zinc-950 md:p-3 md:rounded-xl md:border md:border-zinc-800 text-[11px] font-mono text-zinc-400 space-y-0.5">
           <p className="font-semibold text-slate-200">ACTIVE INDICATORS</p>
           {showMA5 && hoveredData.ma5 !== undefined && (
             <p>MA5: <span className="text-cyan-400 font-medium">${hoveredData.ma5.toFixed(2)}</span></p>

@@ -443,6 +443,168 @@ function responseTextSafe(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Streaming helpers
+// ---------------------------------------------------------------------------
+
+export type StreamCallback = (chunk: string) => void;
+
+async function callOpenRouterChatStream(
+  apiKey: string,
+  model: string,
+  messages: ChatMessage[],
+  onToken: StreamCallback,
+  temperature = 0.7,
+): Promise<string> {
+  console.log(`[AI] OpenRouter stream -> ${model} (${messages.length} msg)`);
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+      'HTTP-Referer': window.location.origin,
+      'X-Title': 'ChanLun Stock Analyzer',
+    },
+    body: JSON.stringify({
+      model,
+      temperature,
+      stream: true,
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('[AI] OpenRouter stream error:', response.status, errorText);
+    let detail = errorText;
+    try {
+      const parsed = JSON.parse(errorText);
+      detail = parsed?.error?.message || parsed?.message || errorText;
+    } catch {
+      // keep raw text
+    }
+    throw new Error(`OpenRouter 调用失败 (${response.status}): ${detail || '请检查模型 id 或 API Key'}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('ReadableStream not supported');
+
+  const decoder = new TextDecoder();
+  let full = '';
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+        const data = trimmed.slice(6);
+        if (data === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(data);
+          const content = parsed?.choices?.[0]?.delta?.content || '';
+          if (content) {
+            full += content;
+            onToken(content);
+          }
+        } catch {
+          // skip malformed JSON
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return full;
+}
+
+async function callGeminiChatStream(
+  apiKey: string,
+  messages: ChatMessage[],
+  onToken: StreamCallback,
+  temperature = 0.7,
+): Promise<string> {
+  console.log(`[AI] Gemini stream (${messages.length} msg)`);
+  const systemMsg = messages.find((m) => m.role === 'system');
+  const conversation = messages.filter((m) => m.role !== 'system');
+  const contents = conversation.map((m) => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }],
+  }));
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=${apiKey}`;
+  const body: any = {
+    contents,
+    generationConfig: { temperature },
+  };
+  if (systemMsg) {
+    body.systemInstruction = { parts: [{ text: systemMsg.content }] };
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('[AI] Gemini stream error:', errorText);
+    throw new Error(`Gemini 调用失败 (${response.status}): 请检查 VITE_GEMINI_API_KEY 是否有效`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('ReadableStream not supported');
+
+  const decoder = new TextDecoder();
+  let full = '';
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+        const data = trimmed.slice(6);
+        if (!data || data === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(data);
+          const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          if (text) {
+            full += text;
+            onToken(text);
+          }
+        } catch {
+          // skip malformed JSON
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return full;
+}
+
+// ---------------------------------------------------------------------------
 // Public entry points
 // ---------------------------------------------------------------------------
 
@@ -588,6 +750,77 @@ export async function chatWithAI(params: ChatWithAIParams): Promise<string> {
 }
 
 /**
+ * Streaming version of chatWithAI. Calls onToken for each content chunk as it
+ * arrives, and returns the full assembled reply.
+ */
+export async function chatWithAIStream(
+  params: ChatWithAIParams,
+  onToken: StreamCallback,
+): Promise<string> {
+  const {
+    messages,
+    model,
+    klines,
+    strokes,
+    segments,
+    hubs,
+    fractions,
+    currentSetup,
+    symbol,
+    recentWindow,
+    temperature,
+  } = params;
+
+  if (!klines || klines.length === 0) {
+    throw new Error('没有可用的 K 线数据, 请先加载股票数据。');
+  }
+  if (!messages || messages.length === 0) {
+    throw new Error('请输入要发送给 AI 的消息。');
+  }
+
+  const OPENROUTER_API_KEY = getOpenRouterApiKey();
+  const GEMINI_API_KEY = getGeminiApiKey();
+
+  if (!OPENROUTER_API_KEY && !GEMINI_API_KEY) {
+    throw new Error('未配置 AI API 密钥。请在配置中设置 Gemini API Key 或 OpenRouter API Key。');
+  }
+
+  const systemPrompt = buildSystemPrompt();
+  const contextBlock = buildChanLunContext({ symbol, klines, strokes, segments, hubs, fractions, currentSetup, recentWindow });
+
+  const contextPrimer: ChatMessage = {
+    role: 'user',
+    content: [
+      `以下是"${symbol}"的结构化缠论上下文 (system-managed, 请勿要求重新提供):`,
+      '',
+      '--- CONTEXT START ---',
+      contextBlock,
+      '--- CONTEXT END ---',
+      '',
+      '请记住这些数据, 后续我将基于此上下文进行提问。请用中文 Markdown 简洁回答。',
+    ].join('\n'),
+  };
+
+  const conversation = messages
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({ role: m.role, content: m.content.trim() }))
+    .filter((m) => m.content.length > 0);
+
+  const finalMessages: ChatMessage[] = [
+    { role: 'system', content: systemPrompt },
+    contextPrimer,
+    ...conversation,
+  ];
+
+  if (OPENROUTER_API_KEY) {
+    const selectedModel = model && model.trim().length > 0 ? model : 'google/gemini-2.0-flash-exp:free';
+    return callOpenRouterChatStream(OPENROUTER_API_KEY, selectedModel, finalMessages, onToken, temperature);
+  }
+
+  return callGeminiChatStream(GEMINI_API_KEY, finalMessages, onToken, temperature);
+}
+
+/**
  * Backwards-compatible wrapper used by older callers. It still works but
  * delegates to the new unified pipeline with the legacy truncated context.
  */
@@ -654,8 +887,8 @@ export async function fetchStockBasicInfo(symbol: string): Promise<StockBasicInf
     const isSS = /^(60|68|90|11|13|51|58|60)/.test(clean);
     tencentSymbol = `${isSS ? 'sh' : 'sz'}${clean}`;
     pureCode = clean;
-  } else if (clean.endsWith('.SH')) {
-    pureCode = clean.replace('.SH', '');
+  } else if (clean.endsWith('.SH') || clean.endsWith('.SS')) {
+    pureCode = clean.replace(/\.(SH|SS)$/, '');
     tencentSymbol = `sh${pureCode}`;
   } else if (clean.endsWith('.SZ')) {
     pureCode = clean.replace('.SZ', '');

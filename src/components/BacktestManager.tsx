@@ -84,7 +84,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
   };
 
   return (
-    <div className="bg-zinc-900 rounded-2xl border border-zinc-800 p-6 shadow-sm text-zinc-100">
+    <div className="mobile-flat bg-zinc-900 md:rounded-2xl md:border md:border-zinc-800 md:p-6 md:shadow-sm text-zinc-100 px-2 md:px-0 py-3 md:py-0">
       
       {/* Sub Tabs */}
       <div className="flex border-b border-zinc-800 mb-6 gap-6">
@@ -119,7 +119,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
         <div className="space-y-6">
           
           {/* Settings Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 bg-zinc-950 p-5 rounded-2xl border border-zinc-800/80">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-6 bg-zinc-950 md:p-5 md:rounded-2xl md:border md:border-zinc-800/80 p-2">
             <div>
               <label className="block text-xs font-semibold text-zinc-400 mb-2 font-sans">初始资金</label>
               <div className="relative">
@@ -160,7 +160,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
           </div>
 
           {/* Strategy Details Explanation */}
-          <div className="flex gap-3 p-3.5 bg-zinc-950/40 border border-zinc-855 rounded-xl">
+          <div className="flex gap-3 p-2 md:p-3.5 bg-zinc-950/40 md:border md:border-zinc-855 md:rounded-xl">
             <ShieldAlert className="h-4.5 w-4.5 text-blue-400 shrink-0 mt-0.5" />
             <p className="text-[11px] text-zinc-400 leading-relaxed font-sans">
               <strong>缠论交易规则设置:</strong> 在一类或二类买入信号(一买/二买)触发时建立100%多头仓位。在一类或二类卖出信号(一卖/二卖)或跟踪止损触发时完全平仓。使用日线收盘历史价格。
@@ -172,25 +172,25 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
             <div className="space-y-6 transition-all animate-fade-in text-zinc-100">
               <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400 border-b border-zinc-800 pb-2">模拟器报告概览</h4>
               
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="p-4 bg-zinc-950 border border-zinc-850 rounded-xl">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
+                <div className="p-2 md:p-4 bg-zinc-950 md:border md:border-zinc-850 md:rounded-xl">
                   <span className="text-[10px] text-zinc-500 font-mono uppercase">起始资金</span>
                   <p className="text-sm font-extrabold font-mono text-zinc-200 mt-1">${backtest.initialBalance}</p>
                 </div>
 
-                <div className="p-4 bg-zinc-950 border border-zinc-850 rounded-xl">
+                <div className="p-2 md:p-4 bg-zinc-950 md:border md:border-zinc-850 md:rounded-xl">
                   <span className="text-[10px] text-zinc-500 font-mono uppercase">结束余额</span>
                   <p className="text-sm font-extrabold font-mono text-zinc-200 mt-1">${backtest.finalBalance}</p>
                 </div>
 
-                <div className="p-4 bg-zinc-950 border border-zinc-850 rounded-xl">
+                <div className="p-2 md:p-4 bg-zinc-950 md:border md:border-zinc-850 md:rounded-xl">
                   <span className="text-[10px] text-zinc-500 font-mono uppercase">净总收益</span>
                   <p className={`text-sm font-extrabold font-mono mt-1 ${backtest.totalReturnPercent >= 0 ? 'text-blue-400' : 'text-red-400'}`}>
                     {backtest.totalReturnPercent >= 0 ? '+' : ''}{backtest.totalReturnPercent}%
                   </p>
                 </div>
 
-                <div className="p-4 bg-zinc-950 border border-zinc-850 rounded-xl">
+                <div className="p-2 md:p-4 bg-zinc-950 md:border md:border-zinc-850 md:rounded-xl">
                   <span className="text-[10px] text-zinc-500 font-mono uppercase">胜率(交易)</span>
                   <p className="text-sm font-extrabold font-mono mt-1 text-zinc-200">
                     {backtest.winRate}% <span className="text-[10px] font-normal text-zinc-500 font-sans">({backtest.winningTrades}/{backtest.totalTrades})</span>
@@ -199,7 +199,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
               </div>
 
               {/* Action Save Results options */}
-              <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl bg-zinc-950 border border-zinc-850 text-zinc-100">
+              <div className="flex flex-wrap items-center justify-between gap-4 p-2 md:p-4 md:rounded-xl bg-zinc-950 md:border md:border-zinc-850 text-zinc-100">
                 <div className="flex gap-2 items-center">
                   <Database className="h-4.5 w-4.5 text-blue-400" />
                   <span className="text-xs font-semibold">保存此回测配置</span>
@@ -228,7 +228,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
               {/* Trades Ledger Table */}
               <div>
                 <h5 className="text-xs font-bold text-zinc-400 mb-3 uppercase tracking-wider">交易账本</h5>
-                <div className="overflow-x-auto rounded-xl border border-zinc-850 bg-zinc-950">
+                <div className="overflow-x-auto md:rounded-xl md:border md:border-zinc-850 bg-zinc-950">
                   <table className="w-full text-left text-xs text-zinc-300">
                     <thead className="bg-zinc-900 border-b border-zinc-850 text-zinc-500 font-mono font-semibold">
                       <tr>
@@ -279,13 +279,13 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
       ) : (
         <div className="space-y-6">
           {!currentUser ? (
-            <div className="p-8 border border-zinc-800 rounded-xl text-center bg-zinc-950/40">
+            <div className="p-4 md:p-8 md:border md:border-zinc-800 md:rounded-xl text-center md:bg-zinc-950/40">
               <Database className="h-8 w-8 text-zinc-700 mx-auto mb-2" />
               <p className="text-sm font-semibold text-zinc-300 font-sans">请登录查看记录</p>
               <p className="text-xs text-zinc-500 mt-1 font-sans">请在右上角完成注册或登录以检索Supabase中同步的历史回测记录。</p>
             </div>
           ) : records.length === 0 ? (
-            <div className="p-8 border border-zinc-805 rounded-xl text-center bg-zinc-955 border-zinc-800">
+            <div className="p-4 md:p-8 md:border md:border-zinc-800 md:rounded-xl text-center md:bg-zinc-950">
               <Calendar className="h-8 w-8 text-zinc-700 mx-auto mb-2" />
               <p className="text-sm font-semibold text-zinc-300 font-sans font-medium">未找到记录</p>
               <p className="text-xs text-zinc-500 mt-1 font-sans">您之前的回测模拟将在此处保存到数据库时保留。</p>

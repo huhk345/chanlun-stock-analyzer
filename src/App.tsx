@@ -145,7 +145,7 @@ export default function App() {
 
       // Update URL with stock code for bookmark/refresh support
       const url = new URL(window.location.href);
-      url.searchParams.set('code', pureCode);
+      url.searchParams.set('code', querySymbol);
       window.history.replaceState({}, '', url.toString());
 
     } catch (err: any) {
@@ -208,20 +208,6 @@ export default function App() {
 
   const railOffset = isChatVisible && !isMobile ? chatWidth : 0;
 
-  const renderAdvisor = (extraWrapperClassName = '') => (
-    <div className={extraWrapperClassName}>
-      <GeminiAdvisor
-        symbol={symbol}
-        klines={klines}
-        strokes={strokes}
-        segments={segments}
-        hubs={hubs}
-        fractions={fractions}
-        onClose={isMobile ? () => setIsChatVisible(false) : undefined}
-      />
-    </div>
-  );
-
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans">
       
@@ -250,13 +236,13 @@ export default function App() {
 
       {/* Main Container - Chart + Backtest scroll under the fixed right rail */}
       <main
-        className="flex-1 w-full px-4 md:px-6 lg:px-8 py-6 transition-[padding] duration-200"
-        style={{ paddingRight: `calc(${railOffset}px + 1rem)` }}
+        className="flex-1 w-full px-[10px] py-[10px] md:px-6 md:py-6 lg:px-8 transition-[padding] duration-200"
+        style={{ paddingRight: isMobile ? `10px` : `calc(${railOffset}px + 1rem)` }}
       >
 
         {/* Global Loading / Error messages block */}
         {isLoading && (
-          <div className="p-12 text-center bg-zinc-900/50 backdrop-blur-sm border border-zinc-800/50 rounded-2xl shadow-lg flex flex-col items-center justify-center">
+          <div className="p-6 md:p-12 text-center flex flex-col items-center justify-center">
             <div className="h-8 w-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin mb-4" />
             <h4 className="text-sm font-semibold text-zinc-200">编译技术市场画布</h4>
             <p className="text-xs text-zinc-400 mt-1">合并K线包含关系并定位分型极值...</p>
@@ -264,7 +250,7 @@ export default function App() {
         )}
 
         {errorText && (
-          <div className="p-5 bg-red-950/20 backdrop-blur-sm border border-red-900/30 text-red-400 rounded-2xl flex gap-3 text-xs">
+          <div className="px-3 py-3 md:p-5 md:bg-red-950/20 md:backdrop-blur-sm md:border md:border-red-900/30 text-red-400 md:rounded-2xl flex gap-3 text-xs">
             <Activity className="h-5 w-5 text-red-500 mt-0.5 shrink-0" />
             <div>
               <p className="font-bold">市场查询失败</p>
@@ -275,7 +261,7 @@ export default function App() {
 
         {/* Content Panels - Stacked, full width under the rail */}
         {!isLoading && klines.length > 0 && (
-          <div className="flex flex-col gap-6 h-full min-w-0">
+          <div className="flex flex-col gap-0 md:gap-6 h-full min-w-0">
 
             {/* Main Chart */}
             <div className="flex-1 min-h-0 min-w-0">
@@ -294,7 +280,19 @@ export default function App() {
             </div>
 
             {/* AI Advisor - flows inline below the chart on mobile */}
-            {isChatVisible && isMobile && renderAdvisor()}
+            {isChatVisible && isMobile && (
+              <div className="border-t border-zinc-800/60">
+                <GeminiAdvisor
+                  symbol={symbol}
+                  klines={klines}
+                  strokes={strokes}
+                  segments={segments}
+                  hubs={hubs}
+                  fractions={fractions}
+                  onClose={() => setIsChatVisible(false)}
+                />
+              </div>
+            )}
 
             <StockInfoPanel stockData={stockMeta} />
 
@@ -365,10 +363,22 @@ export default function App() {
         </button>
       )}
 
+      {/* Mobile floating AI toggle */}
+      {!isChatVisible && isMobile && (
+        <button
+          type="button"
+          onClick={() => setIsChatVisible(true)}
+          className="fixed right-3 bottom-3 z-40 flex items-center justify-center w-12 h-12 bg-blue-500 hover:bg-blue-400 active:bg-blue-600 rounded-full text-white shadow-lg shadow-blue-500/30 transition-all cursor-pointer"
+          title="显示 AI 对话"
+        >
+          <BrainCircuit className="h-5 w-5" />
+        </button>
+      )}
+
       {/* Humble Footer */}
       <footer
-        className="border-t border-zinc-850 py-6 mt-12 text-center text-[10px] font-mono text-zinc-500 transition-[padding] duration-200"
-        style={{ paddingRight: `${railOffset}px` }}
+        className="border-t border-zinc-850 py-3 md:py-6 mt-0 md:mt-12 text-center text-[10px] font-mono text-zinc-500 transition-[padding] duration-200 px-3"
+        style={{ paddingRight: isMobile ? 0 : `${railOffset}px` }}
       >
         <p>© 2026 缠论量化工作台。由 Google AI Studio 构建。</p>
       </footer>

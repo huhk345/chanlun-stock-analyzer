@@ -26,16 +26,16 @@ export default function StockInfoPanel({ stockData }: StockInfoPanelProps) {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="bg-orange-950/10 border border-orange-900/30 rounded-xl overflow-hidden backdrop-blur-sm">
-        <div className="px-5 py-3 border-b border-orange-900/20 bg-gradient-to-r from-orange-950/20 to-orange-950/10">
+    <div className="space-y-0 md:space-y-4">
+      <div className="mobile-flat bg-orange-950/10 md:border md:border-orange-900/30 md:rounded-xl overflow-hidden md:backdrop-blur-sm">
+        <div className="px-3 py-2 md:px-5 md:py-3 border-b border-orange-900/20 bg-gradient-to-r from-orange-950/20 to-orange-950/10">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <TrendingDown className="h-4 w-4 text-orange-400" />
-              <h4 className="text-xs font-bold text-orange-300">减持计划</h4>
+              <TrendingDown className="h-3.5 w-3.5 md:h-4 md:w-4 text-orange-400" />
+              <h4 className="text-[11px] md:text-xs font-bold text-orange-300">减持计划</h4>
             </div>
             <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-orange-500/10 border border-orange-500/20">
-              <span className="text-[10px] font-semibold text-orange-400">
+              <span className="text-[9px] md:text-[10px] font-semibold text-orange-400">
                 {stockData.reduction_plans.length} 条公告
               </span>
             </div>
@@ -46,7 +46,7 @@ export default function StockInfoPanel({ stockData }: StockInfoPanelProps) {
           {stockData.reduction_plans.map((plan, index) => (
             <div
               key={index}
-              className="px-5 py-3 hover:bg-orange-950/20 transition-colors group"
+              className="px-3 py-2 md:px-5 md:py-3 hover:bg-orange-950/20 transition-colors group"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
