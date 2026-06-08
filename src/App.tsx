@@ -380,7 +380,8 @@ export default function App() {
         className="border-t border-zinc-850 py-3 md:py-6 mt-0 md:mt-12 text-center text-[10px] font-mono text-zinc-500 transition-[padding] duration-200 px-3"
         style={{ paddingRight: isMobile ? 0 : `${railOffset}px` }}
       >
-        <p>© 2026 缠论量化工作台。由 Google AI Studio 构建。</p>
+        <p>© 2026 缠论量化工作台。由 Google AI Studio 构建。<a href="https://github.com/huhk345/chanlun-stock-analyzer" target="_blank" rel="noopener noreferrer" className="underline hover:text-zinc-300 transition-colors">源代码</a></p>
+        <p className="mt-1">本工具仅供学习研究使用, 不构成任何投资建议, 投资有风险, 入市需谨慎。</p>
       </footer>
 
     </div>

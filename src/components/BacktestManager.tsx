@@ -84,7 +84,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
   };
 
   return (
-    <div className="mobile-flat bg-zinc-900 md:rounded-2xl md:border md:border-zinc-800 md:p-6 md:shadow-sm text-zinc-100 px-2 md:px-0 py-3 md:py-0">
+    <div className="mobile-flat bg-zinc-900 md:rounded-2xl md:border md:border-zinc-800 md:p-3 md:shadow-sm text-zinc-100">
       
       {/* Sub Tabs */}
       <div className="flex border-b border-zinc-800 mb-6 gap-6">
@@ -159,13 +159,6 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
             </div>
           </div>
 
-          {/* Strategy Details Explanation */}
-          <div className="flex gap-3 p-2 md:p-3.5 bg-zinc-950/40 md:border md:border-zinc-855 md:rounded-xl">
-            <ShieldAlert className="h-4.5 w-4.5 text-blue-400 shrink-0 mt-0.5" />
-            <p className="text-[11px] text-zinc-400 leading-relaxed font-sans">
-              <strong>缠论交易规则设置:</strong> 在一类或二类买入信号(一买/二买)触发时建立100%多头仓位。在一类或二类卖出信号(一卖/二卖)或跟踪止损触发时完全平仓。使用日线收盘历史价格。
-            </p>
-          </div>
 
           {/* Simulation Output Overview */}
           {backtest && (

@@ -644,7 +644,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
   }
 
   return (
-    <div className="mobile-flat bg-zinc-900 md:rounded-2xl md:border md:border-zinc-800 md:p-6 md:shadow-xl text-zinc-100 flex flex-col gap-2 md:gap-4">
+    <div className="mobile-flat bg-zinc-900 md:rounded-2xl md:border md:border-zinc-800 md:p-3 md:shadow-xl text-zinc-100 flex flex-col gap-2 md:gap-4">
 
       {/* Stock Basic Info Header */}
       {stockBasicInfo && (
