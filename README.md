@@ -14,21 +14,11 @@
 
 ---
 
-## Screenshots
+## Screenshot
 
 <div align="center">
 
-**Main Chart with ChanLun Structures**
-![ChanLun Chart](docs/screenshots/chart-main.png)
-
-**AI Advisor Panel**
-![AI Advisor](docs/screenshots/ai-advisor.png)
-
-**Stock Info & Reduction Plans**
-![Stock Info](docs/screenshots/stock-info.png)
-
-**Backtest Manager**
-![Backtest](docs/screenshots/backtest.png)
+![ChanLun Stock Analyzer](docs/screenshots/chart-main.png)
 
 </div>
 
