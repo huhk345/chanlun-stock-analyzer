@@ -150,7 +150,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
               <button
                 onClick={handleRunBacktest}
                 disabled={loading || klines.length === 0}
-                className="w-full py-2 bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-zinc-950 font-bold text-xs rounded-xl shadow-lg shadow-blue-500/10 cursor-pointer transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                className="w-full py-2 bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-white font-bold text-xs rounded-xl shadow-lg shadow-blue-500/10 cursor-pointer transition-all disabled:opacity-50 flex items-center justify-center gap-2"
                 id="btn-run-simulation"
               >
                 <Play className="h-4.5 w-4.5 fill-current text-zinc-955" />
@@ -211,7 +211,7 @@ export default function BacktestManager({ klines, symbol, currentUser }: Backtes
                     disabled={saveStatus === 'success'}
                     className={`px-4 py-2 font-semibold text-xs rounded-lg shadow cursor-pointer transition-all ${
                       saveStatus === 'success' 
-                        ? 'bg-blue-500 text-zinc-950 font-bold' 
+                        ? 'bg-blue-500 text-white font-bold' 
                         : 'bg-zinc-800 text-zinc-100 hover:bg-zinc-700 border border-zinc-705'
                     }`}
                     id="btn-save-report"

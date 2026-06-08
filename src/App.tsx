@@ -76,7 +76,8 @@ export default function App() {
   }, []);
 
   // Stock queries parameters
-  const [symbol, setSymbol] = useState('600000');
+  const initialCode = new URLSearchParams(window.location.search).get('code') || '000001.ss';
+  const [symbol, setSymbol] = useState(initialCode);
   const [isLoading, setIsLoading] = useState(false);
   const [errorText, setErrorText] = useState('');
 
@@ -142,6 +143,11 @@ export default function App() {
       setDataSource(data.source || 'TickFlow API');
       setStockBasicInfo(basicInfo);
 
+      // Update URL with stock code for bookmark/refresh support
+      const url = new URL(window.location.href);
+      url.searchParams.set('code', pureCode);
+      window.history.replaceState({}, '', url.toString());
+
     } catch (err: any) {
       console.error(err);
       setErrorText(err.message || 'Failed to query and process mechanical stock charts. Please check parameters.');
@@ -154,7 +160,8 @@ export default function App() {
   useEffect(() => {
     if (hasInitialized.current) return;
     hasInitialized.current = true;
-    fetchAndProcessStock('600000');
+    const urlCode = new URLSearchParams(window.location.search).get('code') || '000001.ss';
+    fetchAndProcessStock(urlCode);
   }, []);
 
   // Persist rail width whenever it settles.

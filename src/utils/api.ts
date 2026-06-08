@@ -69,7 +69,7 @@ export async function fetchStockData(symbol: string): Promise<{
 
   if (!isChinaStock) {
     throw new Error(
-      'This application only supports Chinese A-share stocks. Please use a 6-digit stock code (e.g., 600000, 000001) or a symbol with .SS/.SZ suffix.'
+      'This application only supports Chinese A-share stocks. Please use a 6-digit stock code (e.g., 000001.ss, 600000) or a symbol with .SS/.SZ suffix.'
     );
   }
 
@@ -127,6 +127,7 @@ export async function fetchStockData(symbol: string): Promise<{
     const low = data.low[i];
     const close = data.close[i];
     const volume = data.volume[i] || 0;
+    const amount = data.amount[i] || 0;
 
     // Convert timestamp to date string (YYYY-MM-DD)
     const date = new Date(timestamp);
@@ -138,7 +139,8 @@ export async function fetchStockData(symbol: string): Promise<{
       high: parseFloat(high.toFixed(2)),
       low: parseFloat(low.toFixed(2)),
       close: parseFloat(close.toFixed(2)),
-      volume: volume
+      volume: volume,
+      amount: amount,
     });
   }
 
@@ -194,13 +196,14 @@ function pct(value: number): string {
 
 function summarizeKlines(klines: Kline[]) {
   if (klines.length === 0) {
-    return { count: 0, first: null, last: null, highest: 0, lowest: 0, avgVolume: 0, range: 0, totalReturn: 0, maxDrawdown: 0 };
+    return { count: 0, first: null, last: null, highest: 0, lowest: 0, avgVolume: 0, avgAmount: 0, range: 0, totalReturn: 0, maxDrawdown: 0 };
   }
   const first = klines[0];
   const last = klines[klines.length - 1];
   const highest = Math.max(...klines.map((k) => k.high));
   const lowest = Math.min(...klines.map((k) => k.low));
   const avgVolume = klines.reduce((acc, k) => acc + k.volume, 0) / klines.length;
+  const avgAmount = klines.reduce((acc, k) => acc + k.amount, 0) / klines.length;
   const totalReturn = first.close === 0 ? 0 : (last.close - first.close) / first.close;
 
   // Crude max drawdown based on running close-to-close highs.
@@ -221,6 +224,7 @@ function summarizeKlines(klines: Kline[]) {
     highest,
     lowest,
     avgVolume,
+    avgAmount,
     range: highest - lowest,
     totalReturn,
     maxDrawdown: maxDD,
@@ -232,7 +236,7 @@ function formatKlineRows(klines: Kline[]): string {
   return klines
     .map(
       (k) =>
-        `${k.date} | O:${k.open.toFixed(2)} H:${k.high.toFixed(2)} L:${k.low.toFixed(2)} C:${k.close.toFixed(2)} V:${Math.round(k.volume)}`,
+        `${k.date} | O:${k.open.toFixed(2)} H:${k.high.toFixed(2)} L:${k.low.toFixed(2)} C:${k.close.toFixed(2)} V:${Math.round(k.volume)} A:${Math.round(k.amount)}`,
     )
     .join('\n');
 }
@@ -298,15 +302,15 @@ export function buildChanLunContext(ctx: ChanLunContext): string {
     `- 数据起点: ${summary.first ? `${summary.first.date} 收 ${summary.first.close.toFixed(2)}` : 'N/A'}`,
     `- 数据终点: ${summary.last ? `${summary.last.date} 收 ${summary.last.close.toFixed(2)}` : 'N/A'}`,
     `- 区间最高: ${summary.highest.toFixed(2)} | 区间最低: ${summary.lowest.toFixed(2)} | 区间振幅: ${summary.range.toFixed(2)}`,
-    `- 累计收益率: ${pct(summary.totalReturn)} | 最大回撤: ${pct(summary.maxDrawdown)} | 均成交量: ${Math.round(summary.avgVolume)}`,
+    `- 累计收益率: ${pct(summary.totalReturn)} | 最大回撤: ${pct(summary.maxDrawdown)} | 均成交量: ${Math.round(summary.avgVolume)} | 均成交额: ${Math.round(summary.avgAmount)}`,
     '',
     `## 2. 最近 ${recent.length} 根日 K 线 (近 ${recentWindow} 个交易日) 累计涨跌 ${pct(recentReturn)}`,
-    '| 日期 | 开 | 高 | 低 | 收 | 量 |',
-    '|---|---|---|---|---|---|',
+    '| 日期 | 开 | 高 | 低 | 收 | 量 | 额 |',
+    '|---|---|---|---|---|---|---|',
     recent
       .map(
         (k) =>
-          `| ${k.date} | ${k.open.toFixed(2)} | ${k.high.toFixed(2)} | ${k.low.toFixed(2)} | ${k.close.toFixed(2)} | ${Math.round(k.volume)} |`,
+          `| ${k.date} | ${k.open.toFixed(2)} | ${k.high.toFixed(2)} | ${k.low.toFixed(2)} | ${k.close.toFixed(2)} | ${Math.round(k.volume)} | ${Math.round(k.amount)} |`,
       )
       .join('\n'),
     '',
@@ -687,26 +691,23 @@ export async function fetchStockBasicInfo(symbol: string): Promise<StockBasicInf
       throw new Error('Insufficient data fields');
     }
 
-    // Tencent data fields:
-    // 0: unknown, 1: name, 2: code, 3: current price, 4: prev close
-    // 5: unknown, 6: unknown, 7: volume (手), 8: amount (万)
-    // 9: unknown, 10: unknown, 11: unknown, 12: unknown
-    // 13: unknown, 14: unknown, 15: unknown, 16: unknown
-    // 17: unknown, 18: unknown, 19: unknown, 20: unknown
-    // 21: unknown, 22: unknown, 23: unknown, 24: unknown
-    // 25: unknown, 26: unknown, 27: unknown, 28: unknown
-    // 29: unknown, 30: open, 31: unknown, 32: high
-    // 33: low, 34-43: unknown, 44: total market value (亿)
+    // Tencent data fields (Common indices):
+    // 1: name, 2: code, 3: current price, 4: prev close
+    // 5: open, 6: volume (手), 7: amount (万), 32: high, 33: low
+    // 38: turnover rate, 39: PE ratio, 44: total market value (亿), 45: circulating market value (亿)
 
     const name = data[1];
     const price = parseFloat(data[3]);
     const prevClose = parseFloat(data[4]);
-    const volume = parseFloat(data[7]); // 单位：手
-    const amount = parseFloat(data[8]) * 10000; // 单位：元（API返回万）
-    const open = parseFloat(data[30]);
-    const high = parseFloat(data[32]);
-    const low = parseFloat(data[33]);
+    const volume = parseFloat(data[6]); // 单位：手
+    const amount = parseFloat(data[37]) * 10000; // 单位：元 (data[37] is more reliable for amount)
+    const open = parseFloat(data[5]);
+    const high = parseFloat(data[33]);
+    const low = parseFloat(data[34]);
+    const peRatio = parseFloat(data[39]);
+    const turnoverRate = parseFloat(data[38]);
     const totalMarketValue = parseFloat(data[44]) * 100000000; // 单位：元（API返回亿）
+    const circulatingMarketValue = parseFloat(data[45]) * 100000000; // 单位：元（API返回亿）
 
     const change = price - prevClose;
     const changePercent = (change / prevClose) * 100;
@@ -722,7 +723,10 @@ export async function fetchStockBasicInfo(symbol: string): Promise<StockBasicInf
       low: low,
       volume: volume * 100, // 转换为股
       amount: amount,
-      totalMarketValue: totalMarketValue
+      peRatio: peRatio,
+      turnoverRate: turnoverRate,
+      totalMarketValue: totalMarketValue,
+      circulatingMarketValue: circulatingMarketValue
     };
 
     console.log(`[Tencent] Successfully fetched info for ${name} (${pureCode})`);

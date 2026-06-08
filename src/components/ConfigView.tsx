@@ -233,7 +233,7 @@ export default function ConfigView({ isOpen, onClose }: ConfigViewProps) {
           </button>
           <button
             onClick={handleSave}
-            className="px-6 py-2.5 bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-zinc-950 font-bold text-sm rounded-xl shadow-lg shadow-blue-500/10 cursor-pointer transition-all"
+            className="px-6 py-2.5 bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-white font-bold text-sm rounded-xl shadow-lg shadow-blue-500/10 cursor-pointer transition-all"
           >
             保存配置
           </button>

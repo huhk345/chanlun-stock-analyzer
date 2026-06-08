@@ -38,7 +38,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
-  const [ticker, setTicker] = useState(activeSymbol || '600000');
+  const [ticker, setTicker] = useState(activeSymbol || '000001.ss');
   const [showSearch, setShowSearch] = useState(false);
   const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
   const [showHistory, setShowHistory] = useState(false);
@@ -279,7 +279,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className="p-1.5 rounded bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-zinc-950 transition-all disabled:opacity-50 cursor-pointer shadow-sm shadow-blue-500/20"
+                  className="p-1.5 rounded bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-white transition-all disabled:opacity-50 cursor-pointer shadow-sm shadow-blue-500/20"
                 >
                   <Search className="h-3 w-3" strokeWidth={2.5} />
                 </button>
@@ -622,7 +622,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full py-2.5 mt-2 rounded-xl bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-zinc-950 font-bold text-sm transition-all cursor-pointer flex items-center justify-center shadow-lg shadow-blue-500/10"
+                className="w-full py-2.5 mt-2 rounded-xl bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-white font-bold text-sm transition-all cursor-pointer flex items-center justify-center shadow-lg shadow-blue-500/10"
               >
                 {loading ? '处理工作空间...' : isSignUp ? '注册新账户' : '验证身份'}
               </button>

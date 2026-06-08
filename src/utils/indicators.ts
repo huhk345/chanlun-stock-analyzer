@@ -120,3 +120,39 @@ export function calculateMACD(
 
   return { dif, dea, histogram };
 }
+
+export function calculateRSI(klines: Kline[], period: number = 14): (number | null)[] {
+  const rsis: (number | null)[] = [];
+  if (klines.length < period + 1) {
+    return klines.map(() => null);
+  }
+
+  const gains: number[] = [];
+  const losses: number[] = [];
+  for (let i = 1; i < klines.length; i++) {
+    const diff = klines[i].close - klines[i - 1].close;
+    gains.push(diff > 0 ? diff : 0);
+    losses.push(diff < 0 ? -diff : 0);
+  }
+
+  let avgGain = gains.slice(0, period).reduce((s, v) => s + v, 0) / period;
+  let avgLoss = losses.slice(0, period).reduce((s, v) => s + v, 0) / period;
+
+  for (let i = 0; i < klines.length; i++) {
+    if (i < period) {
+      rsis.push(null);
+    } else if (i === period) {
+      const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+      rsis.push(parseFloat((100 - 100 / (1 + rs)).toFixed(2)));
+    } else {
+      const gain = gains[i - 1];
+      const loss = losses[i - 1];
+      avgGain = (avgGain * (period - 1) + gain) / period;
+      avgLoss = (avgLoss * (period - 1) + loss) / period;
+      const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+      rsis.push(parseFloat((100 - 100 / (1 + rs)).toFixed(2)));
+    }
+  }
+
+  return rsis;
+}

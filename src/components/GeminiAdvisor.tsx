@@ -15,6 +15,7 @@ import {
   Wand2,
   CornerDownLeft,
   X,
+  Settings,
 } from 'lucide-react';
 import { Kline, Stroke, Segment, Hub, Fraction } from '../types/stock';
 import { chatWithAI, ChatMessage } from '../utils/api';
@@ -70,6 +71,10 @@ function getOpenRouterApiKey(): string {
   return getApiKey('openrouter') || import.meta.env.VITE_OPENROUTER_API_KEY || '';
 }
 
+function getGeminiApiKey(): string {
+  return getApiKey('gemini') || import.meta.env.VITE_GEMINI_API_KEY || '';
+}
+
 export default function GeminiAdvisor({
   symbol,
   klines,
@@ -99,7 +104,7 @@ export default function GeminiAdvisor({
 
   const modelDropdownRef = useRef<HTMLDivElement | null>(null);
 
-  const hasOpenRouterKey = useMemo(() => Boolean(getOpenRouterApiKey()), []);
+  const hasApiKey = useMemo(() => Boolean(getOpenRouterApiKey()) || Boolean(getGeminiApiKey()), []);
 
   // Fetch free OpenRouter models on mount (or whenever the key changes).
   useEffect(() => {
@@ -127,7 +132,7 @@ export default function GeminiAdvisor({
     return () => {
       cancelled = true;
     };
-  }, [hasOpenRouterKey]);
+  }, [hasApiKey]);
 
   // Close dropdown on outside click.
   useEffect(() => {
@@ -526,6 +531,13 @@ export default function GeminiAdvisor({
         </div>
       </div>
 
+      {!hasApiKey && !chatError && (
+        <div className="flex-shrink-0 px-4 py-2 bg-amber-950/20 border-b border-amber-900/30 text-amber-400 text-[10px] flex gap-2 items-center">
+          <Settings className="h-3.5 w-3.5 shrink-0" />
+          <span>请先在设置中配置 Gemini API Key 或 OpenRouter API Key 才能使用 AI 问答</span>
+        </div>
+      )}
+
       {chatError && (
         <div className="flex-shrink-0 px-4 py-2 bg-red-950/20 border-b border-red-900/30 text-red-400 text-[10px] flex gap-2 items-center">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
@@ -646,8 +658,8 @@ export default function GeminiAdvisor({
           <button
             type="button"
             onClick={handleSendChat}
-            disabled={chatLoading || chatInput.trim().length === 0 || klines.length === 0}
-            className="shrink-0 flex items-center justify-center w-10 h-10 bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-zinc-950 rounded-xl shadow-lg shadow-blue-500/20 cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            disabled={chatLoading || chatInput.trim().length === 0 || klines.length === 0 || !hasApiKey}
+            className="shrink-0 flex items-center justify-center w-10 h-10 bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-white rounded-xl shadow-lg shadow-blue-500/20 cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             title="发送 (Enter)"
           >
             <Send className="h-4 w-4" />

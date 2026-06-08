@@ -5,6 +5,7 @@ export interface Kline {
   low: number;
   close: number;
   volume: number;
+  amount: number;
 }
 
 export interface MergedKline {
