@@ -297,7 +297,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
     const resizeObserver = new ResizeObserver(entries => {
       if (!entries || entries.length === 0) return;
       const { width, height } = entries[0].contentRect;
-      chart.applyOptions({ width: Math.max(width, 320), height: Math.max(height, 420) });
+      chart.applyOptions({ width: Math.max(width, 320), height: Math.max(height, 200) });
     });
     resizeObserver.observe(chartContainerRef.current);
 
