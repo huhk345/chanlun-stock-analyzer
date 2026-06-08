@@ -129,9 +129,13 @@ export async function fetchStockData(symbol: string): Promise<{
     const volume = data.volume[i] || 0;
     const amount = data.amount[i] || 0;
 
-    // Convert timestamp to date string (YYYY-MM-DD)
-    const date = new Date(timestamp);
-    const dateStr = date.toISOString().split('T')[0];
+    // Convert timestamp to date string (YYYY-MM-DD) in China timezone (UTC+8)
+    const CHINA_OFFSET = 8 * 60 * 60 * 1000;
+    const date = new Date(timestamp + CHINA_OFFSET);
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    const dateStr = `${year}-${month}-${day}`;
 
     klines.push({
       date: dateStr,

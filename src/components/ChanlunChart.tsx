@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { createChart, createSeriesMarkers, CandlestickSeries, LineSeries, HistogramSeries, IChartApi, ISeriesApi, ISeriesMarkersPluginApi, CandlestickData, LineData, HistogramData, Time, ColorType, CrosshairMode } from 'lightweight-charts';
 import { AlertCircle, TrendingUp, TrendingDown, Activity, DollarSign, Briefcase, Users, User, ChevronRight, AlertTriangle, ExternalLink, Calendar, FileText } from 'lucide-react';
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo } from '../types/stock';
-import { calculateSMA, calculateBollingerBands, calculateMACD, calculateRSI } from '../utils/indicators';
+import { calculateSMA, calculateBollingerBands, calculateMACD } from '../utils/indicators';
 
 interface ReductionPlan {
   title: string;
@@ -43,8 +43,6 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
   const macdHistRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const macdDifRef = useRef<ISeriesApi<'Line'> | null>(null);
   const macdDeaRef = useRef<ISeriesApi<'Line'> | null>(null);
-  const ma100SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
-  const rsiSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const strokeSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const segmentSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
@@ -61,15 +59,12 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
   const [showMA20, setShowMA20] = useState(false);
   const [showBOLL, setShowBOLL] = useState(false);
   const [showMACD, setShowMACD] = useState(false);
-  const [showMA100, setShowMA100] = useState(false);
-  const [showRSI, setShowRSI] = useState(false);
 
   // Hover state
   const [hoveredData, setHoveredData] = useState<{
     date: string; open: number; high: number; low: number; close: number; volume: number; amount: number;
     ma5?: number; ma20?: number; bollUpper?: number; bollMiddle?: number; bollLower?: number;
     macdDif?: number; macdDea?: number; macdHist?: number;
-    ma100?: number; rsi?: number;
   } | null>(null);
 
   // Compute indicators
@@ -77,8 +72,6 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
   const ma20Values = useMemo(() => calculateSMA(klines, 20), [klines]);
   const bollValues = useMemo(() => calculateBollingerBands(klines, 20, 2), [klines]);
   const macdValues = useMemo(() => calculateMACD(klines, 12, 26, 9), [klines]);
-  const ma100Values = useMemo(() => calculateSMA(klines, 100), [klines]);
-  const rsiValues = useMemo(() => calculateRSI(klines, 14), [klines]);
 
   // Prepare candle data for lightweight-charts
   const candleData = useMemo<CandlestickData<Time>[]>(() => {
@@ -239,30 +232,6 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
     });
     macdDeaRef.current = macdDea;
 
-    // MA100 line
-    const ma100Series = chart.addSeries(LineSeries, {
-      color: '#f97316',
-      lineWidth: 2,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      crosshairMarkerVisible: false,
-    });
-    ma100SeriesRef.current = ma100Series;
-
-    // RSI line
-    const rsiSeries = chart.addSeries(LineSeries, {
-      color: '#8b5cf6',
-      lineWidth: 2,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      crosshairMarkerVisible: false,
-      priceScaleId: 'rsi',
-    });
-    rsiSeries.priceScale().applyOptions({
-      scaleMargins: { top: 0.75, bottom: 0 },
-    });
-    rsiSeriesRef.current = rsiSeries;
-
     // Stroke line series
     const strokeSeries = chart.addSeries(LineSeries, {
       color: '#fbbf24',
@@ -321,8 +290,6 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
         macdDif: idx >= 0 && macdValues.dif[idx] !== null ? macdValues.dif[idx]! : undefined,
         macdDea: idx >= 0 && macdValues.dea[idx] !== null ? macdValues.dea[idx]! : undefined,
         macdHist: idx >= 0 && macdValues.histogram[idx] !== null ? macdValues.histogram[idx]! : undefined,
-        ma100: idx >= 0 && ma100Values[idx] !== null ? ma100Values[idx]! : undefined,
-        rsi: idx >= 0 && rsiValues[idx] !== null ? rsiValues[idx]! : undefined,
       });
     });
 
@@ -409,26 +376,6 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
     macdDeaRef.current?.setData(deaData);
   }, [klines, macdValues]);
 
-  // Update MA100
-  useEffect(() => {
-    if (!ma100SeriesRef.current || klines.length === 0) return;
-    const ma100Data: LineData<Time>[] = [];
-    klines.forEach((k, i) => {
-      if (ma100Values[i] !== null) ma100Data.push({ time: dateToTime(k.date), value: ma100Values[i]! });
-    });
-    ma100SeriesRef.current?.setData(ma100Data);
-  }, [klines, ma100Values]);
-
-  // Update RSI
-  useEffect(() => {
-    if (!rsiSeriesRef.current || klines.length === 0) return;
-    const rsiData: LineData<Time>[] = [];
-    klines.forEach((k, i) => {
-      if (rsiValues[i] !== null) rsiData.push({ time: dateToTime(k.date), value: rsiValues[i]! });
-    });
-    rsiSeriesRef.current?.setData(rsiData);
-  }, [klines, rsiValues]);
-
   // Update strokes - avoid duplicate times (end of one stroke = start of next)
   useEffect(() => {
     if (!strokeSeriesRef.current || klines.length === 0) return;
@@ -514,12 +461,6 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
   }, [showMA20]);
 
   useEffect(() => {
-    if (ma100SeriesRef.current) {
-      ma100SeriesRef.current.applyOptions({ visible: showMA100 });
-    }
-  }, [showMA100]);
-
-  useEffect(() => {
     [bollUpperRef, bollMiddleRef, bollLowerRef].forEach(ref => {
       if (ref.current) ref.current.applyOptions({ visible: showBOLL });
     });
@@ -531,21 +472,10 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
     });
     if (candleSeriesRef.current) {
       candleSeriesRef.current.priceScale().applyOptions({
-        scaleMargins: showMACD || showRSI ? { top: 0.1, bottom: 0.25 } : { top: 0.1, bottom: 0.2 },
+        scaleMargins: showMACD ? { top: 0.1, bottom: 0.25 } : { top: 0.1, bottom: 0.2 },
       });
     }
   }, [showMACD]);
-
-  useEffect(() => {
-    if (rsiSeriesRef.current) {
-      rsiSeriesRef.current.applyOptions({ visible: showRSI });
-    }
-    if (candleSeriesRef.current) {
-      candleSeriesRef.current.priceScale().applyOptions({
-        scaleMargins: showMACD || showRSI ? { top: 0.1, bottom: 0.25 } : { top: 0.1, bottom: 0.2 },
-      });
-    }
-  }, [showRSI]);
 
   // Draw hubs with semi-transparent rectangles using Canvas API
   useEffect(() => {
@@ -701,7 +631,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
       }
       resizeObserver.disconnect();
     };
-  }, [hubs, klines, showHubs, showMACD, showCandles, showFractions, showStrokes, showSegments, showMA5, showMA20, showMA100, showBOLL, showRSI]);
+  }, [hubs, klines, showHubs, showMACD, showCandles, showFractions, showStrokes, showSegments, showMA5, showMA20, showBOLL]);
 
   if (klines.length === 0) {
     return (
@@ -901,17 +831,6 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
                   MA20
                 </button>
                 <button
-                  onClick={() => setShowMA100(!showMA100)}
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
-                    showMA100 ? 'bg-orange-500/90 text-white shadow-sm shadow-orange-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
-                  }`}
-                  title="显示100周期移动平均线"
-                  id="toggle-ma100"
-                >
-                  <span className={`w-1 h-1 rounded-full ${showMA100 ? 'bg-white' : 'bg-orange-400'}`} />
-                  MA100
-                </button>
-                <button
                   onClick={() => setShowBOLL(!showBOLL)}
                   className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
                     showBOLL ? 'bg-purple-500/80 text-white shadow-sm shadow-purple-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
@@ -932,17 +851,6 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
                 >
                   <span className={`w-1 h-1 rounded-full ${showMACD ? 'bg-white' : 'bg-amber-400'}`} />
                   MACD
-                </button>
-                <button
-                  onClick={() => setShowRSI(!showRSI)}
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
-                    showRSI ? 'bg-violet-500/90 text-white shadow-sm shadow-violet-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
-                  }`}
-                  title="显示RSI(14)指标"
-                  id="toggle-rsi"
-                >
-                  <span className={`w-1 h-1 rounded-full ${showRSI ? 'bg-white' : 'bg-violet-400'}`} />
-                  RSI
                 </button>
               </div>
             </div>
@@ -1033,17 +941,6 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
                 MA20
               </button>
               <button
-                onClick={() => setShowMA100(!showMA100)}
-                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
-                  showMA100 ? 'bg-orange-500/90 text-white shadow-sm shadow-orange-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
-                }`}
-                title="显示100周期移动平均线"
-                id="toggle-ma100"
-              >
-                <span className={`w-1 h-1 rounded-full ${showMA100 ? 'bg-white' : 'bg-orange-400'}`} />
-                MA100
-              </button>
-              <button
                 onClick={() => setShowBOLL(!showBOLL)}
                 className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
                   showBOLL ? 'bg-purple-500/80 text-white shadow-sm shadow-purple-500/20 border border-purple-400/30' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
@@ -1064,17 +961,6 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
               >
                 <span className={`w-1 h-1 rounded-full ${showMACD ? 'bg-white' : 'bg-amber-400'}`} />
                 MACD
-              </button>
-              <button
-                onClick={() => setShowRSI(!showRSI)}
-                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
-                  showRSI ? 'bg-violet-500/90 text-white shadow-sm shadow-violet-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
-                }`}
-                title="显示RSI(14)指标"
-                id="toggle-rsi"
-              >
-                <span className={`w-1 h-1 rounded-full ${showRSI ? 'bg-white' : 'bg-violet-400'}`} />
-                RSI
               </button>
             </div>
           </div>
@@ -1171,17 +1057,6 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
                 MA20
               </button>
               <button
-                onClick={() => setShowMA100(!showMA100)}
-                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
-                  showMA100 ? 'bg-orange-500/90 text-white shadow-sm shadow-orange-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
-                }`}
-                title="显示100周期移动平均线"
-                id="toggle-ma100"
-              >
-                <span className={`w-1 h-1 rounded-full ${showMA100 ? 'bg-white' : 'bg-orange-400'}`} />
-                MA100
-              </button>
-              <button
                 onClick={() => setShowBOLL(!showBOLL)}
                 className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
                   showBOLL ? 'bg-purple-500/80 text-white shadow-sm shadow-purple-500/20 border border-purple-400/30' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
@@ -1202,17 +1077,6 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
               >
                 <span className={`w-1 h-1 rounded-full ${showMACD ? 'bg-white' : 'bg-amber-400'}`} />
                 MACD
-              </button>
-              <button
-                onClick={() => setShowRSI(!showRSI)}
-                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
-                  showRSI ? 'bg-violet-500/90 text-white shadow-sm shadow-violet-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
-                }`}
-                title="显示RSI(14)指标"
-                id="toggle-rsi"
-              >
-                <span className={`w-1 h-1 rounded-full ${showRSI ? 'bg-white' : 'bg-violet-400'}`} />
-                RSI
               </button>
             </div>
 
@@ -1353,17 +1217,11 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
           {showMA20 && hoveredData.ma20 !== undefined && (
             <p>MA20: <span className="text-pink-400 font-medium">${hoveredData.ma20.toFixed(2)}</span></p>
           )}
-          {showMA100 && hoveredData.ma100 !== undefined && (
-            <p>MA100: <span className="text-orange-400 font-medium">${hoveredData.ma100.toFixed(2)}</span></p>
-          )}
           {showBOLL && hoveredData.bollUpper !== undefined && (
             <p>BOLL: <span className="text-purple-400 font-medium font-sans">U: {hoveredData.bollUpper.toFixed(1)} / M: {hoveredData.bollMiddle?.toFixed(1)} / L: {hoveredData.bollLower?.toFixed(1)}</span></p>
           )}
           {showMACD && hoveredData.macdDif !== undefined && (
             <p>MACD: <span className="text-amber-400 font-medium">DIF: {hoveredData.macdDif.toFixed(2)} / DEA: {hoveredData.macdDea?.toFixed(2)} / Hist: {hoveredData.macdHist?.toFixed(2)}</span></p>
-          )}
-          {showRSI && hoveredData.rsi !== undefined && (
-            <p>RSI(14): <span className="text-violet-400 font-medium">{hoveredData.rsi.toFixed(2)}</span></p>
           )}
         </div>
       )}
