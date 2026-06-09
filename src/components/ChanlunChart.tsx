@@ -1,8 +1,13 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { createChart, createSeriesMarkers, CandlestickSeries, LineSeries, HistogramSeries, IChartApi, ISeriesApi, ISeriesMarkersPluginApi, CandlestickData, LineData, HistogramData, Time, ColorType, CrosshairMode } from 'lightweight-charts';
-import { AlertCircle, TrendingUp, TrendingDown, Activity, DollarSign, Briefcase, Users, User, ChevronRight, AlertTriangle, ExternalLink, Calendar, FileText } from 'lucide-react';
+import { AlertCircle, TrendingUp, TrendingDown, Briefcase, User, ChevronRight, AlertTriangle, ExternalLink, FileText, Plus } from 'lucide-react';
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo } from '../types/stock';
 import { calculateSMA, calculateBollingerBands, calculateMACD } from '../utils/indicators';
+import { userIndicators } from '../indicators/user';
+import { loadStoredIndicators } from '../utils/indicatorLoader';
+import { calculateUserIndicatorSafely, createIndicatorInput } from '../utils/indicatorAdapter';
+import type { UserIndicatorDefinition, NormalizedUserIndicator } from '../types/indicator';
+import IndicatorDialog from './IndicatorDialog';
 
 interface ReductionPlan {
   title: string;
@@ -47,6 +52,9 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
   const segmentSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
 
+  // User-defined indicator series refs - stores series by indicatorId-seriesId
+  const userIndicatorSeriesRefs = useRef<Record<string, ISeriesApi<'Line'> | ISeriesApi<'Histogram'>>>({});
+
   // Display triggers
   const [showCandles, setShowCandles] = useState(true);
   const [showStrokes, setShowStrokes] = useState(true);
@@ -60,11 +68,31 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
   const [showBOLL, setShowBOLL] = useState(false);
   const [showMACD, setShowMACD] = useState(false);
 
+  // User-defined indicators
+  const [allUserIndicators, setAllUserIndicators] = useState<UserIndicatorDefinition[]>([]);
+  const [userIndicatorVisibility, setUserIndicatorVisibility] = useState<Record<string, boolean>>({});
+  const [showIndicatorDialog, setShowIndicatorDialog] = useState(false);
+
+  // Load user-defined indicators on mount
+  useEffect(() => {
+    const stored = loadStoredIndicators();
+    const all = [...userIndicators, ...stored];
+    setAllUserIndicators(all);
+    
+    // Initialize visibility state with defaults
+    const visibility: Record<string, boolean> = {};
+    for (const indicator of all) {
+      visibility[indicator.id] = indicator.defaultVisible ?? false;
+    }
+    setUserIndicatorVisibility(visibility);
+  }, []);
+
   // Hover state
   const [hoveredData, setHoveredData] = useState<{
     date: string; open: number; high: number; low: number; close: number; volume: number; amount: number;
     ma5?: number; ma20?: number; bollUpper?: number; bollMiddle?: number; bollLower?: number;
     macdDif?: number; macdDea?: number; macdHist?: number;
+    userIndicators?: Record<string, Record<string, number | null>>;
   } | null>(null);
 
   // Compute indicators
@@ -72,6 +100,30 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
   const ma20Values = useMemo(() => calculateSMA(klines, 20), [klines]);
   const bollValues = useMemo(() => calculateBollingerBands(klines, 20, 2), [klines]);
   const macdValues = useMemo(() => calculateMACD(klines, 12, 26, 9), [klines]);
+
+  // Compute user-defined indicators
+  const userIndicatorResults = useMemo(() => {
+    const results: Record<string, NormalizedUserIndicator> = {};
+    
+    for (const indicator of allUserIndicators) {
+      if (!userIndicatorVisibility[indicator.id]) continue;
+      
+      try {
+        const input = createIndicatorInput(klines, symbol, indicator);
+        const result = calculateUserIndicatorSafely(indicator, input);
+        results[indicator.id] = result;
+        
+        // Log errors if any
+        if (result.errors.length > 0) {
+          console.warn(`Indicator "${indicator.id}" errors:`, result.errors);
+        }
+      } catch (error) {
+        console.error(`Failed to calculate indicator "${indicator.id}":`, error);
+      }
+    }
+    
+    return results;
+  }, [klines, symbol, allUserIndicators, userIndicatorVisibility]);
 
   // Prepare candle data for lightweight-charts
   const candleData = useMemo<CandlestickData<Time>[]>(() => {
@@ -274,6 +326,17 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
         setHoveredData(null);
         return;
       }
+      // Extract user-defined indicator values for the current date
+      const userIndicatorValues: Record<string, Record<string, number | null>> = {};
+      for (const [indicatorId, result] of Object.entries(userIndicatorResults)) {
+        const seriesValues: Record<string, number | null> = {};
+        for (const series of result.result.series) {
+          const point = series.data.find(p => p.time === kline.date);
+          seriesValues[series.id] = point?.value ?? null;
+        }
+        userIndicatorValues[indicatorId] = seriesValues;
+      }
+
       setHoveredData({
         date: kline.date,
         open: data.open,
@@ -290,6 +353,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
         macdDif: idx >= 0 && macdValues.dif[idx] !== null ? macdValues.dif[idx]! : undefined,
         macdDea: idx >= 0 && macdValues.dea[idx] !== null ? macdValues.dea[idx]! : undefined,
         macdHist: idx >= 0 && macdValues.histogram[idx] !== null ? macdValues.histogram[idx]! : undefined,
+        userIndicators: userIndicatorValues,
       });
     });
 
@@ -375,6 +439,104 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
     macdDifRef.current?.setData(difData);
     macdDeaRef.current?.setData(deaData);
   }, [klines, macdValues]);
+
+  // Update user-defined indicators
+  useEffect(() => {
+    if (!chartRef.current || klines.length === 0) return;
+
+    // Get all currently visible indicator-series keys
+    const currentKeys = new Set<string>();
+    for (const [indicatorId, result] of Object.entries(userIndicatorResults)) {
+      for (const series of result.result.series) {
+        currentKeys.add(`${indicatorId}-${series.id}`);
+      }
+    }
+
+    // Remove series that are no longer visible
+    for (const [key, series] of Object.entries(userIndicatorSeriesRefs.current)) {
+      if (!currentKeys.has(key)) {
+        try {
+          chartRef.current?.removeSeries(series);
+        } catch (e) {
+          // Series may already be removed
+        }
+        delete userIndicatorSeriesRefs.current[key];
+      }
+    }
+
+    // Create or update series for each visible indicator
+    for (const [indicatorId, result] of Object.entries(userIndicatorResults)) {
+      for (const series of result.result.series) {
+        const key = `${indicatorId}-${series.id}`;
+        const priceScaleId = series.pane === 'indicator' ? `user-indicator-${indicatorId}` : undefined;
+
+        // Prepare data
+        const seriesData: (LineData<Time> | HistogramData<Time>)[] = [];
+        for (const point of series.data) {
+          if (point.value !== null) {
+            if (series.type === 'histogram') {
+              const histSeries = series as import('../types/indicator').UserIndicatorHistogramSeries;
+              const color = point.color ?? 
+                (point.value >= 0 
+                  ? (histSeries.positiveColor ?? histSeries.color ?? 'rgba(16, 185, 129, 0.5)')
+                  : (histSeries.negativeColor ?? histSeries.color ?? 'rgba(244, 63, 94, 0.5)'));
+              seriesData.push({
+                time: dateToTime(point.time),
+                value: point.value,
+                color,
+              });
+            } else {
+              seriesData.push({
+                time: dateToTime(point.time),
+                value: point.value,
+              });
+            }
+          }
+        }
+
+        // Check if series already exists
+        const existingSeries = userIndicatorSeriesRefs.current[key];
+        
+        if (existingSeries) {
+          // Update data
+          existingSeries.setData(seriesData);
+        } else {
+          // Create new series
+          let newSeries: ISeriesApi<'Line'> | ISeriesApi<'Histogram'>;
+          
+          if (series.type === 'line') {
+            const lineSeries = series as import('../types/indicator').UserIndicatorLineSeries;
+            newSeries = chartRef.current!.addSeries(LineSeries, {
+              color: lineSeries.color,
+              lineWidth: lineSeries.lineWidth ?? 2,
+              lineStyle: lineSeries.lineStyle === 'dashed' ? 2 : lineSeries.lineStyle === 'dotted' ? 1 : 0,
+              priceLineVisible: false,
+              lastValueVisible: false,
+              crosshairMarkerVisible: false,
+              priceScaleId: priceScaleId,
+            });
+          } else {
+            const histSeries = series as import('../types/indicator').UserIndicatorHistogramSeries;
+            newSeries = chartRef.current!.addSeries(HistogramSeries, {
+              priceFormat: { type: 'price', precision: 2 },
+              priceScaleId: priceScaleId ?? '',
+              color: histSeries.color ?? 'rgba(100, 149, 237, 0.5)',
+            });
+          }
+
+          // Configure price scale for indicator pane
+          if (priceScaleId && series.pane === 'indicator') {
+            newSeries.priceScale().applyOptions({
+              scaleMargins: { top: 0.8, bottom: 0 },
+            });
+          }
+
+          userIndicatorSeriesRefs.current[key] = newSeries;
+          newSeries.setData(seriesData);
+        }
+      }
+    }
+  }, [klines, userIndicatorResults]);
 
   // Update strokes - avoid duplicate times (end of one stroke = start of next)
   useEffect(() => {
@@ -852,6 +1014,29 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
                   <span className={`w-1 h-1 rounded-full ${showMACD ? 'bg-white' : 'bg-amber-400'}`} />
                   MACD
                 </button>
+                {/* User-defined indicators */}
+                {allUserIndicators.map(indicator => (
+                  <button
+                    key={indicator.id}
+                    onClick={() => setUserIndicatorVisibility(prev => ({ ...prev, [indicator.id]: !prev[indicator.id] }))}
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                      userIndicatorVisibility[indicator.id] 
+                        ? 'bg-emerald-500/80 text-white shadow-sm shadow-emerald-500/20' 
+                        : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                    }`}
+                    title={indicator.description || indicator.name}
+                  >
+                    <span className={`w-1 h-1 rounded-full ${userIndicatorVisibility[indicator.id] ? 'bg-white' : 'bg-emerald-400'}`} />
+                    {indicator.name.length > 6 ? indicator.name.slice(0, 6) : indicator.name}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setShowIndicatorDialog(true)}
+                  className="px-1.5 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center justify-center transition-all cursor-pointer text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/40"
+                  title="添加自定义指标"
+                >
+                  <Plus className="h-3 w-3" />
+                </button>
               </div>
             </div>
           </div>
@@ -961,6 +1146,29 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
               >
                 <span className={`w-1 h-1 rounded-full ${showMACD ? 'bg-white' : 'bg-amber-400'}`} />
                 MACD
+              </button>
+              {/* User-defined indicators */}
+              {allUserIndicators.map(indicator => (
+                <button
+                  key={indicator.id}
+                  onClick={() => setUserIndicatorVisibility(prev => ({ ...prev, [indicator.id]: !prev[indicator.id] }))}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                    userIndicatorVisibility[indicator.id] 
+                      ? 'bg-emerald-500/80 text-white shadow-sm shadow-emerald-500/20' 
+                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                  }`}
+                  title={indicator.description || indicator.name}
+                >
+                  <span className={`w-1 h-1 rounded-full ${userIndicatorVisibility[indicator.id] ? 'bg-white' : 'bg-emerald-400'}`} />
+                  {indicator.name.length > 6 ? indicator.name.slice(0, 6) : indicator.name}
+                </button>
+              ))}
+              <button
+                onClick={() => setShowIndicatorDialog(true)}
+                className="px-1.5 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center justify-center transition-all cursor-pointer text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/40"
+                title="添加自定义指标"
+              >
+                <Plus className="h-3 w-3" />
               </button>
             </div>
           </div>
@@ -1077,6 +1285,29 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
               >
                 <span className={`w-1 h-1 rounded-full ${showMACD ? 'bg-white' : 'bg-amber-400'}`} />
                 MACD
+              </button>
+              {/* User-defined indicators */}
+              {allUserIndicators.map(indicator => (
+                <button
+                  key={indicator.id}
+                  onClick={() => setUserIndicatorVisibility(prev => ({ ...prev, [indicator.id]: !prev[indicator.id] }))}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                    userIndicatorVisibility[indicator.id] 
+                      ? 'bg-emerald-500/80 text-white shadow-sm shadow-emerald-500/20' 
+                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                  }`}
+                  title={indicator.description || indicator.name}
+                >
+                  <span className={`w-1 h-1 rounded-full ${userIndicatorVisibility[indicator.id] ? 'bg-white' : 'bg-emerald-400'}`} />
+                  {indicator.name.length > 6 ? indicator.name.slice(0, 6) : indicator.name}
+                </button>
+              ))}
+              <button
+                onClick={() => setShowIndicatorDialog(true)}
+                className="px-1.5 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center justify-center transition-all cursor-pointer text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/40"
+                title="添加自定义指标"
+              >
+                <Plus className="h-3 w-3" />
               </button>
             </div>
 
@@ -1204,7 +1435,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
       </div>
 
       {/* Indicator details on hover */}
-      {hoveredData && (showMA5 || showMA20 || showBOLL || showMACD) && (
+      {hoveredData && (showMA5 || showMA20 || showBOLL || showMACD || Object.values(userIndicatorVisibility).some(v => v)) && (
         <div className="mobile-flat mobile-px-2 mobile-py-2 bg-zinc-950 md:p-3 md:rounded-xl md:border md:border-zinc-800 text-[11px] font-mono text-zinc-400 space-y-0.5">
           <p className="font-semibold text-slate-200">ACTIVE INDICATORS</p>
           {showMA5 && hoveredData.ma5 !== undefined && (
@@ -1219,8 +1450,44 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
           {showMACD && hoveredData.macdDif !== undefined && (
             <p>MACD: <span className="text-amber-400 font-medium">DIF: {hoveredData.macdDif.toFixed(2)} / DEA: {hoveredData.macdDea?.toFixed(2)} / Hist: {hoveredData.macdHist?.toFixed(2)}</span></p>
           )}
+          {/* User-defined indicators */}
+          {hoveredData.userIndicators && Object.entries(hoveredData.userIndicators).map(([indicatorId, seriesValues]) => {
+            const indicator = allUserIndicators.find(i => i.id === indicatorId);
+            if (!indicator || !userIndicatorVisibility[indicatorId]) return null;
+            const result = userIndicatorResults[indicatorId];
+            if (!result) return null;
+            
+            return (
+              <div key={indicatorId}>
+                {result.result.series.map(series => {
+                  const value = seriesValues[series.id];
+                  if (value === null || value === undefined) return null;
+                  return (
+                    <p key={series.id}>
+                      {indicator.name} ({series.name}): <span className="text-emerald-400 font-medium">{value.toFixed(2)}</span>
+                    </p>
+                  );
+                })}
+              </div>
+            );
+          })}
         </div>
       )}
+
+      {/* Indicator Dialog */}
+      <IndicatorDialog
+        isOpen={showIndicatorDialog}
+        onClose={() => setShowIndicatorDialog(false)}
+        onIndicatorCreated={(indicator) => {
+          setAllUserIndicators(prev => [...prev, indicator]);
+          setUserIndicatorVisibility(prev => ({
+            ...prev,
+            [indicator.id]: indicator.defaultVisible ?? true,
+          }));
+        }}
+        existingIndicatorIds={allUserIndicators.map(i => i.id)}
+        symbol={symbol}
+      />
     </div>
   );
 }

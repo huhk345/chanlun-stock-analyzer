@@ -875,6 +875,138 @@ export async function analyzeWithGemini(params: {
   ]);
 }
 
+// ---------------------------------------------------------------------------
+// AI Indicator Code Generation
+// ---------------------------------------------------------------------------
+
+const INDICATOR_GENERATION_SYSTEM_PROMPT = `You are a TypeScript expert creating stock indicators for a trading analysis platform.
+
+Generate ONLY valid JavaScript code for the indicator described by the user. No explanations, no markdown formatting.
+
+The code MUST be a self-contained object following this exact structure:
+
+const indicator = {
+  id: 'my-indicator',
+  name: 'My Indicator',
+  description: 'Description',
+  defaultVisible: false,
+  params: [
+    // { key: 'period', label: 'Period', type: 'number', defaultValue: 20, min: 1, max: 200, step: 1 }
+  ],
+  calculate({ klines, symbol, timeframe, params }) {
+    // klines: Array<{ date: string, open: number, high: number, low: number, close: number, volume: number, amount: number }>
+    return {
+      series: [
+        {
+          id: 'main',
+          name: 'Series Name',
+          type: 'line',      // 'line' | 'histogram'
+          pane: 'price',      // 'price' | 'indicator'
+          color: '#38bdf8',
+          lineWidth: 2,
+          data: klines.map(k => ({ time: k.date, value: number | null })),
+        },
+      ],
+      signals: [
+        // { time: '2024-01-01', position: 'aboveBar', shape: 'arrowUp', color: '#22c55e', text: 'Buy' }
+      ],
+      fields: [
+        // { key: 'value', label: 'Value', sourceSeriesId: 'main', precision: 2 }
+      ],
+    };
+  },
+};
+
+if (typeof exports !== 'undefined') { exports.default = indicator; }
+else if (typeof module !== 'undefined') { module.exports = indicator; }
+
+RULES:
+1. Return ONLY the raw JavaScript code. NO markdown, NO code fences, NO explanations.
+2. NO imports, NO require, NO async/await, NO fetch, NO eval, NO DOM APIs.
+3. id must be lowercase kebab-case.
+4. Handle edge cases: division by zero, empty data, null checks.
+5. klines are sorted oldest to newest. data array must match klines length and order.
+6. Use appropriate colors for buy/sell signals (green for buy, red for sell).
+7. For multi-line indicators, add multiple series objects.
+8. For histogram indicators, use positiveColor and negativeColor.`;
+
+/**
+ * Extracts JavaScript code from AI response, handling markdown code fences
+ */
+export function extractCodeFromResponse(text: string): string {
+  const codeBlockMatch = text.match(/```(?:typescript|javascript|js|ts)?\s*\n?([\s\S]*?)```/);
+  if (codeBlockMatch) {
+    return codeBlockMatch[1].trim();
+  }
+  return text.trim();
+}
+
+/**
+ * Generate indicator code using AI based on user description
+ */
+export async function generateIndicatorCode(
+  userDescription: string,
+  onToken?: StreamCallback,
+  model?: string,
+): Promise<string> {
+  const OPENROUTER_API_KEY = getOpenRouterApiKey();
+  const GEMINI_API_KEY = getGeminiApiKey();
+
+  if (!OPENROUTER_API_KEY && !GEMINI_API_KEY) {
+    throw new Error('未配置 AI API 密钥。请在设置中配置 OpenRouter API Key 或 Gemini API Key。');
+  }
+
+  const userMessage = `请根据以下需求生成一个股票技术分析指标代码：\n\n${userDescription}\n\n请严格按照格式要求，返回纯 JavaScript 代码。`;
+
+  if (OPENROUTER_API_KEY) {
+    const selectedModel = model?.trim() || 'google/gemini-2.0-flash-exp:free';
+
+    if (onToken) {
+      return callOpenRouterChatStream(
+        OPENROUTER_API_KEY,
+        selectedModel,
+        [
+          { role: 'system', content: INDICATOR_GENERATION_SYSTEM_PROMPT },
+          { role: 'user', content: userMessage },
+        ],
+        onToken,
+        0.3,
+      );
+    }
+
+    return callOpenRouterChat(
+      OPENROUTER_API_KEY,
+      selectedModel,
+      [
+        { role: 'system', content: INDICATOR_GENERATION_SYSTEM_PROMPT },
+        { role: 'user', content: userMessage },
+      ],
+      0.3,
+    );
+  }
+
+  if (onToken) {
+    return callGeminiChatStream(
+      GEMINI_API_KEY,
+      [
+        { role: 'system', content: INDICATOR_GENERATION_SYSTEM_PROMPT },
+        { role: 'user', content: userMessage },
+      ],
+      onToken,
+      0.3,
+    );
+  }
+
+  return callGeminiChat(
+    GEMINI_API_KEY,
+    [
+      { role: 'system', content: INDICATOR_GENERATION_SYSTEM_PROMPT },
+      { role: 'user', content: userMessage },
+    ],
+    0.3,
+  );
+}
+
 // Fetch stock basic information from free API (Tencent Stock)
 export async function fetchStockBasicInfo(symbol: string): Promise<StockBasicInfo> {
   const clean = symbol.trim().toUpperCase();
