@@ -1089,7 +1089,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
         {/* Floating Price Data Header panels */}
         <div className="mobile-flat mobile-px-2 mobile-py-2 bg-zinc-950 md:p-3 md:rounded-t-xl md:border md:border-zinc-800 md:border-b-0">
           {/* Row 1: Price Data */}
-          <div className="grid grid-cols-3 md:grid-cols-6 gap-2 md:gap-3 py-2 mobile-text-center">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 py-2 mobile-text-center">
             <div className="min-w-0">
               <span className="text-[10px] font-mono text-zinc-500 uppercase">交易日期</span>
               <div className="flex items-center gap-1 mt-0.5 mobile-justify-center">
@@ -1113,7 +1113,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
 
                   return (
                     <span className={`text-[10px] font-mono font-bold tracking-wide px-1.5 py-0.5 rounded ${
-                      isUp ? 'text-red-400 bg-red-500/10' : 'text-blue-400 bg-blue-500/10'
+                      isUp ? 'text-red-400 bg-red-500/10' : 'text-green-400 bg-green-500/10'
                     }`}>
                       {isUp ? '+' : ''}{pct.toFixed(2)}%
                     </span>
@@ -1122,15 +1122,11 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
               </div>
             </div>
             <div className="min-w-0">
-              <span className="text-[10px] font-mono text-zinc-500 uppercase">开盘价</span>
-              <p className="text-xs font-bold font-mono tracking-wide text-zinc-200 mt-0.5">
-                {hoveredData ? hoveredData.open.toFixed(2) : klines[klines.length - 1].open.toFixed(2)}
-              </p>
-            </div>
-            <div className="min-w-0">
-              <span className="text-[10px] font-mono text-zinc-500 uppercase">收盘价</span>
-              <p className="text-xs font-bold font-mono tracking-wide mt-0.5 text-blue-400">
-                {hoveredData ? hoveredData.close.toFixed(2) : klines[klines.length - 1].close.toFixed(2)}
+              <span className="text-[10px] font-mono text-zinc-500 uppercase">开盘/收盘价</span>
+              <p className="text-xs font-bold font-mono tracking-wide mt-0.5">
+                <span className="text-zinc-200">{hoveredData ? hoveredData.open.toFixed(2) : klines[klines.length - 1].open.toFixed(2)}</span>
+                <span className="text-zinc-600 mx-1">/</span>
+                <span className={(() => { const c = hoveredData ? hoveredData : klines[klines.length - 1]; return c.close < c.open ? 'text-green-400' : 'text-red-400'; })()}>{hoveredData ? hoveredData.close.toFixed(2) : klines[klines.length - 1].close.toFixed(2)}</span>
               </p>
             </div>
             <div className="min-w-0">
@@ -1142,22 +1138,22 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
               </p>
             </div>
             <div className="min-w-0">
-              <span className="text-[10px] font-mono text-zinc-500 uppercase">成交量</span>
-              <p className="text-xs font-bold font-mono tracking-wide text-amber-400 mt-0.5">
-                {hoveredData
-                  ? (hoveredData.volume / 1000).toFixed(1) + 'K'
-                  : (klines[klines.length - 1].volume / 1000).toFixed(1) + 'K'}
-              </p>
-            </div>
-            <div className="min-w-0">
-              <span className="text-[10px] font-mono text-zinc-500 uppercase">成交额</span>
-              <p className="text-xs font-bold font-mono tracking-wide text-sky-400 mt-0.5">
-                {(() => {
-                  const a = hoveredData ? hoveredData.amount : klines[klines.length - 1].amount;
-                  if (a >= 100000000) return (a / 100000000).toFixed(2) + '亿';
-                  if (a >= 10000) return (a / 10000).toFixed(1) + '万';
-                  return a.toFixed(0);
-                })()}
+              <span className="text-[10px] font-mono text-zinc-500 uppercase">成交量/成交额</span>
+              <p className="text-xs font-bold font-mono tracking-wide mt-0.5">
+                <span className="text-amber-400">
+                  {hoveredData
+                    ? (hoveredData.volume / 1000).toFixed(1) + 'K'
+                    : (klines[klines.length - 1].volume / 1000).toFixed(1) + 'K'}
+                </span>
+                <span className="text-zinc-600 mx-1">/</span>
+                <span className="text-sky-400">
+                  {(() => {
+                    const a = hoveredData ? hoveredData.amount : klines[klines.length - 1].amount;
+                    if (a >= 100000000) return (a / 100000000).toFixed(2) + '亿';
+                    if (a >= 10000) return (a / 10000).toFixed(1) + '万';
+                    return a.toFixed(0);
+                  })()}
+                </span>
               </p>
             </div>
           </div>

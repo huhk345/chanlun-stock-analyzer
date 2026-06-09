@@ -23,7 +23,7 @@ const getTickFlowApiKey = () => getApiKey('tickflow') || import.meta.env.VITE_TI
 const getTickFlowBaseUrl = () => getTickFlowApiKey() ? 'https://api.tickflow.org' : 'https://free-api.tickflow.org';
 
 // Helper: Resolve stock symbols for TickFlow API (Chinese stocks only)
-function resolveSymbol(symbol: string): { resolved: string; displayName: string; isChinaStock: boolean } {
+export function resolveSymbol(symbol: string): { resolved: string; displayName: string; isChinaStock: boolean } {
   const clean = symbol.trim().toUpperCase();
   if (/^\d{6}$/.test(clean)) {
     // 6-digit pure numbers represent Chinese stocks

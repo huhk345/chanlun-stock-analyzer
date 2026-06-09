@@ -13,6 +13,7 @@ interface NavbarProps {
   activeSymbol?: string;
   klines?: Kline[];
   stockBasicInfo?: StockBasicInfo | null;
+  isMobile?: boolean;
 }
 
 interface SearchHistoryItem {
@@ -30,7 +31,7 @@ const PRESET_STOCKS = [
 const MAX_HISTORY = 30;
 const SEARCH_HISTORY_KEY = 'chanlun_search_history';
 
-export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpenAbout, onSearch, isLoading, activeSymbol, klines, stockBasicInfo }: NavbarProps) {
+export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpenAbout, onSearch, isLoading, activeSymbol, klines, stockBasicInfo, isMobile }: NavbarProps) {
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -44,6 +45,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
   const [showHistory, setShowHistory] = useState(false);
   const [marketTime, setMarketTime] = useState(new Date());
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [isScrolled, setIsScrolled] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
@@ -62,6 +64,13 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    const handleScroll = () => setIsScrolled(window.scrollY > 60);
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    handleScroll();
+    return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
   useEffect(() => {
@@ -326,6 +335,28 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Mobile: Compact Stock Info (visible when scrolled) */}
+        {isMobile && isScrolled && stockBasicInfo && (
+          <div className="flex items-center gap-3 flex-1 min-w-0 px-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-[10px] font-mono text-zinc-500 shrink-0">{stockBasicInfo.symbol}</span>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0 ml-auto">
+              <span className={`text-sm font-bold font-mono ${stockBasicInfo.change >= 0 ? 'text-red-500' : 'text-green-500'}`}>
+                {stockBasicInfo.price.toFixed(2)}
+              </span>
+              {stockBasicInfo.change >= 0 ? (
+                <TrendingUp className="h-3 w-3 text-red-400" />
+              ) : (
+                <TrendingDown className="h-3 w-3 text-green-400" />
+              )}
+              <span className={`text-[10px] font-mono font-semibold ${stockBasicInfo.change >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+                {stockBasicInfo.change >= 0 ? '+' : ''}{stockBasicInfo.changePercent.toFixed(2)}%
+              </span>
+            </div>
           </div>
         )}
 

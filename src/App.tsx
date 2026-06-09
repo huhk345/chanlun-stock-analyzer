@@ -16,7 +16,7 @@ import {
   calculateSegments,
   calculateHubs
 } from './utils/chanlun';
-import { fetchStockData, fetchStockBasicInfo } from './utils/api';
+import { fetchStockData, fetchStockBasicInfo, resolveSymbol } from './utils/api';
 
 interface ReductionPlan {
   title: string;
@@ -128,6 +128,17 @@ export default function App() {
         if (resp.ok) {
           const cache = await resp.json();
           meta = cache[pureCode] || null;
+          // Verify exchange suffix matches the code prefix to avoid misattribution.
+          // e.g., pureCode "000001" maps to 平安银行 (.SZ) in the JSON, but
+          // 000001.SS/.SH is the Shanghai Composite Index — a different entity.
+          if (meta) {
+            const isSS = /^(60|68|90|11|13|51|58)/.test(pureCode);
+            const expectedSuffix = isSS ? 'SH' : 'SZ';
+            const { resolved } = resolveSymbol(querySymbol);
+            if (resolved.split('.')[1] !== expectedSuffix) {
+              meta = null;
+            }
+          }
         }
       } catch {
         // non-critical
@@ -222,6 +233,7 @@ export default function App() {
         activeSymbol={symbol}
         klines={klines}
         stockBasicInfo={stockBasicInfo}
+        isMobile={isMobile}
       />
 
       {/* Config View Modal */}
