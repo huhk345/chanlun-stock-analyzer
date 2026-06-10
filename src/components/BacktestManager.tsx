@@ -150,7 +150,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
     try {
       const commissionRate = commissionRateWan / 10000;
       const { result, diagnostics: diags } = runBacktest({
-        klines,
+        klines: filteredKlines,
         symbol,
         userId: currentUser?.id || 'anonymous',
         initialCash: initialCapital,
@@ -181,7 +181,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
 
     const commissionRate = commissionRateWan / 10000;
     const stepper = createBacktestStepper({
-      klines,
+      klines: filteredKlines,
       symbol,
       userId: currentUser?.id || 'anonymous',
       initialCash: initialCapital,
@@ -285,7 +285,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
         <div className={sectionCls}>
           {/* Header */}
           <div className="flex items-center justify-between px-3 py-2.5 md:px-5 md:py-3 bg-zinc-900/50 border-b border-zinc-800/50">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400">回测配置</h4>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400 text-left">回测配置</h4>
             <button
               onClick={() => setStrategyDialogOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg border border-zinc-700 cursor-pointer transition-all"
@@ -394,7 +394,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
                     type="number"
                     value={initialCapital}
                     onChange={(e) => setInitialCapital(Math.max(100, parseInt(e.target.value) || 1000))}
-                    className="w-full pl-7 pr-3 py-2 text-xs bg-zinc-900 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
+                    className="w-full pl-7 pr-3 py-2 text-xs bg-zinc-900 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono appearance-none [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                   />
                 </div>
               </div>
@@ -408,7 +408,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
                     onChange={(e) => setCommissionRateWan(parseFloat(e.target.value) || 2.5)}
                     step="0.1"
                     min="0"
-                    className="w-full px-3 py-2 text-xs bg-zinc-900 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
+                    className="w-full px-3 py-2 text-xs bg-zinc-900 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono appearance-none [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                   />
                   <span className="absolute inset-y-0 right-0 pr-3 flex items-center text-xs font-bold text-zinc-500 font-mono">‱</span>
                 </div>
@@ -518,7 +518,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
                     onKeyDown={(e) => e.key === 'Enter' && handleJumpTo()}
                     min={0}
                     max={stepState.totalSteps - 1}
-                    className="w-16 px-2 py-1 text-xs bg-zinc-900 text-zinc-100 border border-zinc-800 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
+                    className="w-16 px-2 py-1 text-xs bg-zinc-900 text-zinc-100 border border-zinc-800 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono appearance-none [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                   />
                   <button
                     onClick={handleJumpTo}
@@ -665,102 +665,115 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
         {/* ====== REPORT OVERVIEW ====== */}
         {backtest && !stepperMode && (
           <div className="space-y-6 transition-all animate-fade-in text-zinc-100">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400 border-b border-zinc-800 pb-2">模拟器报告概览</h4>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400 border-b border-zinc-800 pb-2 text-left">模拟器报告概览</h4>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
-              <div className="p-2 md:p-4 bg-zinc-950 md:border md:border-zinc-800 md:rounded-xl">
-                <span className="text-[10px] text-zinc-500 font-mono uppercase">起始资金</span>
-                <p className="text-sm font-extrabold font-mono text-zinc-200 mt-1">¥{fmt(backtest.initialBalance)}</p>
-              </div>
+            <div className={sectionCls}>
+              <div className="p-3 md:p-5 space-y-4">
+                {/* Row 1: Capital + returns */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-left">
+                  <div>
+                    <span className="text-[10px] text-zinc-500 font-mono uppercase">起始资金</span>
+                    <p className="text-sm font-extrabold font-mono text-zinc-200">¥{fmt(backtest.initialBalance)}</p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-zinc-500 font-mono uppercase">结束余额</span>
+                    <p className="text-sm font-extrabold font-mono text-zinc-200">¥{fmt(backtest.finalBalance)}</p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-zinc-500 font-mono uppercase">总收益</span>
+                    <p className={`text-sm font-extrabold font-mono mt-0.5 ${backtest.totalReturnPercent >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+                      {backtest.totalReturnPercent >= 0 ? '+' : ''}{fmt(backtest.totalReturnPercent)}%
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-zinc-500 font-mono uppercase">买入持有</span>
+                    <p className={`text-sm font-extrabold font-mono mt-0.5 ${backtest.buyHoldReturnPercent >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+                      {backtest.buyHoldReturnPercent >= 0 ? '+' : ''}{fmt(backtest.buyHoldReturnPercent)}%
+                    </p>
+                  </div>
+                </div>
 
-              <div className="p-2 md:p-4 bg-zinc-950 md:border md:border-zinc-800 md:rounded-xl">
-                <span className="text-[10px] text-zinc-500 font-mono uppercase">结束余额</span>
-                <p className="text-sm font-extrabold font-mono text-zinc-200 mt-1">¥{fmt(backtest.finalBalance)}</p>
-              </div>
-
-              <div className="p-2 md:p-4 bg-zinc-950 md:border md:border-zinc-800 md:rounded-xl">
-                <span className="text-[10px] text-zinc-500 font-mono uppercase">净总收益</span>
-                <p className={`text-sm font-extrabold font-mono mt-1 ${backtest.totalReturnPercent >= 0 ? 'text-blue-400' : 'text-red-400'}`}>
-                  {backtest.totalReturnPercent >= 0 ? '+' : ''}{fmt(backtest.totalReturnPercent)}%
-                </p>
-              </div>
-
-              <div className="p-2 md:p-4 bg-zinc-950 md:border md:border-zinc-800 md:rounded-xl">
-                <span className="text-[10px] text-zinc-500 font-mono uppercase">胜率(交易)</span>
-                <p className="text-sm font-extrabold font-mono mt-1 text-zinc-200">
-                  {fmt(backtest.winRate)}% <span className="text-[10px] font-normal text-zinc-500 font-sans">({backtest.winningTrades}/{backtest.totalTrades})</span>
-                </p>
-              </div>
-
-              <div className="p-2 md:p-4 bg-zinc-950 md:border md:border-zinc-800 md:rounded-xl">
-                <span className="text-[10px] text-zinc-500 font-mono uppercase">总交易费用</span>
-                <p className="text-sm font-extrabold font-mono mt-1 text-red-400">¥{fmt(backtest.totalFees)}</p>
+                {/* Row 2: Risk + cost metrics */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-left">
+                  <div>
+                    <span className="text-[10px] text-zinc-500 font-mono uppercase">夏普比率</span>
+                    <p className={`text-sm font-extrabold font-mono mt-0.5 ${backtest.sharpeRatio >= 1 ? 'text-blue-400' : backtest.sharpeRatio > 0 ? 'text-zinc-200' : 'text-zinc-500'}`}>
+                      {fmt(backtest.sharpeRatio)}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-zinc-500 font-mono uppercase">胜率</span>
+                    <p className="text-sm font-extrabold font-mono mt-0.5 text-zinc-200">
+                      {fmt(backtest.winRate)}% <span className="text-[10px] font-normal text-zinc-500 font-sans">({backtest.winningTrades}/{backtest.trades.filter(t => t.type === 'SELL').length})</span>
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-zinc-500 font-mono uppercase">总费用</span>
+                    <p className="text-sm font-extrabold font-mono text-green-400">¥{fmt(backtest.totalFees)}</p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-zinc-500 font-mono uppercase">交易次数</span>
+                    <p className="text-sm font-extrabold font-mono text-zinc-200">{backtest.totalTrades}</p>
+                  </div>
+                </div>
               </div>
             </div>
 
-            {/* Export CSV */}
-            <div className={sectionCls}>
-              <div className="flex flex-wrap items-center justify-between gap-4 p-3 md:p-4">
-                <div className="flex gap-2 items-center">
-                  <Download className="h-4 w-4 text-blue-400" />
-                  <span className="text-xs font-semibold">导出回测数据</span>
-                </div>
+            {/* Trades Ledger Table */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h5 className="text-xs font-bold text-zinc-400 uppercase tracking-wider text-left">交易账本</h5>
                 <button
                   onClick={handleExportCSV}
-                  className="px-4 py-2 font-semibold text-xs rounded-lg bg-zinc-800 text-zinc-100 hover:bg-zinc-700 border border-zinc-700 cursor-pointer transition-all flex items-center gap-2"
+                  className="shrink-0 px-3 py-1.5 font-semibold text-xs rounded-lg bg-zinc-800 text-zinc-100 hover:bg-zinc-700 border border-zinc-700 cursor-pointer transition-all flex items-center gap-1.5"
                   id="btn-export-csv"
                 >
                   <Download className="h-3.5 w-3.5" />
                   <span>导出 CSV</span>
                 </button>
               </div>
-            </div>
-
-            {/* Trades Ledger Table */}
-            <div>
-              <h5 className="text-xs font-bold text-zinc-400 mb-3 uppercase tracking-wider">交易账本</h5>
               <div className="overflow-x-auto md:rounded-xl md:border md:border-zinc-800 bg-zinc-950">
-                <table className="w-full text-left text-xs text-zinc-300">
-                  <thead className="bg-zinc-900 border-b border-zinc-800 text-zinc-500 font-mono font-semibold">
-                    <tr>
-                      <th className="px-4 py-2.5">日期</th>
-                      <th className="px-4 py-2.5">类型</th>
-                      <th className="px-4 py-2.5">信号来源</th>
-                      <th className="px-4 py-2.5">执行价格</th>
-                      <th className="px-4 py-2.5">交易分配</th>
-                      <th className="px-4 py-2.5 text-right">盈亏结果</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-900 font-mono">
-                    {backtest.trades.length === 0 ? (
+                  <table className="w-full text-left text-xs text-zinc-300">
+                    <thead className="bg-zinc-900 border-b border-zinc-800 text-zinc-500 font-mono font-semibold">
                       <tr>
-                        <td colSpan={6} className="text-center py-6 text-zinc-500 font-sans">未触发任何交易。请尝试延长分析周期。</td>
+                        <th className="px-4 py-2.5">日期</th>
+                        <th className="px-4 py-2.5">类型</th>
+                        <th className="px-4 py-2.5">执行价格</th>
+                        <th className="px-4 py-2.5">交易分配</th>
+                        <th className="px-4 py-2.5">交易费</th>
+                        <th className="px-4 py-2.5 text-right">盈亏结果</th>
                       </tr>
-                    ) : (
-                      backtest.trades.map((tr, i) => (
-                        <tr key={`tr-led-${tr.id}-${i}`} className="hover:bg-zinc-900/40">
-                          <td className="px-4 py-2 text-zinc-400 font-sans">{tr.date}</td>
-                          <td className="px-4 py-2">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold ${
-                              tr.type === 'BUY' ? 'bg-blue-950/30 text-blue-400 border border-blue-900/20' : 'bg-red-950/30 text-red-400 border border-red-900/20'
-                            }`}>
-                              {tr.type}
-                            </span>
-                          </td>
-                          <td className="px-4 py-2 text-zinc-400 font-sans text-[11px]">{tr.signalType}</td>
-                          <td className="px-4 py-2 font-bold">¥{fmt(tr.price)}</td>
-                          <td className="px-4 py-2 text-zinc-500">{tr.shares}股 (¥{fmt(tr.value)})</td>
-                          <td className={`px-4 py-2 text-right font-extrabold ${
-                            tr.pnl !== undefined
-                              ? (tr.pnl >= 0 ? 'text-blue-400' : 'text-red-400')
-                              : 'text-zinc-500 font-normal'
-                          }`}>
-                            {tr.pnl !== undefined ? `${tr.pnl >= 0 ? '+' : ''}¥${fmt(tr.pnl)} (${fmt(tr.pnlPercent ?? 0)}%)` : '--'}
-                          </td>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-900 font-mono">
+                      {backtest.trades.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="text-center py-6 text-zinc-500 font-sans">未触发任何交易。请尝试延长分析周期。</td>
                         </tr>
-                      ))
-                    )}
-                  </tbody>
+                      ) : (
+                        backtest.trades.map((tr, i) => (
+                          <tr key={`tr-led-${tr.id}-${i}`} className="hover:bg-zinc-900/40">
+                            <td className="px-4 py-2 text-zinc-400 font-sans">{tr.date}</td>
+                            <td className="px-4 py-2">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold ${
+                                tr.type === 'BUY' ? 'bg-red-950/30 text-red-400 border border-red-900/20' : 'bg-green-950/30 text-green-400 border border-green-900/20'
+                              }`}>
+                                {tr.type}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2 font-bold">¥{fmt(tr.price)}</td>
+                            <td className="px-4 py-2 text-zinc-500">{tr.shares}股 (¥{fmt(tr.value)})</td>
+                            <td className="px-4 py-2 text-zinc-500">¥{fmt(tr.fee ?? 0)}</td>
+                            <td className={`px-4 py-2 text-right font-extrabold ${
+                              tr.pnl !== undefined
+                                ? (tr.pnl >= 0 ? 'text-red-400' : 'text-green-400')
+                                : 'text-zinc-500 font-normal'
+                            }`}>
+                              {tr.pnl !== undefined ? `${tr.pnl >= 0 ? '+' : ''}¥${fmt(tr.pnl)} (${fmt(tr.pnlPercent ?? 0)}%)` : '--'}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
                 </table>
               </div>
             </div>

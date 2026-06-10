@@ -406,12 +406,25 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
 
   function buildResult(): BacktestResult {
     const lastPrice = klines.length > 0 ? klines[klines.length - 1].close : 0;
+    const firstPrice = klines.length > 0 ? klines[0].close : 0;
     const finalPositionMarketValue = position.shares * lastPrice;
     const finalBalance = account.cash + finalPositionMarketValue;
     const totalReturnPercent = initialCash > 0 ? ((finalBalance - initialCash) / initialCash) * 100 : 0;
     const totalTrades = trades.length;
     const winningTrades = trades.filter((t) => t.type === 'SELL' && (t.pnl ?? 0) > 0).length;
-    const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
+    const totalSells = trades.filter((t) => t.type === 'SELL').length;
+    const winRate = totalSells > 0 ? (winningTrades / totalSells) * 100 : 0;
+    const buyHoldReturnPercent = firstPrice > 0 ? ((lastPrice - firstPrice) / firstPrice) * 100 : 0;
+
+    let sharpeRatio = 0;
+    const closedTrades = trades.filter(t => t.type === 'SELL' && t.pnlPercent !== undefined);
+    if (closedTrades.length > 1) {
+      const returns = closedTrades.map(t => (t.pnlPercent ?? 0) / 100);
+      const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+      const variance = returns.reduce((a, b) => a + (b - mean) ** 2, 0) / returns.length;
+      const std = Math.sqrt(variance);
+      sharpeRatio = std > 0 ? (mean / std) * Math.sqrt(252) : 0;
+    }
 
     return {
       id: `backtest-${Date.now()}`,
@@ -426,6 +439,8 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
       winningTrades,
       winRate,
       totalFees,
+      sharpeRatio,
+      buyHoldReturnPercent,
       trades: cloneTrades(trades),
       createdAt: new Date().toISOString(),
     };

@@ -103,6 +103,8 @@ export interface BacktestResult {
   winningTrades: number;
   winRate: number;
   totalFees: number;
+  sharpeRatio: number;
+  buyHoldReturnPercent: number;
   trades: BacktestTrade[];
   createdAt: string;
 }

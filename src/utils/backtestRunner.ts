@@ -190,6 +190,8 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
         winningTrades: 0,
         winRate: 0,
         totalFees: 0,
+        sharpeRatio: 0,
+        buyHoldReturnPercent: 0,
         trades: [],
         createdAt: now,
       },
@@ -207,10 +209,17 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
   let strategyStopped = false;
   let totalFees = 0;
 
+  // Track daily equity for Sharpe ratio
+  const equityCurve: number[] = [];
+
   // Iterate from oldest (index 0) to newest
   for (let i = 0; i < klines.length; i++) {
     const currentKline = klines[i];
     const currentPrice = currentKline.close;
+
+    // Record equity at this step
+    const currentEquity = account.cash + position.shares * currentPrice;
+    equityCurve.push(currentEquity);
 
     // --- Stop-loss check (before strategy decision) ---
     if (stopLossPercent !== undefined && position.shares > 0) {
@@ -413,12 +422,31 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
 
   // --- Calculate final result ---
   const lastPrice = klines[klines.length - 1].close;
+  const firstPrice = klines[0].close;
   const finalPositionMarketValue = position.shares * lastPrice;
   const finalBalance = account.cash + finalPositionMarketValue;
   const totalReturnPercent = ((finalBalance - initialCash) / initialCash) * 100;
   const totalTrades = trades.length;
+  const totalSells = trades.filter((t) => t.type === 'SELL').length;
   const winningTrades = trades.filter((t) => t.type === 'SELL' && (t.pnl ?? 0) > 0).length;
-  const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
+  const winRate = totalSells > 0 ? (winningTrades / totalSells) * 100 : 0;
+
+  // Buy & hold return
+  const buyHoldReturnPercent = firstPrice > 0 ? ((lastPrice - firstPrice) / firstPrice) * 100 : 0;
+
+  // Sharpe ratio from daily equity curve
+  let sharpeRatio = 0;
+  if (equityCurve.length > 1) {
+    const dailyReturns: number[] = [];
+    for (let i = 1; i < equityCurve.length; i++) {
+      const prevEq = equityCurve[i - 1];
+      dailyReturns.push(prevEq > 0 ? (equityCurve[i] - prevEq) / prevEq : 0);
+    }
+    const mean = dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length;
+    const variance = dailyReturns.reduce((a, b) => a + (b - mean) ** 2, 0) / dailyReturns.length;
+    const std = Math.sqrt(variance);
+    sharpeRatio = std > 0 ? (mean / std) * Math.sqrt(252) : 0;
+  }
 
   const result: BacktestResult = {
     id: `backtest-${Date.now()}`,
@@ -433,6 +461,8 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
     winningTrades,
     winRate,
     totalFees,
+    sharpeRatio,
+    buyHoldReturnPercent,
     trades,
     createdAt: new Date().toISOString(),
   };

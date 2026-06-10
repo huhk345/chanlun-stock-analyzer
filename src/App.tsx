@@ -8,7 +8,7 @@ import ConfigView from './components/ConfigView';
 import AboutView from './components/AboutView';
 import StockInfoPanel from './components/StockInfoPanel';
 import { SupabaseUser } from './utils/supabase';
-import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo } from './types/stock';
+import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade } from './types/stock';
 import {
   mergeKlines,
   findFractions,
@@ -90,6 +90,7 @@ export default function App() {
   const [dataSource, setDataSource] = useState('');
   const [stockBasicInfo, setStockBasicInfo] = useState<StockBasicInfo | null>(null);
   const [stockMeta, setStockMeta] = useState<StockMeta | null>(null);
+  const [backtestTrades, setBacktestTrades] = useState<BacktestTrade[]>([]);
 
   const fetchAndProcessStock = async (querySymbol: string) => {
     setIsLoading(true);
@@ -288,6 +289,7 @@ export default function App() {
                 industry={stockMeta?.industry}
                 actualController={stockMeta?.actual_controller}
                 reductionPlans={stockMeta?.reduction_plans}
+                backtestTrades={backtestTrades}
               />
             </div>
 
@@ -313,6 +315,7 @@ export default function App() {
               klines={klines}
               symbol={symbol}
               currentUser={currentUser}
+              onBacktestResult={(trades) => setBacktestTrades(trades)}
             />
 
           </div>

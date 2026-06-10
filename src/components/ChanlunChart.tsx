@@ -607,14 +607,34 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
       return;
     }
 
-    const markers = backtestTrades.map(t => ({
-      time: dateToTime(t.date),
-      position: t.type === 'BUY' ? 'belowBar' as const : 'aboveBar' as const,
-      shape: t.type === 'BUY' ? 'arrowUp' as const : 'arrowDown' as const,
-      color: t.type === 'BUY' ? '#22c55e' : '#ef4444',
-      text: t.signalType,
-      size: 1.5,
-    }));
+    const klineMap = new Map<string, Kline>();
+    for (const k of klines) klineMap.set(k.date, k);
+
+    const markers = backtestTrades.map(t => {
+      const k = klineMap.get(t.date);
+      if (!k) {
+        return {
+          time: dateToTime(t.date),
+          position: 'belowBar' as const,
+          shape: 'arrowUp' as const,
+          color: t.type === 'BUY' ? '#ef4444' : '#22c55e',
+          text: t.type === 'BUY' ? '买入' : '卖出',
+          size: 1.4,
+        };
+      }
+      const range = k.high - k.low;
+      const offset = range * 1.5;
+      const isBuy = t.type === 'BUY';
+      return {
+        time: dateToTime(t.date),
+        position: (isBuy ? 'atPriceBottom' : 'atPriceTop') as 'atPriceBottom' | 'atPriceTop',
+        shape: (isBuy ? 'arrowUp' : 'arrowDown') as 'arrowUp' | 'arrowDown',
+        color: isBuy ? '#ef4444' : '#22c55e',
+        text: isBuy ? '买入' : '卖出',
+        price: isBuy ? k.low - offset : k.high + offset,
+        size: 1.4,
+      };
+    });
 
     tradeMarkersPluginRef.current.setMarkers(markers);
   }, [backtestTrades, klines, showTradeSignals]);
@@ -963,17 +983,6 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
                   分型
                 </button>
                 <button
-                  onClick={() => setShowTradeSignals(!showTradeSignals)}
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
-                    showTradeSignals && backtestTrades && backtestTrades.length > 0 ? 'bg-emerald-500/90 text-white shadow-sm shadow-emerald-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
-                  }`}
-                  title="切换回测买卖点"
-                  id="toggle-trades"
-                >
-                  <span className={`w-1 h-1 rounded-full ${showTradeSignals && backtestTrades && backtestTrades.length > 0 ? 'bg-white' : 'bg-emerald-400'}`} />
-                  买卖点
-                </button>
-                <button
                   onClick={() => setShowStrokes(!showStrokes)}
                   className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
                     showStrokes ? 'bg-amber-500/90 text-white shadow-sm shadow-amber-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
@@ -1005,6 +1014,17 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
                 >
                   <span className={`w-1 h-1 rounded-full ${showHubs ? 'bg-white' : 'bg-indigo-400'}`} />
                   中枢
+                </button>
+                <button
+                  onClick={() => setShowTradeSignals(!showTradeSignals)}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                    showTradeSignals && backtestTrades && backtestTrades.length > 0 ? 'bg-emerald-500/90 text-white shadow-sm shadow-emerald-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                  }`}
+                  title="切换回测买卖点"
+                  id="toggle-trades"
+                >
+                  <span className={`w-1 h-1 rounded-full ${showTradeSignals && backtestTrades && backtestTrades.length > 0 ? 'bg-white' : 'bg-emerald-400'}`} />
+                  买卖点
                 </button>
               </div>
               <div className="flex items-center gap-1 bg-zinc-800/15 rounded-xl px-2.5 py-1.5 border border-zinc-700/20">
@@ -1138,6 +1158,17 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
               >
                 <span className={`w-1 h-1 rounded-full ${showHubs ? 'bg-white' : 'bg-indigo-400'}`} />
                 中枢
+              </button>
+              <button
+                onClick={() => setShowTradeSignals(!showTradeSignals)}
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showTradeSignals && backtestTrades && backtestTrades.length > 0 ? 'bg-emerald-500/90 text-white shadow-sm shadow-emerald-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                }`}
+                title="切换回测买卖点"
+                id="toggle-trades"
+              >
+                <span className={`w-1 h-1 rounded-full ${showTradeSignals && backtestTrades && backtestTrades.length > 0 ? 'bg-white' : 'bg-emerald-400'}`} />
+                买卖点
               </button>
             </div>
             <div className="flex flex-wrap items-center gap-1 mobile-flat bg-zinc-800/15 md:rounded-xl px-1.5 md:px-2.5 py-1 md:py-1.5 md:border md:border-zinc-700/20">
@@ -1277,6 +1308,17 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
               >
                 <span className={`w-1 h-1 rounded-full ${showHubs ? 'bg-white' : 'bg-indigo-400'}`} />
                 中枢
+              </button>
+              <button
+                onClick={() => setShowTradeSignals(!showTradeSignals)}
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showTradeSignals && backtestTrades && backtestTrades.length > 0 ? 'bg-emerald-500/90 text-white shadow-sm shadow-emerald-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                }`}
+                title="切换回测买卖点"
+                id="toggle-trades"
+              >
+                <span className={`w-1 h-1 rounded-full ${showTradeSignals && backtestTrades && backtestTrades.length > 0 ? 'bg-white' : 'bg-emerald-400'}`} />
+                买卖点
               </button>
             </div>
             <div className="flex flex-wrap items-center gap-1 mobile-flat bg-zinc-800/15 md:rounded-xl px-1.5 md:px-2.5 py-1 md:py-1.5 md:border md:border-zinc-700/20">
