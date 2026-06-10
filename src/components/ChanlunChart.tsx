@@ -1431,7 +1431,75 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
         <div
           ref={chartContainerRef}
           className="w-full h-72 sm:h-96 md:sm:h-[480px] bg-zinc-950/80 md:rounded-b-xl md:border md:border-zinc-800 relative overflow-hidden select-none"
-        />
+        >
+          {/* Indicator values overlay - top left */}
+          {(showMA5 || showMA20 || showBOLL || showMACD || Object.values(userIndicatorVisibility).some(v => v)) && (
+            <div className="absolute top-1 left-1 z-10 flex flex-row gap-1 pointer-events-none">
+              {(() => {
+                const idx = hoveredData
+                  ? klines.findIndex(k => k.date === hoveredData.date)
+                  : klines.length - 1;
+                if (idx < 0) return null;
+                const items: { key: string; label: string; value: string; color: string }[] = [];
+                if (showMA5 && idx >= 0 && ma5Values[idx] !== null) {
+                  items.push({ key: 'ma5', label: 'MA5', value: ma5Values[idx]!.toFixed(2), color: '#22d3ee' });
+                }
+                if (showMA20 && idx >= 0 && ma20Values[idx] !== null) {
+                  items.push({ key: 'ma20', label: 'MA20', value: ma20Values[idx]!.toFixed(2), color: '#f472b6' });
+                }
+                if (showBOLL && idx >= 0) {
+                  const b = bollValues;
+                  if (b.upper[idx] !== null && b.middle[idx] !== null && b.lower[idx] !== null) {
+                    items.push({
+                      key: 'boll', label: 'BOLL',
+                      value: `U:${b.upper[idx]!.toFixed(1)} M:${b.middle[idx]!.toFixed(1)} L:${b.lower[idx]!.toFixed(1)}`,
+                      color: '#a78bfa',
+                    });
+                  }
+                }
+                if (showMACD && idx >= 0) {
+                  const m = macdValues;
+                  if (m.dif[idx] !== null && m.dea[idx] !== null && m.histogram[idx] !== null) {
+                    items.push({
+                      key: 'macd', label: 'MACD',
+                      value: `DIF:${m.dif[idx]!.toFixed(2)} DEA:${m.dea[idx]!.toFixed(2)} Hist:${m.histogram[idx]!.toFixed(2)}`,
+                      color: '#fbbf24',
+                    });
+                  }
+                }
+                // User-defined indicators
+                const dateKey = hoveredData ? hoveredData.date : klines[klines.length - 1].date;
+                for (const [indicatorId] of Object.entries(userIndicatorResults)) {
+                  const indicator = allUserIndicators.find(i => i.id === indicatorId);
+                  if (!indicator || !userIndicatorVisibility[indicatorId]) continue;
+                  const result = userIndicatorResults[indicatorId];
+                  for (const series of result.result.series) {
+                    const point = series.data.find(p => p.time === dateKey);
+                    if (point?.value !== null && point?.value !== undefined) {
+                      items.push({
+                        key: `${indicatorId}-${series.id}`,
+                        label: `${indicator.name}${series.name ? `(${series.name})` : ''}`,
+                        value: point.value.toFixed(2),
+                        color: series.type === 'line'
+                          ? (series as import('../types/indicator').UserIndicatorLineSeries).color
+                          : '#34d399',
+                      });
+                    }
+                  }
+                }
+                return items.map(item => (
+                  <span
+                    key={item.key}
+                    className="text-[10px] font-mono font-medium leading-tight bg-zinc-950/70 px-1 py-px rounded"
+                    style={{ color: item.color }}
+                  >
+                    {item.label} {item.value}
+                  </span>
+                ));
+              })()}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Indicator details on hover */}
