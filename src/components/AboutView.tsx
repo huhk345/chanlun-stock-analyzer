@@ -25,8 +25,8 @@ const FEATURES = [
   },
   {
     icon: Database,
-    title: '回测与历史记录',
-    desc: '本地浏览器持久化搜索历史与回测任务, 支持 Supabase 云端账户同步量化策略。',
+    title: '策略回测',
+    desc: '本地浏览器持久化回测任务配置, 支持 Supabase 云端账户同步量化策略。',
   },
 ];
 

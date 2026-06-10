@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { createChart, createSeriesMarkers, CandlestickSeries, LineSeries, HistogramSeries, IChartApi, ISeriesApi, ISeriesMarkersPluginApi, CandlestickData, LineData, HistogramData, Time, ColorType, CrosshairMode } from 'lightweight-charts';
 import { AlertCircle, TrendingUp, TrendingDown, Briefcase, User, ChevronRight, AlertTriangle, ExternalLink, FileText, Plus } from 'lucide-react';
-import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo } from '../types/stock';
+import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade } from '../types/stock';
 import { calculateSMA, calculateBollingerBands, calculateMACD } from '../utils/indicators';
 import { userIndicators } from '../indicators/user';
 import { loadStoredIndicators } from '../utils/indicatorLoader';
@@ -28,13 +28,14 @@ interface ChanlunChartProps {
   industry?: string;
   actualController?: string;
   reductionPlans?: ReductionPlan[];
+  backtestTrades?: BacktestTrade[];
 }
 
 function dateToTime(dateStr: string): Time {
   return dateStr as Time;
 }
 
-export default function ChanlunChart({ klines, fractions, strokes, segments, hubs, symbol, stockBasicInfo, industry, actualController, reductionPlans }: ChanlunChartProps) {
+export default function ChanlunChart({ klines, fractions, strokes, segments, hubs, symbol, stockBasicInfo, industry, actualController, reductionPlans, backtestTrades }: ChanlunChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -51,6 +52,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
   const strokeSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const segmentSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const tradeMarkersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
 
   // User-defined indicator series refs - stores series by indicatorId-seriesId
   const userIndicatorSeriesRefs = useRef<Record<string, ISeriesApi<'Line'> | ISeriesApi<'Histogram'>>>({});
@@ -61,6 +63,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
   const [showSegments, setShowSegments] = useState(true);
   const [showHubs, setShowHubs] = useState(true);
   const [showFractions, setShowFractions] = useState(false);
+  const [showTradeSignals, setShowTradeSignals] = useState(true);
 
   // Display triggers for indicators
   const [showMA5, setShowMA5] = useState(false);
@@ -308,6 +311,10 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
     // Markers plugin for buy/sell signals
     const markersPlugin = createSeriesMarkers(candleSeries, []);
     markersPluginRef.current = markersPlugin;
+
+    // Trade markers plugin for backtest buy/sell points
+    const tradeMarkersPlugin = createSeriesMarkers(candleSeries, []);
+    tradeMarkersPluginRef.current = tradeMarkersPlugin;
 
     // Crosshair move handler
     chart.subscribeCrosshairMove((param) => {
@@ -590,6 +597,27 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
 
     markersPluginRef.current.setMarkers(markers);
   }, [fractions, klines, showFractions]);
+
+  // Update backtest trade markers on candlestick series
+  useEffect(() => {
+    if (!tradeMarkersPluginRef.current || klines.length === 0) return;
+
+    if (!showTradeSignals || !backtestTrades || backtestTrades.length === 0) {
+      tradeMarkersPluginRef.current.setMarkers([]);
+      return;
+    }
+
+    const markers = backtestTrades.map(t => ({
+      time: dateToTime(t.date),
+      position: t.type === 'BUY' ? 'belowBar' as const : 'aboveBar' as const,
+      shape: t.type === 'BUY' ? 'arrowUp' as const : 'arrowDown' as const,
+      color: t.type === 'BUY' ? '#22c55e' : '#ef4444',
+      text: t.signalType,
+      size: 1.5,
+    }));
+
+    tradeMarkersPluginRef.current.setMarkers(markers);
+  }, [backtestTrades, klines, showTradeSignals]);
 
   // Toggle visibility
   useEffect(() => {
@@ -933,6 +961,17 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
                 >
                   <span className={`w-1 h-1 rounded-full ${showFractions ? 'bg-white' : 'bg-rose-400'}`} />
                   分型
+                </button>
+                <button
+                  onClick={() => setShowTradeSignals(!showTradeSignals)}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                    showTradeSignals && backtestTrades && backtestTrades.length > 0 ? 'bg-emerald-500/90 text-white shadow-sm shadow-emerald-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                  }`}
+                  title="切换回测买卖点"
+                  id="toggle-trades"
+                >
+                  <span className={`w-1 h-1 rounded-full ${showTradeSignals && backtestTrades && backtestTrades.length > 0 ? 'bg-white' : 'bg-emerald-400'}`} />
+                  买卖点
                 </button>
                 <button
                   onClick={() => setShowStrokes(!showStrokes)}
@@ -1501,46 +1540,6 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
           )}
         </div>
       </div>
-
-      {/* Indicator details on hover */}
-      {hoveredData && (showMA5 || showMA20 || showBOLL || showMACD || Object.values(userIndicatorVisibility).some(v => v)) && (
-        <div className="mobile-flat mobile-px-2 mobile-py-2 bg-zinc-950 md:p-3 md:rounded-xl md:border md:border-zinc-800 text-[11px] font-mono text-zinc-400 space-y-0.5">
-          <p className="font-semibold text-slate-200">ACTIVE INDICATORS</p>
-          {showMA5 && hoveredData.ma5 !== undefined && (
-            <p>MA5: <span className="text-cyan-400 font-medium">${hoveredData.ma5.toFixed(2)}</span></p>
-          )}
-          {showMA20 && hoveredData.ma20 !== undefined && (
-            <p>MA20: <span className="text-pink-400 font-medium">${hoveredData.ma20.toFixed(2)}</span></p>
-          )}
-          {showBOLL && hoveredData.bollUpper !== undefined && (
-            <p>BOLL: <span className="text-purple-400 font-medium font-sans">U: {hoveredData.bollUpper.toFixed(1)} / M: {hoveredData.bollMiddle?.toFixed(1)} / L: {hoveredData.bollLower?.toFixed(1)}</span></p>
-          )}
-          {showMACD && hoveredData.macdDif !== undefined && (
-            <p>MACD: <span className="text-amber-400 font-medium">DIF: {hoveredData.macdDif.toFixed(2)} / DEA: {hoveredData.macdDea?.toFixed(2)} / Hist: {hoveredData.macdHist?.toFixed(2)}</span></p>
-          )}
-          {/* User-defined indicators */}
-          {hoveredData.userIndicators && Object.entries(hoveredData.userIndicators).map(([indicatorId, seriesValues]) => {
-            const indicator = allUserIndicators.find(i => i.id === indicatorId);
-            if (!indicator || !userIndicatorVisibility[indicatorId]) return null;
-            const result = userIndicatorResults[indicatorId];
-            if (!result) return null;
-            
-            return (
-              <div key={indicatorId}>
-                {result.result.series.map(series => {
-                  const value = seriesValues[series.id];
-                  if (value === null || value === undefined) return null;
-                  return (
-                    <p key={series.id}>
-                      {indicator.name} ({series.name}): <span className="text-emerald-400 font-medium">{value.toFixed(2)}</span>
-                    </p>
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
-      )}
 
       {/* Indicator Dialog */}
       <IndicatorDialog

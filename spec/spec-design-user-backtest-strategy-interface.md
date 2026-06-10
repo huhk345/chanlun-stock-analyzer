@@ -70,16 +70,28 @@ Assumptions:
 - **REQ-008**: User-defined strategy modules shall export a `UserStrategyDefinition`.
 - **REQ-009**: User-defined strategies shall be registered in a single registry file so the backtest UI can discover them without importing individual strategy modules.
 - **REQ-010**: The backtest UI shall allow the user to select one registered strategy before running a backtest.
-- **REQ-011**: Strategy parameter values shall come from metadata-defined defaults until future UI support allows users to edit them.
-- **REQ-012**: The backtest runner shall call the strategy once per eligible K-line, from oldest to newest.
-- **REQ-013**: The runner shall pass only historical data up to and including the current K-line to the strategy.
-- **REQ-014**: The runner shall not allow a strategy to inspect future K-lines through its input.
-- **REQ-015**: The runner shall convert accepted strategy decisions into `BacktestTrade` records.
-- **REQ-016**: The runner shall reject invalid decisions without crashing the backtest.
-- **REQ-017**: The runner shall isolate strategy errors and return a backtest result with diagnostics instead of breaking the React UI.
-- **REQ-018**: The strategy function shall be usable by AI assistants without requiring edits to the backtest runner, chart component, or Supabase utilities.
-- **REQ-019**: Strategy IDs shall be stable, unique, lowercase kebab-case strings.
-- **REQ-020**: The implementation shall preserve existing `BacktestResult` fields and may add optional fields only when needed for diagnostics.
+- **REQ-011**: The backtest UI shall allow the user to select indicators from a list of available indicators for the chosen strategy.
+- **REQ-012**: The backtest UI shall display indicator selection controls with checkboxes or multi-select for each available indicator.
+- **REQ-013**: Selected indicators shall be pre-calculated and passed to the strategy through the `indicators` cache.
+- **REQ-014**: Strategy parameter values shall come from metadata-defined defaults until future UI support allows users to edit them.
+- **REQ-015**: The backtest runner shall call the strategy once per eligible K-line, from oldest to newest.
+- **REQ-016**: The runner shall pass only historical data up to and including the current K-line to the strategy.
+- **REQ-017**: The runner shall not allow a strategy to inspect future K-lines through its input.
+- **REQ-018**: The runner shall convert accepted strategy decisions into `BacktestTrade` records.
+- **REQ-019**: The runner shall reject invalid decisions without crashing the backtest.
+- **REQ-020**: The runner shall isolate strategy errors and return a backtest result with diagnostics instead of breaking the React UI.
+- **REQ-021**: The strategy function shall be usable by AI assistants without requiring edits to the backtest runner, chart component, or Supabase utilities.
+- **REQ-022**: Strategy IDs shall be stable, unique, lowercase kebab-case strings.
+- **REQ-023**: The implementation shall preserve existing `BacktestResult` fields and may add optional fields only when needed for diagnostics.
+- **REQ-024**: The backtest UI shall provide an AI-assisted strategy creation dialog where users describe trading ideas in natural language and AI generates a runnable strategy module.
+- **REQ-025**: The strategy creation dialog shall reuse the same AI model selection logic as the existing `IndicatorDialog`.
+- **REQ-026**: Generated strategies shall be saved to local storage and persist across browser sessions.
+- **REQ-027**: Stored strategies shall appear in the strategy selection dropdown alongside source-controlled strategies.
+- **REQ-028**: The strategy creation dialog shall validate generated code against the `UserStrategyDefinition` contract before allowing save.
+- **REQ-029**: The backtest UI shall support a day-by-day stepping mode where the user can advance through the backtest one K-line at a time.
+- **REQ-030**: The day-by-day stepper shall support forward, backward, and jump-to navigation.
+- **REQ-031**: The day-by-day stepper shall display the strategy decision, account state, position state, and any executed trade at each step.
+- **REQ-032**: The indicator selection UI shall include indicators created through the `IndicatorDialog` (stored in local storage) alongside source-controlled indicators.
 
 - **CON-001**: User-defined strategies shall run in the browser bundle as normal TypeScript modules. The project shall not use `eval`, `new Function`, remote code execution, or dynamic code strings for this feature.
 - **CON-002**: The runner shall simulate long-only trading. It shall not allow negative cash, negative shares, margin, or short positions.
@@ -88,6 +100,7 @@ Assumptions:
 - **CON-005**: The runner shall reject `NaN`, `Infinity`, `-Infinity`, zero, and negative order amounts.
 - **CON-006**: The runner shall use the same date string format as `Kline.date` for all generated trades.
 - **CON-007**: New code shall preserve TypeScript type safety and pass `npm run lint`.
+- **CON-008**: Source-controlled strategies (in `src/strategies/user/`) shall run as normal TypeScript modules without `eval` or `new Function`. Locally stored strategies may use `new Function` for runtime evaluation since the code is user-controlled and generated by AI following the contract.
 
 - **GUD-001**: Put reusable strategy math helpers in `src/utils/` only when they are shared by more than one strategy.
 - **GUD-002**: Put user-defined strategy modules under `src/strategies/user/`.
@@ -107,7 +120,12 @@ src/types/strategy.ts
 src/strategies/user/index.ts
 src/strategies/user/example-moving-average-cross.ts
 src/utils/backtestRunner.ts
+src/utils/backtestStepper.ts
 src/utils/strategyAdapter.ts
+src/utils/strategyStorage.ts
+src/utils/strategyLoader.ts
+src/components/BacktestManager.tsx
+src/components/StrategyDialog.tsx
 ```
 
 Responsibilities:
@@ -119,7 +137,11 @@ Responsibilities:
 | `src/strategies/user/*.ts` | Contains individual user-defined strategy definitions. |
 | `src/utils/strategyAdapter.ts` | Validates strategy definitions and normalizes decisions. |
 | `src/utils/backtestRunner.ts` | Iterates over K-lines, calls the selected strategy, simulates fills, and returns a `BacktestResult`. |
-| `src/components/BacktestManager.tsx` | Lets users select a strategy, run a backtest, display trades, and save results. |
+| `src/utils/backtestStepper.ts` | Provides day-by-day stepping through a backtest with forward, backward, and jump navigation. |
+| `src/utils/strategyStorage.ts` | Manages local storage persistence for user strategies. |
+| `src/utils/strategyLoader.ts` | Loads and parses stored strategies at runtime. |
+| `src/components/BacktestManager.tsx` | Lets users select a strategy, run a backtest, step day-by-day, display trades, and save results. |
+| `src/components/StrategyDialog.tsx` | Dialog UI for AI-assisted strategy creation and storage management. |
 
 ### 4.2 Fixed Function Signature
 
@@ -144,6 +166,10 @@ export interface UserStrategyInput {
   params: Readonly<Record<string, StrategyParamValue>>;
   indicators?: Readonly<IndicatorCache>;
   chanlun?: Readonly<ChanLunCache>;
+  /** Currency for the backtest (e.g., 'CNY', 'USD') */
+  currency: string;
+  /** Initial money/cash for the backtest */
+  initialCash: number;
 }
 
 export type UserStrategyFunction = (
@@ -161,6 +187,8 @@ Input rules:
 - `params` shall include resolved parameter values after applying defaults.
 - `indicators` shall contain pre-calculated indicator values for all K-lines up to and including `currentIndex`.
 - `chanlun` shall contain ChanLun analysis (strokes, segments, hubs) for K-lines up to and including `currentIndex`.
+- `currency` shall specify the account currency (e.g., 'CNY', 'USD') for the backtest.
+- `initialCash` shall specify the initial money/cash amount for the backtest.
 - The strategy shall treat all input objects and arrays as immutable.
 
 ### 4.3 Account, Position, and Trade Snapshot Contracts
@@ -170,6 +198,8 @@ export interface BacktestAccountState {
   initialCash: number;
   cash: number;
   equity: number;
+  /** Currency for the account (e.g., 'CNY', 'USD') */
+  currency: string;
 }
 
 export interface BacktestPositionState {
@@ -208,9 +238,18 @@ export interface UserStrategyDefinition {
   description?: string;
   defaultSelected?: boolean;
   params?: readonly UserStrategyParamDefinition[];
+  availableIndicators?: readonly AvailableIndicator[];
   requiredIndicators?: readonly RequiredIndicator[];
   requiresChanLun?: boolean;
   decide: UserStrategyFunction;
+}
+
+export interface AvailableIndicator {
+  id: string;
+  name: string;
+  description?: string;
+  defaultSelected?: boolean;
+  params?: readonly UserStrategyParamDefinition[];
 }
 
 export interface UserStrategyParamDefinition {
@@ -236,10 +275,16 @@ Definition rules:
 - `name` shall be short enough to fit in strategy selection controls.
 - `params` shall define every parameter used by `decide`.
 - `decide` shall not read missing parameters without applying a local fallback.
-- `requiredIndicators` shall list all indicators the strategy needs, enabling pre-calculation.
+- `availableIndicators` shall list indicators the user can select from in the backtest UI.
+- `availableIndicators[].id` shall reference an indicator ID from the indicator registry.
+- `availableIndicators[].defaultSelected` shall determine if the indicator is pre-selected in the UI.
+- `requiredIndicators` shall list indicators that are always calculated regardless of user selection.
+- `requiredIndicators` shall be merged with user-selected indicators from `availableIndicators` during backtest execution.
 - `requiresChanLun` shall be `true` if the strategy uses ChanLun analysis (strokes, segments, hubs).
 
 ### 4.5 Decision Contract
+
+The strategy decision returns the action to take and the amount of shares to trade:
 
 ```ts
 export type UserStrategyAction = 'BUY' | 'SELL' | 'HOLD';
@@ -250,14 +295,20 @@ export type UserStrategyAmountUnit =
   | 'percent';
 
 export interface UserStrategyDecision {
+  /** The trading action: BUY, SELL, or HOLD */
   action: UserStrategyAction;
+  /** The amount to trade (required for BUY and SELL) */
   amount?: UserStrategyAmount;
+  /** Optional reason explaining the decision */
   reason?: string;
+  /** Optional confidence level from 0 to 1 */
   confidence?: number;
 }
 
 export interface UserStrategyAmount {
+  /** Unit of the amount: 'cash' (currency), 'shares', or 'percent' */
   unit: UserStrategyAmountUnit;
+  /** Numeric value of the amount */
   value: number;
 }
 ```
@@ -275,7 +326,45 @@ Decision rules:
 - `confidence` is optional and shall be a number from `0` through `1` when provided.
 - `reason` is optional and should be short enough to display in the trade ledger.
 
-### 4.6 Registry Contract
+### 4.6 Indicator Cache Contract
+
+The indicator cache provides pre-calculated indicator values to the strategy:
+
+```ts
+export interface IndicatorCache {
+  byId: Readonly<Record<string, IndicatorData>>;
+}
+
+export interface IndicatorData {
+  id: string;
+  name: string;
+  series: readonly IndicatorSeries[];
+}
+
+export interface IndicatorSeries {
+  id: string;
+  name: string;
+  type: 'line' | 'histogram';
+  data: readonly IndicatorPoint[];
+}
+
+export interface IndicatorPoint {
+  time: string;
+  value: number | null;
+}
+```
+
+Indicator cache rules:
+
+- `byId` shall be keyed by indicator ID.
+- Each `IndicatorData` shall contain the calculated output for one indicator.
+- `series[].data` shall contain values for all K-lines up to and including the current K-line when passed to the strategy.
+- `series[].data[].time` shall match K-line dates.
+- `series[].data[].value` may be `null` for gaps or undefined values.
+- The runner shall pre-calculate all indicators in `requiredIndicators` plus user-selected indicators from `availableIndicators` before backtest iteration.
+- The runner shall pass the indicator cache through `UserStrategyInput.indicators`.
+
+### 4.7 Registry Contract
 
 The registry shall export an array:
 
@@ -295,7 +384,7 @@ Registry rules:
 - The first strategy with `defaultSelected: true` shall be selected by default in the backtest UI.
 - If no strategy has `defaultSelected: true`, the first registered strategy shall be selected by default.
 
-### 4.7 Backtest Runner Contract
+### 4.8 Backtest Runner Contract
 
 The runner should expose a function with this shape:
 
@@ -308,6 +397,8 @@ export interface RunBacktestInput {
   symbol: string;
   userId: string;
   initialCash: number;
+  /** Currency for the backtest (e.g., 'CNY', 'USD') */
+  currency: string;
   stopLossPercent?: number;
   strategy: UserStrategyDefinition;
   params?: Readonly<Record<string, unknown>>;
@@ -337,6 +428,235 @@ Runner rules:
 - The runner shall use the selected strategy `id` or `name` as the `signalType` for generated `BacktestTrade` records.
 - The runner shall use `reason` when available to enrich diagnostics or future trade display fields.
 
+### 4.9 Indicator Selection UI Contract
+
+The backtest UI shall provide indicator selection controls:
+
+```ts
+export interface IndicatorSelectionState {
+  strategyId: string;
+  selectedIndicatorIds: readonly string[];
+  indicatorParams: Readonly<Record<string, Record<string, StrategyParamValue>>>;
+}
+```
+
+UI rules:
+
+- When a strategy is selected, the UI shall display all indicators from `strategy.availableIndicators`.
+- Each indicator shall show as a checkbox with the indicator `name` and optional `description`.
+- Indicators with `defaultSelected: true` shall be pre-checked.
+- The user may check or uncheck any indicator in `availableIndicators`.
+- Indicators in `requiredIndicators` shall not appear in the selection UI since they are always calculated.
+- If an indicator has `params`, the UI may display parameter inputs for each param definition.
+- The selected indicator IDs shall be passed to the backtest runner as part of the run configuration.
+- The UI shall preserve indicator selection state when switching between strategies if possible.
+- The UI shall reset to `defaultSelected` values when the user explicitly requests a reset.
+- The indicator selection UI shall also include indicators created through the `IndicatorDialog` (stored in local storage) alongside source-controlled indicators from the registry.
+
+### 4.10 AI-Assisted Strategy Creation Contract
+
+The backtest UI shall provide an AI-assisted strategy creation dialog, similar to the existing `IndicatorDialog`, where users describe trading ideas in natural language and AI generates a runnable strategy module.
+
+```ts
+export interface StrategyDialogRequest {
+  /** User's natural language description of the trading strategy idea */
+  userDescription: string;
+  /** Optional context for generation */
+  context?: {
+    symbol?: string;
+    existingStrategyIds?: readonly string[];
+    availableIndicatorIds?: readonly string[];
+  };
+}
+
+export interface StrategyDialogResponse {
+  /** Whether generation succeeded */
+  success: boolean;
+  /** Generated strategy definition (if successful) */
+  strategy?: UserStrategyDefinition;
+  /** Generated TypeScript code (if successful) */
+  code?: string;
+  /** Explanation of the generated strategy */
+  explanation?: string;
+  /** Errors (if unsuccessful) */
+  errors?: readonly string[];
+  /** Suggestions for improvement */
+  suggestions?: readonly string[];
+  /** Whether saved to local storage */
+  savedToStorage?: boolean;
+  /** Storage ID if saved */
+  storageId?: string;
+}
+
+export interface StoredStrategy {
+  /** Unique identifier */
+  id: string;
+  /** Display name */
+  name: string;
+  /** Optional description */
+  description?: string;
+  /** Full TypeScript source code */
+  code: string;
+  /** Creation timestamp (ISO string) */
+  createdAt: string;
+  /** Last update timestamp (ISO string) */
+  updatedAt: string;
+  /** Whether this strategy is selected by default */
+  defaultSelected?: boolean;
+  /** Parameter definitions */
+  params?: readonly UserStrategyParamDefinition[];
+  /** Available indicators this strategy can use */
+  availableIndicators?: readonly AvailableIndicator[];
+  /** Required indicators this strategy always needs */
+  requiredIndicators?: readonly RequiredIndicator[];
+  /** Whether this strategy requires ChanLun analysis */
+  requiresChanLun?: boolean;
+}
+
+export interface StrategyStorageData {
+  /** Storage format version */
+  version: number;
+  /** Stored strategies */
+  strategies: StoredStrategy[];
+}
+```
+
+Dialog UI rules:
+
+- The backtest UI shall include a "Create Strategy" button that opens the strategy creation dialog.
+- The dialog shall provide a text area for the user to describe their trading idea in natural language.
+- The dialog shall provide an AI model selector, reusing the same model selection logic as `IndicatorDialog`.
+- When the user submits their idea, the dialog shall call the AI to generate a `UserStrategyDefinition` module.
+- The AI prompt shall include the fixed `UserStrategyDefinition` interface, the `UserStrategyInput` contract, and the `UserStrategyDecision` contract from this specification.
+- The AI prompt shall also include the list of available indicators (from both the registry and local storage) so the generated strategy can reference them.
+- The generated code shall be shown in a preview area with syntax highlighting before saving.
+- The user may edit the generated code before saving.
+- The dialog shall validate the generated code against the `UserStrategyDefinition` contract before allowing save.
+- The dialog shall save the strategy to local storage using `StrategyStorageData`.
+- Saved strategies shall persist across browser sessions and be automatically loaded on app startup.
+- The dialog shall provide a "Manage" tab to view, edit, delete, export, and import stored strategies.
+- Stored strategies shall appear in the strategy selection dropdown alongside source-controlled strategies.
+- When a stored strategy is selected, its `availableIndicators` shall be shown in the indicator selection UI.
+- The dialog shall support streaming code generation with real-time preview.
+
+AI prompt template for strategy generation:
+
+```text
+Implement a user-defined backtest strategy for this TypeScript project.
+
+Use exactly the UserStrategyDefinition interface from src/types/strategy.ts.
+Do not edit the backtest runner, chart, React components, or storage code.
+Create one strategy module that exports a UserStrategyDefinition.
+
+Available indicators the strategy can use:
+[List available indicator IDs and names here]
+
+Strategy rules:
+[User's natural language description here]
+
+The decide function receives UserStrategyInput with:
+- klines: historical K-line data up to current index
+- currentIndex: zero-based index of current K-line
+- currentKline: the current K-line being evaluated
+- account: current account state (cash, equity, currency)
+- position: current position state (shares, averageCost, marketValue)
+- trades: list of previously executed trades
+- params: resolved parameter values
+- indicators: pre-calculated indicator cache (if any selected)
+- chanlun: ChanLun analysis cache (if requiresChanLun is true)
+- currency: the account currency (e.g., 'CNY', 'USD')
+- initialCash: the initial money/cash amount for the backtest
+
+Return UserStrategyDecision with:
+- action: 'BUY', 'SELL', or 'HOLD' (the trading action to take)
+- amount: { unit: 'cash' | 'shares' | 'percent', value: number } (required for BUY/SELL, specifies how much to trade)
+- reason: optional string explaining the decision
+- confidence: optional number 0-1
+
+Use percent amounts unless the strategy specifically needs cash or shares.
+Keep the decide function pure and deterministic.
+```
+
+### 4.11 Day-by-Day Backtest Stepping Contract
+
+The backtest UI shall support a day-by-day stepping mode where the user can advance through the backtest one K-line at a time, observing the strategy decision, account state, and position state at each step.
+
+```ts
+export interface BacktestStepState {
+  /** Current step index (0-based, maps to klines array index) */
+  currentStepIndex: number;
+  /** Total number of K-lines in the backtest range */
+  totalSteps: number;
+  /** The K-line being evaluated at the current step */
+  currentKline: Kline;
+  /** The strategy decision at the current step */
+  decision: UserStrategyDecision | null;
+  /** Account state before applying the current step's decision */
+  accountBefore: BacktestAccountState;
+  /** Account state after applying the current step's decision */
+  accountAfter: BacktestAccountState;
+  /** Position state before applying the current step's decision */
+  positionBefore: BacktestPositionState;
+  /** Position state after applying the current step's decision */
+  positionAfter: BacktestPositionState;
+  /** Trade executed at this step (if any) */
+  tradeExecuted: BacktestTradeSnapshot | null;
+  /** Indicator values at the current step */
+  indicatorSnapshot: Readonly<IndicatorCache> | null;
+  /** ChanLun analysis at the current step */
+  chanlunSnapshot: Readonly<ChanLunCache> | null;
+  /** Diagnostic messages for this step */
+  diagnostics: readonly BacktestDiagnostic[];
+  /** Whether the backtest has completed */
+  isFinished: boolean;
+}
+
+export interface BacktestStepperInput {
+  klines: readonly Kline[];
+  symbol: string;
+  userId: string;
+  initialCash: number;
+  /** Currency for the backtest (e.g., 'CNY', 'USD') */
+  currency: string;
+  stopLossPercent?: number;
+  strategy: UserStrategyDefinition;
+  params?: Readonly<Record<string, unknown>>;
+  selectedIndicatorIds?: readonly string[];
+}
+
+export type BacktestStepper = {
+  /** Initialize the stepper and return the initial state (before any step) */
+  start(): BacktestStepState;
+  /** Advance one step and return the new state */
+  stepForward(): BacktestStepState;
+  /** Go back one step and return the previous state */
+  stepBackward(): BacktestStepState;
+  /** Jump to a specific step index */
+  jumpTo(index: number): BacktestStepState;
+  /** Run all remaining steps and return the final result */
+  runAll(): RunBacktestOutput;
+  /** Get the current step state without advancing */
+  getCurrentState(): BacktestStepState;
+  /** Whether the stepper has been initialized */
+  isStarted: boolean;
+};
+```
+
+Stepper rules:
+
+- The stepper shall maintain an internal history of all step states to support backward navigation.
+- `stepForward` shall call the strategy's `decide` function for the next K-line, simulate the fill, and return the updated state.
+- `stepBackward` shall restore the previous step state from history without re-executing the strategy.
+- `jumpTo` shall replay from the beginning up to the target index if the target is not in history, or restore from history if available.
+- `runAll` shall execute all remaining steps from the current position and return a standard `RunBacktestOutput`.
+- The stepper shall pre-calculate all selected indicators before the first step, so `indicatorSnapshot` is available at every step.
+- The stepper shall pre-calculate ChanLun analysis if the strategy requires it.
+- The UI shall display the current K-line highlighted on the chart when stepping.
+- The UI shall display the strategy decision, account state, position state, and any executed trade for the current step.
+- The UI shall provide controls: Step Forward, Step Backward, Jump To (date or index), Run All, and Reset.
+- The UI shall show a progress bar indicating the current step position within the total K-line range.
+- The UI shall allow the user to click on a specific date in the trade ledger or chart to jump to that step.
+
 ## 5. Acceptance Criteria
 
 - **AC-001**: Given a registered strategy with `decide(input): UserStrategyDecision`, When the user runs a backtest, Then the runner shall call the strategy once per eligible K-line in chronological order.
@@ -349,6 +669,29 @@ Runner rules:
 - **AC-008**: Given a strategy throws an error, When the runner processes that K-line, Then the runner shall stop calling that strategy, return the trades already generated, and include an error diagnostic.
 - **AC-009**: Given an AI assistant implements a strategy module using this spec, When the module is registered, Then no changes shall be required in `BacktestManager.tsx` other than normal strategy selection and execution support.
 - **AC-010**: Given no strategy generates buy or sell decisions, When the backtest completes, Then the result shall show zero trades, unchanged cash, and zero total return.
+- **AC-011**: Given a strategy defines `availableIndicators`, When the backtest UI renders, Then the UI shall display a list of selectable indicators with checkboxes.
+- **AC-012**: Given a strategy defines `availableIndicators` with `defaultSelected: true`, When the backtest UI renders, Then those indicators shall be pre-checked.
+- **AC-013**: Given the user selects indicators from `availableIndicators`, When the backtest runs, Then the runner shall pre-calculate only the selected indicators plus `requiredIndicators`.
+- **AC-014**: Given the runner pre-calculates indicators, When the strategy `decide` function is called, Then `input.indicators.byId` shall contain data for all calculated indicators.
+- **AC-015**: Given a strategy accesses `input.indicators.byId['ma-20']`, When the indicator was calculated, Then the strategy shall receive the indicator's series data for all K-lines up to the current index.
+- **AC-016**: Given a strategy defines both `availableIndicators` and `requiredIndicators`, When the backtest runs, Then both sets of indicators shall be calculated and available in the cache.
+- **AC-017**: Given the user opens the strategy creation dialog, When the user describes a trading idea in natural language and submits, Then the AI shall generate a `UserStrategyDefinition` module that satisfies this specification.
+- **AC-018**: Given the AI generates a strategy, When the code is validated, Then the dialog shall verify the code exports a valid `UserStrategyDefinition` with a `decide` function, unique `id`, and `name`.
+- **AC-019**: Given the user saves a generated strategy, When the app restarts, Then the stored strategy shall be automatically loaded and appear in the strategy selection dropdown.
+- **AC-020**: Given the user selects a stored strategy, When the backtest UI renders, Then the strategy's `availableIndicators` shall appear in the indicator selection UI.
+- **AC-021**: Given the user edits a stored strategy's code, When the user saves the edit, Then the updated strategy shall replace the previous version in local storage.
+- **AC-022**: Given the user deletes a stored strategy, When the delete completes, Then the strategy shall be removed from local storage and the strategy selection dropdown.
+- **AC-023**: Given the user exports strategies, When the export completes, Then a JSON file containing all stored strategies shall be downloaded.
+- **AC-024**: Given the user imports a valid strategy JSON file, When the import completes, Then the strategies shall be added to local storage and available in the selection dropdown.
+- **AC-025**: Given the user starts a day-by-day backtest, When the stepper is initialized, Then the UI shall display the first K-line with the strategy decision and account state.
+- **AC-026**: Given the user clicks Step Forward, When the next K-line is processed, Then the UI shall display the strategy decision, account state before and after, and any executed trade for that step.
+- **AC-027**: Given the user clicks Step Backward, When a previous step exists in history, Then the UI shall restore and display the previous step state without re-executing the strategy.
+- **AC-028**: Given the user clicks Jump To a specific date, When that date exists in the K-line range, Then the stepper shall advance or rewind to that step and display its state.
+- **AC-029**: Given the user clicks Run All during stepping, When all remaining steps complete, Then the stepper shall return a standard `RunBacktestOutput` with the full result.
+- **AC-030**: Given the day-by-day stepper is active, When the current step has indicator data, Then the UI shall display the indicator values for the current K-line.
+- **AC-031**: Given the day-by-day stepper is active, When the current step produces a trade, Then the UI shall highlight the trade on the chart and in the trade ledger.
+- **AC-032**: Given the AI prompt includes available indicator IDs, When the AI generates a strategy, Then the generated strategy may reference those indicators in its `availableIndicators` or `requiredIndicators`.
+- **AC-033**: Given a stored strategy has invalid code, When the app loads, Then the strategy shall be skipped with a console warning and shall not crash the app.
 
 ## 6. Test Automation Strategy
 
@@ -505,6 +848,11 @@ Keep the decide function pure and deterministic.
 - The ChanLun cache incrementally updates with fixed-element caching.
 - The no-future-function validator detects and reports future data access.
 - Performance metrics accurately reflect cache hit rates and execution times.
+- The `StrategyDialog` component allows users to describe a trading idea in natural language and generate a strategy via AI.
+- Stored strategies persist in local storage and are loaded automatically on app startup.
+- The day-by-day stepper allows forward, backward, and jump-to navigation through backtest steps.
+- The stepper displays strategy decision, account state, position state, and executed trade at each step.
+- The indicator selection UI includes both registry indicators and locally stored indicators from `IndicatorDialog`.
 
 ## 11. Related Specifications / Further Reading
 

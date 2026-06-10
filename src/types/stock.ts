@@ -85,7 +85,8 @@ export interface BacktestTrade {
   date: string;
   shares: number;
   value: number;
-  pnl?: number;      // Populated on SELL trades
+  fee?: number;       // Transaction fee (佣金 + 印花税 + 过户费)
+  pnl?: number;       // Populated on SELL trades (net of fees)
   pnlPercent?: number;
 }
 
@@ -101,6 +102,7 @@ export interface BacktestResult {
   totalTrades: number;
   winningTrades: number;
   winRate: number;
+  totalFees: number;
   trades: BacktestTrade[];
   createdAt: string;
 }

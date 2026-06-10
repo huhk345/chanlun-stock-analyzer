@@ -1007,6 +1007,140 @@ export async function generateIndicatorCode(
   );
 }
 
+// ---------------------------------------------------------------------------
+// AI Strategy Code Generation
+// ---------------------------------------------------------------------------
+
+const STRATEGY_GENERATION_SYSTEM_PROMPT = `Implement a user-defined backtest strategy for this TypeScript project.
+
+Use exactly the UserStrategyDefinition interface from src/types/strategy.ts.
+Do not edit the backtest runner, chart, React components, or storage code.
+Create one strategy module that exports a UserStrategyDefinition.
+
+The code MUST be a self-contained object following this exact structure:
+
+const strategy = {
+  id: 'my-strategy',
+  name: 'My Strategy',
+  description: 'Description of the strategy',
+  defaultSelected: false,
+  params: [
+    // { key: 'period', label: 'Period', type: 'number', defaultValue: 20, min: 1, max: 200, step: 1 }
+  ],
+  availableIndicators: [
+    // { id: 'indicator-id', name: 'Indicator Name', defaultSelected: false }
+  ],
+  requiredIndicators: [
+    // { id: 'indicator-id' }
+  ],
+  requiresChanLun: false,
+  decide({ klines, currentIndex, currentKline, account, position, trades, params, indicators, chanlun, currency, initialCash }) {
+    // klines: Array<{ date: string, open: number, high: number, low: number, close: number, volume: number, amount: number }>
+    // klines contains only data up to and including currentKline
+    // currentIndex: zero-based index of currentKline in klines array
+    // account: { initialCash, cash, equity, currency }
+    // position: { shares, averageCost, marketValue, unrealizedPnl, unrealizedPnlPercent }
+    // trades: previously executed trades
+    // params: resolved parameter values with defaults applied
+    // indicators: pre-calculated indicator cache (if any selected)
+    // chanlun: ChanLun analysis cache (if requiresChanLun is true)
+
+    return {
+      action: 'BUY',  // 'BUY' | 'SELL' | 'HOLD'
+      amount: { unit: 'percent', value: 100 },  // required for BUY/SELL
+      // unit: 'cash' (currency amount, BUY only) | 'shares' | 'percent' (0-100)
+      reason: 'Optional explanation',
+      confidence: 0.8,  // optional 0-1
+    };
+  },
+};
+
+if (typeof exports !== 'undefined') { exports.default = strategy; }
+else if (typeof module !== 'undefined') { module.exports = strategy; }
+
+RULES:
+1. Return ONLY the raw JavaScript code. NO markdown, NO code fences, NO explanations.
+2. NO imports, NO require, NO async/await, NO fetch, NO eval, NO DOM APIs.
+3. id must be lowercase kebab-case (e.g., 'ma-cross', 'rsi-strategy').
+4. Handle edge cases: division by zero, empty data, null checks, insufficient data.
+5. klines are sorted oldest to newest. Only data up to currentIndex is available.
+6. Use percent amounts unless the strategy specifically needs cash or shares.
+7. Keep the decide function pure and deterministic.
+8. For BUY: action 'BUY' with amount { unit: 'percent'/'cash'/'shares', value: number }.
+9. For SELL: action 'SELL' with amount { unit: 'shares'/'percent', value: number }. Cash unit is invalid for SELL.
+10. For HOLD: action 'HOLD'. Amount is optional and ignored.`;
+
+/**
+ * Generate strategy code using AI based on user description
+ */
+export async function generateStrategyCode(
+  userDescription: string,
+  availableIndicatorIds: string[] = [],
+  onToken?: StreamCallback,
+  model?: string,
+): Promise<string> {
+  const OPENROUTER_API_KEY = getOpenRouterApiKey();
+  const GEMINI_API_KEY = getGeminiApiKey();
+
+  if (!OPENROUTER_API_KEY && !GEMINI_API_KEY) {
+    throw new Error('未配置 AI API 密钥。请在设置中配置 OpenRouter API Key 或 Gemini API Key。');
+  }
+
+  const indicatorList = availableIndicatorIds.length > 0
+    ? `\n\nAvailable indicators the strategy can use:\n${availableIndicatorIds.map(id => `- ${id}`).join('\n')}`
+    : '';
+
+  const userMessage = `请根据以下需求生成一个股票回测策略代码：\n\n${userDescription}${indicatorList}\n\n请严格按照格式要求，返回纯 JavaScript 代码。`;
+
+  if (OPENROUTER_API_KEY) {
+    const selectedModel = model?.trim() || 'google/gemini-2.0-flash-exp:free';
+
+    if (onToken) {
+      return callOpenRouterChatStream(
+        OPENROUTER_API_KEY,
+        selectedModel,
+        [
+          { role: 'system', content: STRATEGY_GENERATION_SYSTEM_PROMPT },
+          { role: 'user', content: userMessage },
+        ],
+        onToken,
+        0.3,
+      );
+    }
+
+    return callOpenRouterChat(
+      OPENROUTER_API_KEY,
+      selectedModel,
+      [
+        { role: 'system', content: STRATEGY_GENERATION_SYSTEM_PROMPT },
+        { role: 'user', content: userMessage },
+      ],
+      0.3,
+    );
+  }
+
+  if (onToken) {
+    return callGeminiChatStream(
+      GEMINI_API_KEY,
+      [
+        { role: 'system', content: STRATEGY_GENERATION_SYSTEM_PROMPT },
+        { role: 'user', content: userMessage },
+      ],
+      onToken,
+      0.3,
+    );
+  }
+
+  return callGeminiChat(
+    GEMINI_API_KEY,
+    [
+      { role: 'system', content: STRATEGY_GENERATION_SYSTEM_PROMPT },
+      { role: 'user', content: userMessage },
+    ],
+    0.3,
+  );
+}
+
 // Fetch stock basic information from free API (Tencent Stock)
 export async function fetchStockBasicInfo(symbol: string): Promise<StockBasicInfo> {
   const clean = symbol.trim().toUpperCase();
