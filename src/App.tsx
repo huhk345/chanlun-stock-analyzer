@@ -152,6 +152,7 @@ export default function App() {
       setStrokes(computedStrokes);
       setSegments(computedSegments);
       setHubs(computedHubs);
+      setBacktestTrades([]);
       setDataSource(data.source || 'TickFlow API');
       setStockBasicInfo(basicInfo);
 

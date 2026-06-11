@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -16,7 +16,9 @@ import {
   CornerDownLeft,
   X,
   Settings,
+  Share2,
 } from 'lucide-react';
+import domtoimage from 'dom-to-image-more';
 import { Kline, Stroke, Segment, Hub, Fraction } from '../types/stock';
 import { chatWithAIStream, ChatMessage } from '../utils/api';
 import {
@@ -102,6 +104,9 @@ export default function GeminiAdvisor({
   const [streamingContent, setStreamingContent] = useState('');
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const shareCardRef = useRef<HTMLDivElement | null>(null);
+  const [shareContent, setShareContent] = useState<string | null>(null);
+  const [shareStatus, setShareStatus] = useState<'idle' | 'generating' | 'success' | 'error'>('idle');
 
   const modelDropdownRef = useRef<HTMLDivElement | null>(null);
 
@@ -296,6 +301,53 @@ export default function GeminiAdvisor({
     }
   };
 
+  const handleShare = useCallback(async (content: string) => {
+    setShareContent(content);
+    setShareStatus('generating');
+    await new Promise((r) => requestAnimationFrame(r));
+    await new Promise((r) => setTimeout(r, 200));
+    const card = shareCardRef.current;
+    if (!card) {
+      setShareStatus('error');
+      return;
+    }
+    try {
+      const blob = await domtoimage.toBlob(card, {
+        bgcolor: '#18181b',
+        pixelRatio: 3,
+      });
+      if (!blob) {
+        setShareStatus('error');
+        return;
+      }
+      const fileName = `ai-analysis-${symbol}.png`;
+      const file = new File([blob], fileName, { type: 'image/png' });
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ title: `AI 分析 - ${symbol}`, files: [file] });
+        setShareStatus('success');
+      } else if (navigator.share) {
+        await navigator.share({ title: `AI 分析 - ${symbol}`, text: content.slice(0, 200) });
+        setShareStatus('success');
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        setShareStatus('success');
+      }
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        console.error('Share failed:', err);
+        setShareStatus('error');
+      }
+    }
+    setTimeout(() => setShareStatus('idle'), 2000);
+  }, [symbol]);
+
   const filteredModels = useMemo(() => {
     const q = modelFilter.trim().toLowerCase();
     if (!q) return models;
@@ -316,32 +368,32 @@ export default function GeminiAdvisor({
         remarkPlugins={[remarkGfm]}
         components={{
           h1: ({ children }) => (
-            <h3 className="text-lg font-black text-blue-400 font-sans mt-7 mb-3 flex items-center gap-2">
+            <h3 className="text-lg font-black text-blue-400 font-sans mt-7 mb-3 flex items-center gap-2 whitespace-nowrap">
               {children}
             </h3>
           ),
           h2: ({ children }) => (
-            <h4 className="text-base font-extrabold text-zinc-100 font-sans mt-6 border-b border-zinc-800 pb-1.5 flex items-center gap-2">
+            <h4 className="text-base font-extrabold text-zinc-100 font-sans mt-6 border-b border-zinc-800 pb-1.5 flex items-center gap-2 whitespace-nowrap">
               {children}
             </h4>
           ),
           h3: ({ children }) => (
-            <h5 className="text-sm font-bold text-zinc-200 font-sans mt-5 mb-2 flex items-center gap-2">
+            <h5 className="text-sm font-bold text-zinc-200 font-sans mt-5 mb-2 flex items-center gap-2 whitespace-nowrap">
               {children}
             </h5>
           ),
           h4: ({ children }) => (
-            <h5 className="text-sm font-bold text-zinc-200 font-sans mt-4 mb-2">
+            <h5 className="text-sm font-bold text-zinc-200 font-sans mt-4 mb-2 whitespace-nowrap">
               {children}
             </h5>
           ),
           h5: ({ children }) => (
-            <h5 className="text-sm font-semibold text-zinc-300 font-sans mt-3 mb-1">
+            <h5 className="text-sm font-semibold text-zinc-300 font-sans mt-3 mb-1 whitespace-nowrap">
               {children}
             </h5>
           ),
           h6: ({ children }) => (
-            <h6 className="text-xs font-semibold text-zinc-400 font-sans mt-3 mb-1">
+            <h6 className="text-xs font-semibold text-zinc-400 font-sans mt-3 mb-1 whitespace-nowrap">
               {children}
             </h6>
           ),
@@ -597,6 +649,9 @@ export default function GeminiAdvisor({
             role={msg.role}
             content={msg.content}
             renderMarkdown={renderFormattedReport}
+            symbol={symbol}
+            onShare={handleShare}
+            shareDisabled={shareStatus === 'generating'}
           />
         ))}
         {chatLoading && streamingContent && (
@@ -605,6 +660,7 @@ export default function GeminiAdvisor({
             content={streamingContent}
             renderMarkdown={renderFormattedReport}
             isStreaming
+            symbol={symbol}
           />
         )}
         {chatLoading && !streamingContent && (
@@ -690,6 +746,51 @@ export default function GeminiAdvisor({
           <span>{chatInput.length} 字符</span>
         </div>
       </div>
+
+      {/* Hidden share card for image generation */}
+      {shareContent && (
+        <div
+          ref={shareCardRef}
+          className="fixed -left-[9999px] top-0"
+          style={{ width: 600 }}
+        >
+          <div className="bg-zinc-900 p-8">
+            <div className="flex items-center gap-3 mb-5">
+              <img src="/icon.png" alt="" className="w-10 h-10 rounded-xl" />
+              <div>
+                <div className="text-base font-bold text-zinc-100">缠论量化工作台</div>
+                <div className="text-[11px] text-zinc-500 font-mono">{symbol}</div>
+              </div>
+            </div>
+            <div className="h-px bg-gradient-to-r from-blue-500/40 via-zinc-700 to-transparent mb-5" />
+            <div className="text-sm text-zinc-200 leading-relaxed">
+              {renderFormattedReport(shareContent)}
+            </div>
+            <div className="mt-6 pt-4 border-t border-zinc-800">
+              <div className="text-[10px] text-zinc-600 text-center font-mono">
+                ChanLun Stock Analyzer · AI 智能分析
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Share feedback toast */}
+      {shareStatus === 'generating' && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-blue-500/20 border border-blue-500/30 rounded-xl text-xs text-blue-300 font-mono backdrop-blur-md shadow-lg">
+          正在生成分享图片...
+        </div>
+      )}
+      {shareStatus === 'success' && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-green-500/20 border border-green-500/30 rounded-xl text-xs text-green-300 font-mono backdrop-blur-md shadow-lg">
+          分享成功
+        </div>
+      )}
+      {shareStatus === 'error' && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-red-500/20 border border-red-500/30 rounded-xl text-xs text-red-300 font-mono backdrop-blur-md shadow-lg">
+          分享失败，请重试
+        </div>
+      )}
     </div>
   );
 }
@@ -703,9 +804,12 @@ interface ChatBubbleProps {
   content: string;
   renderMarkdown: (text: string) => React.ReactNode;
   isStreaming?: boolean;
+  symbol?: string;
+  onShare?: (content: string) => void;
+  shareDisabled?: boolean;
 }
 
-function ChatBubble({ role, content, renderMarkdown, isStreaming }: ChatBubbleProps) {
+function ChatBubble({ role, content, renderMarkdown, isStreaming, onShare, shareDisabled }: ChatBubbleProps) {
   if (role === 'user') {
     return (
       <div className="flex items-start gap-2 justify-end">
@@ -720,13 +824,27 @@ function ChatBubble({ role, content, renderMarkdown, isStreaming }: ChatBubblePr
   }
 
   return (
-    <div className="flex items-start gap-2">
+    <div className="flex items-start gap-2 group">
       <div className="shrink-0 w-7 h-7 rounded-lg bg-zinc-800 border border-zinc-700 flex items-center justify-center">
         <Bot className="h-3.5 w-3.5 text-blue-400" />
       </div>
       <div className="flex-1 min-w-0 bg-zinc-900 border border-zinc-800 rounded-2xl rounded-tl-sm px-3.5 py-2.5 text-zinc-100">
         {renderMarkdown(content)}
         {isStreaming && <span className="inline-block w-1.5 h-4 bg-blue-400 ml-0.5 animate-pulse rounded-sm align-text-bottom" />}
+        {!isStreaming && onShare && (
+          <div className="flex items-center justify-end gap-1.5 mt-2 pt-2 border-t border-zinc-800/30 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              type="button"
+              onClick={() => onShare(content)}
+              disabled={shareDisabled}
+              className="flex items-center gap-1 text-[10px] font-mono text-zinc-500 hover:text-blue-400 transition-colors px-1.5 py-0.5 rounded hover:bg-blue-500/10 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="分享为图片"
+            >
+              <Share2 className="h-3 w-3" />
+              分享
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

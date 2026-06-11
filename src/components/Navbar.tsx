@@ -244,8 +244,8 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
 
         {/* Left: Brand */}
         <div className="flex items-center gap-3 shrink-0 pl-4 md:pl-5 pr-3 h-full border-r border-zinc-800/60">
-          <div className="relative h-9 w-9 rounded-lg bg-gradient-to-br from-blue-400 via-blue-500 to-blue-600 flex items-center justify-center shadow-[0_0_0_1px_rgba(59,130,246,0.3),0_4px_12px_-2px_rgba(59,130,246,0.4)]">
-            <span className="text-zinc-950 font-mono font-black text-lg leading-none">缠</span>
+          <div className="relative w-9 h-9">
+            <img src="/icon.png" alt="缠论量化工作台" className="w-full h-full" />
             <div className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-blue-300 ring-2 ring-zinc-950 animate-pulse" />
           </div>
           <div className="hidden sm:flex flex-col leading-none">
