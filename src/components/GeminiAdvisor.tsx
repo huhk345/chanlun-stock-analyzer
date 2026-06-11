@@ -361,44 +361,29 @@ export default function GeminiAdvisor({
     [models, selectedModel],
   );
 
-  const renderFormattedReport = (rawText: string) => {
+  const renderFormattedReport = useCallback((rawText: string, isImage = false) => {
     if (!rawText) return null;
     return (
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{
           h1: ({ children }) => (
-            <h3 className="text-lg font-black text-blue-400 font-sans mt-7 mb-3 flex items-center gap-2 whitespace-nowrap">
+            <h3 className={`font-black text-blue-400 font-sans ${isImage ? 'text-base mt-4 mb-2' : 'text-lg mt-7 mb-3'} flex items-center gap-2 whitespace-nowrap`}>
               {children}
             </h3>
           ),
           h2: ({ children }) => (
-            <h4 className="text-base font-extrabold text-zinc-100 font-sans mt-6 border-b border-zinc-800 pb-1.5 flex items-center gap-2 whitespace-nowrap">
+            <h4 className={`font-extrabold text-zinc-100 font-sans ${isImage ? 'text-sm mt-3.5 mb-2' : 'text-base mt-6 mb-2'} border-b border-zinc-800 pb-1.5 flex items-center gap-2 whitespace-nowrap`}>
               {children}
             </h4>
           ),
           h3: ({ children }) => (
-            <h5 className="text-sm font-bold text-zinc-200 font-sans mt-5 mb-2 flex items-center gap-2 whitespace-nowrap">
+            <h5 className={`font-bold text-zinc-200 font-sans ${isImage ? 'text-[13px] mt-3 mb-1.5' : 'text-sm mt-5 mb-2'} flex items-center gap-2 whitespace-nowrap`}>
               {children}
             </h5>
-          ),
-          h4: ({ children }) => (
-            <h5 className="text-sm font-bold text-zinc-200 font-sans mt-4 mb-2 whitespace-nowrap">
-              {children}
-            </h5>
-          ),
-          h5: ({ children }) => (
-            <h5 className="text-sm font-semibold text-zinc-300 font-sans mt-3 mb-1 whitespace-nowrap">
-              {children}
-            </h5>
-          ),
-          h6: ({ children }) => (
-            <h6 className="text-xs font-semibold text-zinc-400 font-sans mt-3 mb-1 whitespace-nowrap">
-              {children}
-            </h6>
           ),
           p: ({ children }) => (
-            <p className="text-xs font-sans text-zinc-300 leading-relaxed py-1.5 pl-1.5">
+            <p className={`${isImage ? 'text-[11px]' : 'text-xs'} font-sans text-zinc-300 leading-relaxed py-1 pl-1`}>
               {children}
             </p>
           ),
@@ -408,12 +393,12 @@ export default function GeminiAdvisor({
             </strong>
           ),
           li: ({ children }) => (
-            <li className="list-disc list-inside text-xs font-sans text-zinc-400 pl-4 py-1.5 leading-relaxed">
+            <li className={`list-disc list-inside ${isImage ? 'text-[11px] py-1 pl-2' : 'text-xs py-1.5 pl-4'} font-sans text-zinc-400 leading-relaxed`}>
               {children}
             </li>
           ),
           blockquote: ({ children }) => (
-            <div className="p-3 bg-zinc-900 border-l-4 border-blue-500 rounded text-xs text-zinc-300 my-2 font-serif italic">
+            <div className={`bg-zinc-900 border-l-4 border-blue-500 rounded text-zinc-300 my-2 font-serif italic ${isImage ? 'p-2 text-[11px]' : 'p-3 text-xs'}`}>
               {children}
             </div>
           ),
@@ -421,66 +406,56 @@ export default function GeminiAdvisor({
             const isInline = !className;
             if (isInline) {
               return (
-                <code className="bg-zinc-800 text-pink-300 px-1 py-0.5 rounded text-[11px] font-mono">
+                <code className={`bg-zinc-800 text-pink-300 px-1 py-0.5 rounded font-mono ${isImage ? 'text-[10px]' : 'text-[11px]'}`}>
                   {children}
                 </code>
               );
             }
             return (
               <pre className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 my-2 overflow-x-auto">
-                <code className="text-xs font-mono text-zinc-200 leading-relaxed">
+                <code className={`font-mono text-zinc-200 leading-relaxed ${isImage ? 'text-[10px]' : 'text-xs'}`}>
                   {children}
                 </code>
               </pre>
             );
           },
-          a: ({ children, href }) => (
-            <a
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-blue-400 underline hover:text-blue-300"
-            >
-              {children}
-            </a>
-          ),
           hr: () => <hr className="border-zinc-800 my-4" />,
           table: ({ children }) => (
-            <div className="overflow-x-auto my-2">
-              <table className="w-full text-xs border-collapse border border-zinc-800 rounded-lg">
+            <div className={`${isImage ? '' : 'overflow-x-auto'} my-2`}>
+              <table className={`w-full ${isImage ? 'text-[10px]' : 'text-xs'} border-collapse border border-zinc-800 rounded-lg overflow-hidden`}>
                 {children}
               </table>
             </div>
           ),
           thead: ({ children }) => (
-            <thead className="bg-zinc-900">{children}</thead>
+            <thead className="bg-zinc-800/50">{children}</thead>
           ),
           tbody: ({ children }) => <tbody>{children}</tbody>,
           tr: ({ children }) => (
-            <tr className="border-b border-zinc-800">{children}</tr>
+            <tr className="border-b border-zinc-800 last:border-b-0">{children}</tr>
           ),
           th: ({ children }) => (
-            <th className="px-3 py-2 text-left font-semibold text-zinc-200 border-r border-zinc-800 last:border-r-0">
+            <th className={`${isImage ? 'px-2 py-1.5' : 'px-3 py-2'} text-left font-semibold text-zinc-200 border-r border-zinc-800 last:border-r-0`}>
               {children}
             </th>
           ),
           td: ({ children }) => (
-            <td className="px-3 py-2 text-zinc-300 border-r border-zinc-800 last:border-r-0">
+            <td className={`${isImage ? 'px-2 py-1.5' : 'px-3 py-2'} text-zinc-300 border-r border-zinc-800 last:border-r-0`}>
               {children}
             </td>
           ),
           ul: ({ children }) => (
-            <ul className="list-disc list-inside space-y-0.5 py-1">{children}</ul>
+            <ul className={`list-disc list-inside ${isImage ? 'space-y-0' : 'space-y-0.5'} py-1`}>{children}</ul>
           ),
           ol: ({ children }) => (
-            <ol className="list-decimal list-inside space-y-0.5 py-1">{children}</ol>
+            <ol className={`list-decimal list-inside ${isImage ? 'space-y-0' : 'space-y-0.5'} py-1`}>{children}</ol>
           ),
         }}
       >
         {rawText}
       </Markdown>
     );
-  };
+  }, []);
 
   const contextSummary = useMemo(() => {
     return {
@@ -752,22 +727,22 @@ export default function GeminiAdvisor({
         <div
           ref={shareCardRef}
           className="fixed -left-[9999px] top-0"
-          style={{ width: 600 }}
+          style={{ width: 400 }}
         >
-          <div className="bg-zinc-900 p-8">
-            <div className="flex items-center gap-3 mb-5">
-              <img src="/icon.png" alt="" className="w-10 h-10 rounded-xl" />
+          <div className="bg-zinc-900 p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <img src="/icon.png" alt="" className="w-9 h-9 rounded-xl shadow-lg" />
               <div>
-                <div className="text-base font-bold text-zinc-100">缠论量化工作台</div>
-                <div className="text-[11px] text-zinc-500 font-mono">{symbol}</div>
+                <div className="text-[15px] font-bold text-zinc-100 tracking-tight whitespace-nowrap">缠论量化工作台</div>
+                <div className="text-[10px] text-zinc-500 font-mono opacity-80 whitespace-nowrap">{symbol}</div>
               </div>
             </div>
-            <div className="h-px bg-gradient-to-r from-blue-500/40 via-zinc-700 to-transparent mb-5" />
-            <div className="text-sm text-zinc-200 leading-relaxed">
-              {renderFormattedReport(shareContent)}
+            <div className="h-px bg-gradient-to-r from-blue-500/40 via-zinc-700 to-transparent mb-4" />
+            <div className="leading-relaxed">
+              {renderFormattedReport(shareContent, true)}
             </div>
-            <div className="mt-6 pt-4 border-t border-zinc-800">
-              <div className="text-[10px] text-zinc-600 text-center font-mono">
+            <div className="mt-6 pt-4 border-t border-zinc-800/50">
+              <div className="text-[9px] text-zinc-600 text-center font-mono tracking-wider uppercase">
                 ChanLun Stock Analyzer · AI 智能分析
               </div>
             </div>

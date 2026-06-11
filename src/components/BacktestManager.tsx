@@ -292,7 +292,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
               id="btn-create-strategy"
             >
               <Wand2 className="h-3.5 w-3.5 text-purple-400" />
-              <span>创建策略</span>
+              <span>管理策略</span>
             </button>
           </div>
 
@@ -443,16 +443,6 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
                 >
                   <Play className="h-4 w-4 fill-current" />
                   <span>{loading ? '模拟交易中...' : '运行自动回测'}</span>
-                </button>
-                <button
-                  onClick={handleStartStepper}
-                  disabled={filteredKlines.length === 0 || !selectedStrategy}
-                  className="py-2.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold text-xs rounded-xl border border-zinc-700 cursor-pointer transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-                  id="btn-start-stepper"
-                  title="逐步回测"
-                >
-                  <SkipForward className="h-4 w-4" />
-                  <span>逐步回测</span>
                 </button>
               </div>
             </div>
@@ -723,14 +713,28 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
             <div>
               <div className="flex items-center justify-between mb-3">
                 <h5 className="text-xs font-bold text-zinc-400 uppercase tracking-wider text-left">交易账本</h5>
-                <button
-                  onClick={handleExportCSV}
-                  className="shrink-0 px-3 py-1.5 font-semibold text-xs rounded-lg bg-zinc-800 text-zinc-100 hover:bg-zinc-700 border border-zinc-700 cursor-pointer transition-all flex items-center gap-1.5"
-                  id="btn-export-csv"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  <span>导出 CSV</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  {!stepperMode && (
+                    <button
+                      onClick={handleStartStepper}
+                      disabled={filteredKlines.length === 0 || !selectedStrategy}
+                      className="shrink-0 px-3 py-1.5 font-semibold text-xs rounded-lg bg-zinc-800 text-zinc-100 hover:bg-zinc-700 border border-zinc-700 cursor-pointer transition-all flex items-center gap-1.5"
+                      id="btn-start-stepper"
+                      title="逐步回测"
+                    >
+                      <SkipForward className="h-3.5 w-3.5" />
+                      <span>逐步回测</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={handleExportCSV}
+                    className="shrink-0 px-3 py-1.5 font-semibold text-xs rounded-lg bg-zinc-800 text-zinc-100 hover:bg-zinc-700 border border-zinc-700 cursor-pointer transition-all flex items-center gap-1.5"
+                    id="btn-export-csv"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    <span>导出 CSV</span>
+                  </button>
+                </div>
               </div>
               <div className="overflow-x-auto md:rounded-xl md:border md:border-zinc-800 bg-zinc-950">
                   <table className="w-full text-left text-xs text-zinc-300">
