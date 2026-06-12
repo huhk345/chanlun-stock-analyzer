@@ -1011,11 +1011,104 @@ export async function generateIndicatorCode(
 // AI Strategy Code Generation
 // ---------------------------------------------------------------------------
 
-const STRATEGY_GENERATION_SYSTEM_PROMPT = `Implement a user-defined backtest strategy for this TypeScript project.
+/**
+ * Build a dynamic description of available indicator structures for the AI prompt.
+ * Describes built-in indicators (MA, BOLL, MACD) and any user-defined indicators
+ * that are available in the system at generation time.
+ */
+function buildIndicatorStructureContext(availableIndicatorIds: string[]): string {
+  const lines: string[] = [];
+  lines.push('// [params]: strategy params + computed indicator values (flat key-value pairs).');
+  lines.push('//   Strategy params are defined in the \'params\' array above.');
+  lines.push('//   Indicator values are AUTO-INJECTED at each step as flat key-value pairs:');
+
+  // Built-in indicators
+  lines.push('//');
+  lines.push('//   Built-in indicators always available:');
+  lines.push('//     Moving Averages (SMA):');
+  lines.push('//       params.MA5   -- 5-period SMA of close prices');
+  lines.push('//       params.MA10  -- 10-period SMA of close prices');
+  lines.push('//       params.MA20  -- 20-period SMA of close prices');
+  lines.push('//       params.MA60  -- 60-period SMA of close prices');
+  lines.push('//     Bollinger Bands (period 20, 2-sigma):');
+  lines.push('//       params.BOLL_UP  -- Upper band');
+  lines.push('//       params.BOLL_MID -- Middle band (SMA 20)');
+  lines.push('//       params.BOLL_LOW -- Lower band');
+  lines.push('//     MACD (12, 26, 9):');
+  lines.push('//       params.MACD_DIF -- DIF line (fast EMA - slow EMA)');
+  lines.push('//       params.MACD_DEA -- DEA signal line (EMA of DIF)');
+  lines.push('//       params.MACD     -- MACD histogram bar = (DIF - DEA) * 2');
+
+  // User-defined indicators from availableIndicatorIds
+  if (availableIndicatorIds.length > 0) {
+    lines.push('//');
+    lines.push('//   User-defined indicators available:');
+    for (const id of availableIndicatorIds) {
+      lines.push(`//       params.{seriesName} -- values from indicator "${id}" (series names are defined by the indicator's calculate output)`);
+    }
+  }
+
+  lines.push('//   Example: params.MA5, params.MACD_DIF, params.BOLL_UP');
+  lines.push('//   DO NOT define params inside decide() -- define them in the \'params\' array above.');
+  lines.push('//');
+  lines.push('// [indicators]: (unused -- use params for indicator values instead)');
+
+  return lines.join('\n');
+}
+
+function buildChanLunContextForPrompt(): string {
+  return `// [chanlun]: ChanLun analysis result. Detailed structure:
+    //   {
+    //     mergedKlines: MergedKline[],  // Inclusion-merged K-lines (high, low, direction, originalIndices)
+    //     fractions: Fraction[],        // TOP/BOTTOM fractions (type, price, index/mergedIdx, originalIndex/klinesIdx, date)
+    //     strokes: Stroke[],            // 笔 - Basic trend unit (id, start/end Fraction, direction: up/down)
+    //     segments: Segment[],          // 线段 - Higher-level trend (id, start/end Fraction, direction: up/down)
+    //     hubs: Hub[]                   // 中枢 - Price consolidation zones (zg, zd, gg, dd, startIndex, endIndex, strokesCount, level)
+    //   }
+    //
+    // [ChanLun structure reference]:
+    //   Stroke = { id, start: Fraction, end: Fraction, direction: 'up'|'down' }
+    //     - Use for basic trend direction, momentum estimation, buy/sell point detection
+    //     - Stroke range = Math.abs(end.price - start.price) (proxy for momentum/force)
+    //
+    //   Segment = { id, start: Fraction, end: Fraction, direction: 'up'|'down' }
+    //     - Higher-level trend (contains 3+ strokes). Use for primary trend identification.
+    //
+    //   Hub = { zg, zd, gg, dd, startIndex, endIndex, strokesCount, level }
+    //     - zg = 中枢上沿 (min of 3 highs), zd = 中枢下沿 (max of 3 lows)
+    //     - gg = 最高点 (max all highs), dd = 最低点 (min all lows)
+    //     - A valid hub exists when zg > zd (price overlap)
+    //     - level: 1 = stroke-level, 2 = segment-level
+    //     - Use for support/resistance zones, breakout detection, buy/sell point logic
+    //
+    // [1st Buy/Sell - Trend reversal]:
+    //   1Buy: downtrend with >=2 hubs, exit stroke shows weaker momentum (divergence) than entry stroke
+    //   1Sell: uptrend with >=2 hubs, exit stroke shows weaker momentum (divergence) than entry stroke
+    //
+    // [2nd Buy/Sell - Pullback confirmation]:
+    //   2Buy: after 1Buy, pullback does NOT break below 1Buy low
+    //   2Sell: after 1Sell, rebound does NOT break above 1Sell high
+    //
+    // [3rd Buy/Sell - Hub breakout]:
+    //   3Buy: breakout above hub ZG, pullback stays above ZG (hub becomes support)
+    //   3Sell: breakout below hub ZD, rebound stays below ZD (hub becomes resistance)
+    //
+    // [Divergence - momentum weakening]:
+    //   Bullish divergence: lower low + weaker momentum (shorter stroke range) = potential reversal up
+    //   Bearish divergence: higher high + weaker momentum (shorter stroke range) = potential reversal down
+    //   Momentum proxy: Math.abs(stroke.end.price - stroke.start.price)
+    //
+    // IMPORTANT: Always check arrays length > 0 before accessing elements.
+    //            index/originalIndex fields refer to positions in klines[] array.`;
+}
+
+function buildStrategyPrompt(indicatorContext: string): string {
+  return `Implement a user-defined backtest strategy for this TypeScript project.
 
 Use exactly the UserStrategyDefinition interface from src/types/strategy.ts.
 Do not edit the backtest runner, chart, React components, or storage code.
 Create one strategy module that exports a UserStrategyDefinition.
+Full ChanLun structure reference: spec/spec-chanlun-structure-for-ai-strategy-generation.md
 
 The code MUST be a self-contained object following this exact structure:
 
@@ -1033,17 +1126,20 @@ const strategy = {
   requiredIndicators: [
     // { id: 'indicator-id' }
   ],
-  requiresChanLun: false,
   decide({ klines, currentIndex, currentKline, account, position, trades, params, indicators, chanlun, currency, initialCash }) {
     // klines: Array<{ date: string, open: number, high: number, low: number, close: number, volume: number, amount: number }>
     // klines contains only data up to and including currentKline
-    // currentIndex: zero-based index of currentKline in klines array
+    // currentIndex: zero-based index of currentKline in klines array (use for array lookups)
     // account: { initialCash, cash, equity, currency }
     // position: { shares, averageCost, marketValue, unrealizedPnl, unrealizedPnlPercent }
     // trades: previously executed trades
-    // params: resolved parameter values with defaults applied
-    // indicators: pre-calculated indicator cache (if any selected)
-    // chanlun: ChanLun analysis cache (if requiresChanLun is true)
+    //
+${indicatorContext}
+    //
+${buildChanLunContextForPrompt()}
+    //
+    // IMPORTANT: params, indicators, and chanlun are READ-ONLY inputs.
+    // Do NOT assign values to them inside decide().
 
     return {
       action: 'BUY',  // 'BUY' | 'SELL' | 'HOLD'
@@ -1069,6 +1165,7 @@ RULES:
 8. For BUY: action 'BUY' with amount { unit: 'percent'/'cash'/'shares', value: number }.
 9. For SELL: action 'SELL' with amount { unit: 'shares'/'percent', value: number }. Cash unit is invalid for SELL.
 10. For HOLD: action 'HOLD'. Amount is optional and ignored.`;
+}
 
 /**
  * Generate strategy code using AI based on user description
@@ -1086,11 +1183,10 @@ export async function generateStrategyCode(
     throw new Error('未配置 AI API 密钥。请在设置中配置 OpenRouter API Key 或 Gemini API Key。');
   }
 
-  const indicatorList = availableIndicatorIds.length > 0
-    ? `\n\nAvailable indicators the strategy can use:\n${availableIndicatorIds.map(id => `- ${id}`).join('\n')}`
-    : '';
+  const indicatorContext = buildIndicatorStructureContext(availableIndicatorIds);
+  const systemPrompt = buildStrategyPrompt(indicatorContext);
 
-  const userMessage = `请根据以下需求生成一个股票回测策略代码：\n\n${userDescription}${indicatorList}\n\n请严格按照格式要求，返回纯 JavaScript 代码。`;
+  const userMessage = `请根据以下需求生成一个股票回测策略代码：\n\n${userDescription}\n\n请严格按照格式要求，返回纯 JavaScript 代码。`;
 
   if (OPENROUTER_API_KEY) {
     const selectedModel = model?.trim() || 'google/gemini-2.0-flash-exp:free';
@@ -1100,7 +1196,7 @@ export async function generateStrategyCode(
         OPENROUTER_API_KEY,
         selectedModel,
         [
-          { role: 'system', content: STRATEGY_GENERATION_SYSTEM_PROMPT },
+          { role: 'system', content: systemPrompt },
           { role: 'user', content: userMessage },
         ],
         onToken,
@@ -1112,7 +1208,7 @@ export async function generateStrategyCode(
       OPENROUTER_API_KEY,
       selectedModel,
       [
-        { role: 'system', content: STRATEGY_GENERATION_SYSTEM_PROMPT },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: userMessage },
       ],
       0.3,
@@ -1123,7 +1219,7 @@ export async function generateStrategyCode(
     return callGeminiChatStream(
       GEMINI_API_KEY,
       [
-        { role: 'system', content: STRATEGY_GENERATION_SYSTEM_PROMPT },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: userMessage },
       ],
       onToken,
@@ -1134,7 +1230,7 @@ export async function generateStrategyCode(
   return callGeminiChat(
     GEMINI_API_KEY,
     [
-      { role: 'system', content: STRATEGY_GENERATION_SYSTEM_PROMPT },
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: userMessage },
     ],
     0.3,

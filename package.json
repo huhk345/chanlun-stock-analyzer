@@ -11,15 +11,18 @@
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",
+    "@types/prismjs": "^1.26.6",
     "@vitejs/plugin-react": "^5.0.4",
     "d3": "^7.9.0",
     "dom-to-image-more": "^3.9.0",
     "lightweight-charts": "^5.2.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "prismjs": "^1.30.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "react-markdown": "^10.1.0",
+    "react-simple-code-editor": "^0.14.1",
     "recharts": "^3.8.1",
     "remark-gfm": "^4.0.1",
     "vite": "^6.2.3"

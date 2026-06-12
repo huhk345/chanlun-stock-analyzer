@@ -7,6 +7,13 @@ import type {
   NormalizedUserIndicator,
 } from '../types/indicator';
 import type { Kline } from '../types/stock';
+import { calculateSMA, calculateBollingerBands, calculateMACD } from './indicators';
+import type {
+  IndicatorCache,
+  IndicatorData,
+  IndicatorSeries,
+  StrategyParamValue,
+} from '../types/strategy';
 
 /**
  * Validates and normalizes a numeric value
@@ -259,4 +266,101 @@ export function createIndicatorInput(
  */
 export function isValidIndicatorId(id: string): boolean {
   return /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(id);
+}
+
+/**
+ * Builds an IndicatorCache from selected indicator definitions
+ * for the current klines slice.
+ */
+export function buildIndicatorCache(
+  definitions: readonly UserIndicatorDefinition[],
+  symbol: string,
+  klines: readonly Kline[],
+): IndicatorCache {
+  const byId: Record<string, IndicatorData> = {};
+
+  for (const def of definitions) {
+    const input = createIndicatorInput(klines, symbol, def);
+    const normalized = calculateUserIndicatorSafely(def, input);
+
+    const series: IndicatorSeries[] = normalized.result.series.map(s => ({
+      id: s.id,
+      name: s.name,
+      type: s.type,
+      data: s.data.map(p => ({
+        time: p.time,
+        value: p.value,
+      })),
+    }));
+
+    byId[def.id] = {
+      id: def.id,
+      name: def.name,
+      series,
+    };
+  }
+
+  return { byId } as IndicatorCache;
+}
+
+/**
+ * Computes flat indicator key-value pairs for the current kline index.
+ * Merges built-in (MA5, MA10, MA20, MA60, BOLL, MACD) and user-defined
+ * indicator values into a single flat record.
+ */
+export function computeIndicatorValues(
+  definitions: readonly UserIndicatorDefinition[],
+  symbol: string,
+  klines: readonly Kline[],
+  currentIndex: number,
+): Record<string, StrategyParamValue> {
+  const values: Record<string, StrategyParamValue> = {};
+  const mutableKlines = [...klines];
+
+  // Built-in: SMA moving averages
+  const maPeriods = [5, 10, 20, 60];
+  for (const period of maPeriods) {
+    if (currentIndex >= period - 1) {
+      const ma = calculateSMA(mutableKlines, period);
+      const val = ma[currentIndex];
+      if (val !== null) {
+        values[`MA${period}`] = val;
+      }
+    }
+  }
+
+  // Built-in: Bollinger Bands (default period 20, multiplier 2)
+  if (currentIndex >= 19) {
+    const boll = calculateBollingerBands(mutableKlines);
+    if (boll.upper[currentIndex] !== null) {
+      values['BOLL_UP'] = boll.upper[currentIndex]!;
+      values['BOLL_MID'] = boll.middle[currentIndex]!;
+      values['BOLL_LOW'] = boll.lower[currentIndex]!;
+    }
+  }
+
+  // Built-in: MACD (default 12, 26, 9)
+  if (currentIndex >= 25) {
+    const macd = calculateMACD(mutableKlines);
+    if (macd.dif[currentIndex] !== null) {
+      values['MACD_DIF'] = parseFloat(macd.dif[currentIndex]!.toFixed(4));
+      values['MACD_DEA'] = parseFloat(macd.dea[currentIndex]!.toFixed(4));
+      values['MACD'] = parseFloat(macd.histogram[currentIndex]!.toFixed(4));
+    }
+  }
+
+  // User-defined indicators: use each series name as the key
+  const currentDate = klines[currentIndex].date;
+  for (const def of definitions) {
+    const input = createIndicatorInput(klines, symbol, def);
+    const normalized = calculateUserIndicatorSafely(def, input);
+    for (const series of normalized.result.series) {
+      const point = series.data.find(p => p.time === currentDate);
+      if (point && point.value !== null) {
+        values[series.name] = parseFloat(point.value.toFixed(4));
+      }
+    }
+  }
+
+  return values;
 }

@@ -60,6 +60,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
 
   // Strategy dialog
   const [strategyDialogOpen, setStrategyDialogOpen] = useState(false);
+  const [strategyDialogTab, setStrategyDialogTab] = useState<'create' | 'manage'>('create');
 
   // Jump-to index input
   const [jumpToIndex, setJumpToIndex] = useState<string>('');
@@ -270,7 +271,12 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
   const handleStrategyCreated = (strategy: UserStrategyDefinition) => {
     setAllStrategies((prev) => [...prev, strategy]);
     setSelectedStrategyId(strategy.id);
-    setStrategyDialogOpen(false);
+  };
+
+  const handleStrategySaved = () => {
+    const stored = loadStoredStrategies();
+    const combined = [...userStrategies, ...stored];
+    setAllStrategies(combined);
   };
 
   const fmt = (n: number) => n.toFixed(2);
@@ -286,15 +292,33 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
           {/* Header */}
           <div className="flex items-center justify-between px-3 py-2.5 md:px-5 md:py-3 bg-zinc-900/50 border-b border-zinc-800/50">
             <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400 text-left">回测配置</h4>
-            <button
-              onClick={() => setStrategyDialogOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg border border-zinc-700 cursor-pointer transition-all"
-              id="btn-create-strategy"
-            >
-              <Wand2 className="h-3.5 w-3.5 text-purple-400" />
-              <span>管理策略</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setStrategyDialogTab('create');
+                  setStrategyDialogOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg border border-zinc-700 cursor-pointer transition-all"
+                id="btn-create-strategy"
+              >
+                <Wand2 className="h-3.5 w-3.5 text-purple-400" />
+                <span>新建策略</span>
+              </button>
+              <button
+                onClick={() => {
+                  setStrategyDialogTab('manage');
+                  setStrategyDialogOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg border border-zinc-700 cursor-pointer transition-all"
+                id="btn-manage-strategies"
+              >
+                <Download className="h-3.5 w-3.5 text-zinc-400" />
+                <span>管理策略</span>
+              </button>
+            </div>
           </div>
+          {/* ... (rest of the component) */}
+
 
           <div className="p-3 md:p-5 space-y-5">
             {/* Strategy */}
@@ -791,8 +815,10 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
           isOpen={strategyDialogOpen}
           onClose={() => setStrategyDialogOpen(false)}
           onStrategyCreated={handleStrategyCreated}
+          onStrategySaved={handleStrategySaved}
           existingStrategyIds={allStrategies.map((s) => s.id)}
           symbol={symbol}
+          defaultTab={strategyDialogTab}
         />
       )}
     </div>

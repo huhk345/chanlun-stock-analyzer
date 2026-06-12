@@ -3,10 +3,15 @@ import {
   X, Plus, Trash2, Download, Upload, Save, Code, AlertCircle, CheckCircle,
   Cpu, ChevronDown, Search, RefreshCw, Wand2, Settings,
 } from 'lucide-react';
+import Editor from 'react-simple-code-editor';
+import Prism from 'prismjs';
+import 'prismjs/components/prism-javascript';
+import 'prismjs/themes/prism-tomorrow.css';
 import type {
   UserStrategyDefinition,
   StoredStrategy,
   StrategyDialogResponse,
+  ChatEntry,
 } from '../types/strategy';
 import {
   getAllStoredStrategies,
@@ -39,9 +44,12 @@ interface StrategyDialogProps {
   isOpen: boolean;
   onClose: () => void;
   onStrategyCreated?: (strategy: UserStrategyDefinition) => void;
+  /** Called when an existing strategy is saved after editing */
+  onStrategySaved?: () => void;
   existingStrategyIds?: string[];
   availableIndicatorIds?: string[];
   symbol?: string;
+  defaultTab?: 'create' | 'manage';
 }
 
 function getLocalApiKey(key: string): string {
@@ -64,11 +72,13 @@ export default function StrategyDialog({
   isOpen,
   onClose,
   onStrategyCreated,
+  onStrategySaved,
   existingStrategyIds = [],
   availableIndicatorIds = [],
   symbol,
+  defaultTab = 'create',
 }: StrategyDialogProps) {
-  const [activeTab, setActiveTab] = useState<'create' | 'manage'>('create');
+  const [activeTab, setActiveTab] = useState<'create' | 'manage'>(defaultTab);
   const [storedStrategies, setStoredStrategies] = useState<StoredStrategy[]>([]);
   const [storageStats, setStorageStats] = useState(getStrategyStorageStats());
 
@@ -87,9 +97,12 @@ export default function StrategyDialog({
   const [modelFilter, setModelFilter] = useState('');
 
   // Manage tab state
-  const [selectedStrategy, setSelectedStrategy] = useState<StoredStrategy | null>(null);
-  const [editCode, setEditCode] = useState('');
-  const [isEditing, setIsEditing] = useState(false);
+  const [viewingStrategy, setViewingStrategy] = useState<StoredStrategy | null>(null);
+  const [chatHistory, setChatHistory] = useState<ChatEntry[]>([]);
+  const [selectedChatIndex, setSelectedChatIndex] = useState<number>(-1);
+  const [newPrompt, setNewPrompt] = useState('');
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [detailEditCode, setDetailEditCode] = useState('');
 
   const modelDropdownRef = useRef<HTMLDivElement | null>(null);
 
@@ -146,12 +159,15 @@ export default function StrategyDialog({
       setGeneratedCode('');
       setGenerationResult(null);
       setStreamingCode('');
-      setActiveTab('create');
-      setSelectedStrategy(null);
-      setEditCode('');
-      setIsEditing(false);
+      setActiveTab(defaultTab);
+      setViewingStrategy(null);
+      setChatHistory([]);
+      setSelectedChatIndex(-1);
+      setNewPrompt('');
+      setDetailEditCode('');
+      setIsRegenerating(false);
     }
-  }, [isOpen]);
+  }, [isOpen, defaultTab]);
 
   const loadStrategies = () => {
     setStoredStrategies(getAllStoredStrategies());
@@ -268,6 +284,8 @@ export default function StrategyDialog({
         id,
         name,
         code: code,
+        prompt: userDescription || undefined,
+        model: selectedModel || undefined,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -279,7 +297,10 @@ export default function StrategyDialog({
         onStrategyCreated?.(definition);
       }
 
-      onClose();
+      // Switch to manage tab and edit the newly saved strategy instead of closing
+      loadStrategies();
+      handleEditStrategy(stored);
+      setActiveTab('manage');
     } catch (error) {
       alert(error instanceof Error ? error.message : '保存策略失败');
     }
@@ -289,41 +310,117 @@ export default function StrategyDialog({
     if (!confirm('确定要删除此策略？')) return;
     deleteStoredStrategy(id);
     loadStrategies();
-    if (selectedStrategy?.id === id) {
-      setSelectedStrategy(null);
-      setEditCode('');
+    if (viewingStrategy?.id === id) {
+      setViewingStrategy(null);
     }
   };
 
   const handleEditStrategy = (strategy: StoredStrategy) => {
-    setSelectedStrategy(strategy);
-    setEditCode(strategy.code);
-    setIsEditing(true);
+    let history: ChatEntry[];
+    if (strategy.chatHistory && strategy.chatHistory.length > 0) {
+      history = [...strategy.chatHistory];
+    } else {
+      history = [{
+        id: 'initial',
+        prompt: strategy.prompt || '',
+        code: strategy.code,
+        model: strategy.model,
+        createdAt: strategy.createdAt,
+      }];
+    }
+    setChatHistory(history);
+    setSelectedChatIndex(history.length - 1);
+    setDetailEditCode(history[history.length - 1].code);
+    setViewingStrategy(strategy);
   };
 
-  const handleSaveEdit = () => {
-    if (!selectedStrategy) return;
-
-    const validation = validateStrategyCode(editCode);
+  const handleSaveFromDetail = () => {
+    if (!viewingStrategy || selectedChatIndex < 0) return;
+    const updatedHistory = chatHistory.map((entry, i) =>
+      i === selectedChatIndex ? { ...entry, code: detailEditCode } : entry
+    );
+    const latestCode = updatedHistory[updatedHistory.length - 1].code;
+    const validation = validateStrategyCode(latestCode);
     if (!validation.valid) {
       alert(`代码验证失败:\n${validation.errors.join('\n')}`);
       return;
     }
-
     try {
       const updated: StoredStrategy = {
-        ...selectedStrategy,
-        code: editCode,
+        ...viewingStrategy,
+        code: latestCode,
+        chatHistory: updatedHistory,
         updatedAt: new Date().toISOString(),
       };
-
       saveStoredStrategy(updated);
       loadStrategies();
-      setIsEditing(false);
-      alert('策略更新成功！');
+      onStrategySaved?.();
+      onClose();
+      setChatHistory([]);
+      setSelectedChatIndex(-1);
+      setDetailEditCode('');
     } catch (error) {
-      alert(error instanceof Error ? error.message : '更新策略失败');
+      alert(error instanceof Error ? error.message : '保存失败');
     }
+  };
+
+  const handleGenerateNewEntry = async () => {
+    if (!newPrompt.trim() || !viewingStrategy) return;
+    setIsRegenerating(true);
+    const entryId = `chat-${Date.now()}`;
+    const newEntry: ChatEntry = {
+      id: entryId,
+      prompt: newPrompt.trim(),
+      code: '',
+      model: selectedModel || undefined,
+      createdAt: new Date().toISOString(),
+    };
+    const updatedHistory = [...chatHistory, newEntry];
+    setChatHistory(updatedHistory);
+    setSelectedChatIndex(updatedHistory.length - 1);
+    setDetailEditCode('');
+    setNewPrompt('');
+    try {
+      const fullCode = await generateStrategyCode(
+        newEntry.prompt,
+        availableIndicatorIds,
+        (chunk) => {},
+        selectedModel || undefined,
+      );
+      const cleaned = extractCodeFromResponse(fullCode);
+      const finalHistory = updatedHistory.map((entry, i) =>
+        i === updatedHistory.length - 1 ? { ...entry, code: cleaned } : entry
+      );
+      setChatHistory(finalHistory);
+      setDetailEditCode(cleaned);
+      const updated: StoredStrategy = {
+        ...viewingStrategy,
+        code: cleaned,
+        chatHistory: finalHistory,
+        updatedAt: new Date().toISOString(),
+      };
+      saveStoredStrategy(updated);
+      setViewingStrategy(updated);
+      loadStrategies();
+      onStrategySaved?.();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'AI 重新生成失败');
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
+
+  const handleSelectChatEntry = (index: number) => {
+    if (index === selectedChatIndex) return;
+    let savedHistory = chatHistory;
+    if (selectedChatIndex >= 0 && selectedChatIndex < chatHistory.length && detailEditCode !== chatHistory[selectedChatIndex].code) {
+      savedHistory = chatHistory.map((entry, i) =>
+        i === selectedChatIndex ? { ...entry, code: detailEditCode } : entry
+      );
+      setChatHistory(savedHistory);
+    }
+    setSelectedChatIndex(index);
+    setDetailEditCode(savedHistory[index].code);
   };
 
   const handleExport = () => {
@@ -377,7 +474,7 @@ export default function StrategyDialog({
         {/* Tabs */}
         <div className="flex border-b border-zinc-800">
           <button
-            onClick={() => setActiveTab('create')}
+            onMouseDown={(e) => { e.preventDefault(); setActiveTab('create'); }}
             className={`px-6 py-3 font-medium transition-colors ${
               activeTab === 'create'
                 ? 'text-cyan-400 border-b-2 border-cyan-400'
@@ -387,7 +484,7 @@ export default function StrategyDialog({
             创建策略
           </button>
           <button
-            onClick={() => setActiveTab('manage')}
+            onMouseDown={(e) => { e.preventDefault(); setActiveTab('manage'); }}
             className={`px-6 py-3 font-medium transition-colors ${
               activeTab === 'manage'
                 ? 'text-cyan-400 border-b-2 border-cyan-400'
@@ -585,18 +682,30 @@ export default function StrategyDialog({
                       保存策略
                     </button>
                   </div>
-                  <textarea
-                    value={generatedCode}
-                    onChange={(e) => setGeneratedCode(e.target.value)}
-                    className="w-full h-72 px-4 py-3 bg-zinc-950 border border-zinc-700 rounded-lg text-zinc-100 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none"
-                    spellCheck={false}
-                  />
+                  <div className="editor-container">
+                    <Editor
+                      value={generatedCode}
+                      onValueChange={setGeneratedCode}
+                      highlight={(code) => Prism.highlight(code, Prism.languages.javascript, 'javascript')}
+                      padding={16}
+                      style={{
+                        fontFamily: '"Fira Code", "Fira Mono", monospace',
+                        fontSize: 12,
+                        lineHeight: 1.5,
+                        backgroundColor: '#09090b',
+                        border: '1px solid #3f3f46',
+                        borderRadius: '0.5rem',
+                        minHeight: '18rem',
+                      }}
+                      textareaId="create-code-editor"
+                    />
+                  </div>
                 </div>
               )}
             </div>
           )}
 
-          {activeTab === 'manage' && (
+          {activeTab === 'manage' && !viewingStrategy && (
             <div className="space-y-4">
               {/* Actions */}
               <div className="flex items-center gap-2">
@@ -669,48 +778,134 @@ export default function StrategyDialog({
                   ))}
                 </div>
               )}
+            </div>
+          )}
 
-              {/* Edit Modal */}
-              {isEditing && selectedStrategy && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-                  <div className="bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
-                    <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
-                      <h3 className="text-lg font-bold text-zinc-100">
-                        编辑: {selectedStrategy.name}
-                      </h3>
-                      <button
-                        onClick={() => setIsEditing(false)}
-                        className="p-2 hover:bg-zinc-800 rounded-lg transition-colors"
-                      >
-                        <X className="h-5 w-5 text-zinc-400" />
-                      </button>
-                    </div>
-                    <div className="flex-1 overflow-y-auto p-6">
-                      <textarea
-                        value={editCode}
-                        onChange={(e) => setEditCode(e.target.value)}
-                        className="w-full h-96 px-4 py-3 bg-zinc-950 border border-zinc-700 rounded-lg text-zinc-100 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none"
-                        spellCheck={false}
-                      />
-                    </div>
-                    <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-zinc-800">
-                      <button
-                        onClick={() => setIsEditing(false)}
-                        className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium rounded-lg transition-colors"
-                      >
-                        取消
-                      </button>
-                      <button
-                        onClick={handleSaveEdit}
-                        className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg transition-colors flex items-center gap-2"
-                      >
-                        <Save className="h-4 w-4" />
-                        保存
-                      </button>
-                    </div>
+          {activeTab === 'manage' && viewingStrategy && (
+            <div className="flex gap-0 h-[70vh] -m-6">
+              {/* Left Panel: Chat History + New Prompt */}
+              <div className="w-80 shrink-0 border-r border-zinc-800 flex flex-col bg-zinc-900/50">
+                {/* Header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <button
+                      onClick={() => setViewingStrategy(null)}
+                      className="p-1 hover:bg-zinc-700 rounded-lg transition-colors shrink-0"
+                      title="返回列表"
+                    >
+                      <ChevronDown className="h-4 w-4 text-zinc-400 rotate-90" />
+                    </button>
+                    <h3 className="text-sm font-bold text-zinc-100 truncate">
+                      {viewingStrategy.name}
+                    </h3>
                   </div>
                 </div>
-              )}
+
+                {/* Chat History List */}
+                <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                  {chatHistory.map((entry, i) => (
+                    <button
+                      key={entry.id}
+                      onClick={() => handleSelectChatEntry(i)}
+                      className={`w-full text-left px-3 py-2.5 rounded-lg transition-colors ${
+                        i === selectedChatIndex
+                          ? 'bg-cyan-500/10 border border-cyan-500/30'
+                          : 'hover:bg-zinc-800 border border-transparent'
+                      }`}
+                    >
+                      <p className="text-xs text-zinc-300 line-clamp-2 leading-relaxed">
+                        {entry.prompt || '(空提示词)'}
+                      </p>
+                      <p className="text-[10px] text-zinc-600 mt-1">
+                        {entry.code ? `✓ ${new Date(entry.createdAt).toLocaleString('zh-CN')}` : '生成中...'}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+
+                {/* New Prompt Input */}
+                <div className="p-3 border-t border-zinc-800 space-y-2">
+                  <textarea
+                    value={newPrompt}
+                    onChange={(e) => setNewPrompt(e.target.value)}
+                    placeholder="输入新的提示词，继续改进策略..."
+                    className="w-full h-20 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-100 placeholder-zinc-500 text-xs focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none"
+                  />
+                  <button
+                    onClick={handleGenerateNewEntry}
+                    disabled={!newPrompt.trim() || isRegenerating}
+                    className="w-full px-3 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:from-zinc-700 disabled:to-zinc-700 disabled:text-zinc-500 text-white text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5"
+                  >
+                    {isRegenerating ? (
+                      <>
+                        <div className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent" />
+                        生成中...
+                      </>
+                    ) : (
+                      <>
+                        <Wand2 className="h-3 w-3" />
+                        生成新版本
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Right Panel: Code Editor */}
+              <div className="flex-1 flex flex-col min-w-0">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+                  <h3 className="text-sm font-medium text-zinc-300">
+                    {selectedChatIndex >= 0 && chatHistory[selectedChatIndex]?.code
+                      ? '代码'
+                      : isRegenerating ? '正在生成...' : '选择或生成一个版本'}
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleSaveFromDetail}
+                      disabled={selectedChatIndex < 0 || !detailEditCode}
+                      className="px-3 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-zinc-700 disabled:text-zinc-500 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5"
+                    >
+                      <Save className="h-3 w-3" />
+                      保存当前版本
+                    </button>
+                    <button
+                      onClick={() => handleDeleteStrategy(viewingStrategy.id)}
+                      className="p-1.5 hover:bg-red-900/30 rounded-lg transition-colors"
+                      title="删除策略"
+                    >
+                      <Trash2 className="h-4 w-4 text-red-400" />
+                    </button>
+                  </div>
+                </div>
+                <div className="flex-1 p-4 overflow-y-auto">
+                  {selectedChatIndex >= 0 ? (
+                    <div className="editor-container h-full">
+                      <Editor
+                        value={detailEditCode}
+                        onValueChange={setDetailEditCode}
+                        highlight={(code) => Prism.highlight(code, Prism.languages.javascript, 'javascript')}
+                        padding={16}
+                        style={{
+                          fontFamily: '"Fira Code", "Fira Mono", monospace',
+                          fontSize: 12,
+                          lineHeight: 1.5,
+                          backgroundColor: '#09090b',
+                          border: '1px solid #3f3f46',
+                          borderRadius: '0.5rem',
+                          minHeight: '30vh',
+                          flex: 1,
+                        }}
+                        textareaId="detail-code-editor"
+                        placeholder="代码将在这里显示..."
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-zinc-500 text-sm">
+                      点击左侧历史记录查看代码，或在底部输入提示词生成新版本
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </div>

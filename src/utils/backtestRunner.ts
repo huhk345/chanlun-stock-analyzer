@@ -10,6 +10,8 @@ import type {
   UserStrategyDecision,
 } from '../types/strategy';
 import { buildStrategyParams, validateDecision, resolveOrderShares, calcAStockFees, isLimitUp, isLimitDown } from './strategyAdapter';
+import { computeIndicatorValues } from './indicatorAdapter';
+import { loadStoredIndicators } from './indicatorLoader';
 import { mergeKlines, findFractions, calculateStrokes, calculateSegments, calculateHubs } from './chanlun';
 
 // ---------------------------------------------------------------------------
@@ -168,6 +170,7 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
     minCommission = 5,
     strategy,
     params: customParams,
+    selectedIndicatorIds,
   } = input;
 
   const diagnostics: BacktestDiagnostic[] = [];
@@ -201,6 +204,12 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
 
   // Build strategy params
   const params = buildStrategyParams(strategy, customParams as Record<string, unknown> | undefined);
+
+  // Load indicator definitions once (outside the loop)
+  const loadedIndicators = loadStoredIndicators();
+  const selectedIndicators = selectedIndicatorIds
+    ? loadedIndicators.filter(d => selectedIndicatorIds.includes(d.id))
+    : [];
 
   // Initialise state
   let account = createInitialAccount(initialCash, currency);
@@ -276,10 +285,12 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
       initialCash,
     };
 
-    // Add ChanLun data if strategy requires it
-    if (strategy.requiresChanLun) {
-      strategyInput.chanlun = buildChanLunCache(klinesSlice);
-    }
+    // Provide ChanLun analysis data
+    strategyInput.chanlun = buildChanLunCache(klinesSlice);
+
+    // Compute indicator values and merge into params
+    const indicatorValues = computeIndicatorValues(selectedIndicators, symbol, klinesSlice, i);
+    Object.assign(params, indicatorValues);
 
     // --- Call strategy ---
     let decision: UserStrategyDecision | null = null;

@@ -200,6 +200,10 @@ export interface StoredIndicator {
   description?: string;
   /** Full TypeScript source code */
   code: string;
+  /** The user's natural-language prompt that generated this indicator */
+  prompt?: string;
+  /** The AI model used for generation */
+  model?: string;
   /** Creation timestamp (ISO string) */
   createdAt: string;
   /** Last update timestamp (ISO string) */

@@ -222,11 +222,30 @@ export interface StrategyDialogResponse {
   storageId?: string;
 }
 
+/** A single entry in the strategy chat history (prompt + generated code) */
+export interface ChatEntry {
+  id: string;
+  /** The user's natural-language prompt */
+  prompt: string;
+  /** The generated code for this prompt */
+  code: string;
+  /** The AI model used */
+  model?: string;
+  /** Timestamp of this entry */
+  createdAt: string;
+}
+
 export interface StoredStrategy {
   id: string;
   name: string;
   description?: string;
   code: string;
+  /** The user's natural-language prompt that generated this strategy */
+  prompt?: string;
+  /** The AI model used for generation */
+  model?: string;
+  /** Chat history of all prompt→code generations for this strategy */
+  chatHistory?: ChatEntry[];
   createdAt: string;
   updatedAt: string;
   defaultSelected?: boolean;

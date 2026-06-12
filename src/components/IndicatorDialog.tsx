@@ -87,7 +87,9 @@ export default function IndicatorDialog({
   // Manage tab state
   const [selectedIndicator, setSelectedIndicator] = useState<StoredIndicator | null>(null);
   const [editCode, setEditCode] = useState('');
+  const [editPrompt, setEditPrompt] = useState('');
   const [isEditing, setIsEditing] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
 
   const modelDropdownRef = useRef<HTMLDivElement | null>(null);
 
@@ -147,7 +149,9 @@ export default function IndicatorDialog({
       setActiveTab('create');
       setSelectedIndicator(null);
       setEditCode('');
+      setEditPrompt('');
       setIsEditing(false);
+      setIsRegenerating(false);
     }
   }, [isOpen]);
 
@@ -265,6 +269,8 @@ export default function IndicatorDialog({
         id,
         name,
         code: code,
+        prompt: userDescription || undefined,
+        model: selectedModel || undefined,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -295,6 +301,7 @@ export default function IndicatorDialog({
   const handleEditIndicator = (indicator: StoredIndicator) => {
     setSelectedIndicator(indicator);
     setEditCode(indicator.code);
+    setEditPrompt(indicator.prompt || '');
     setIsEditing(true);
   };
 
@@ -311,6 +318,7 @@ export default function IndicatorDialog({
       const updated: StoredIndicator = {
         ...selectedIndicator,
         code: editCode,
+        prompt: editPrompt || undefined,
         updatedAt: new Date().toISOString(),
       };
 
@@ -320,6 +328,24 @@ export default function IndicatorDialog({
       alert('指标更新成功！');
     } catch (error) {
       alert(error instanceof Error ? error.message : '更新指标失败');
+    }
+  };
+
+  const handleRegenerateFromPrompt = async () => {
+    if (!editPrompt.trim()) return;
+    setIsRegenerating(true);
+    try {
+      const fullCode = await generateIndicatorCode(
+        editPrompt,
+        (chunk) => {},
+        selectedModel || undefined,
+      );
+      const cleaned = extractCodeFromResponse(fullCode);
+      setEditCode(cleaned);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'AI 重新生成失败');
+    } finally {
+      setIsRegenerating(false);
     }
   };
 
@@ -641,6 +667,11 @@ export default function IndicatorDialog({
                               {indicator.description}
                             </p>
                           )}
+                          {indicator.prompt && (
+                            <p className="text-xs text-zinc-500 mt-1 line-clamp-1 italic">
+                              提示词: {indicator.prompt}
+                            </p>
+                          )}
                           <p className="text-xs text-zinc-600 mt-2">
                             更新于: {new Date(indicator.updatedAt).toLocaleString('zh-CN')}
                           </p>
@@ -682,13 +713,48 @@ export default function IndicatorDialog({
                         <X className="h-5 w-5 text-zinc-400" />
                       </button>
                     </div>
-                    <div className="flex-1 overflow-y-auto p-6">
-                      <textarea
-                        value={editCode}
-                        onChange={(e) => setEditCode(e.target.value)}
-                        className="w-full h-96 px-4 py-3 bg-zinc-950 border border-zinc-700 rounded-lg text-zinc-100 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none"
-                        spellCheck={false}
-                      />
+                    <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                      {/* Prompt Section */}
+                      <div>
+                        <label className="block text-sm font-medium text-zinc-300 mb-2">
+                          生成提示词（可编辑，修改后可重新生成代码）
+                        </label>
+                        <textarea
+                          value={editPrompt}
+                          onChange={(e) => setEditPrompt(e.target.value)}
+                          placeholder="输入自然语言描述，描述指标的计算逻辑..."
+                          className="w-full h-28 px-4 py-3 bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none"
+                        />
+                        <button
+                          onClick={handleRegenerateFromPrompt}
+                          disabled={!editPrompt.trim() || isRegenerating}
+                          className="mt-2 px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:from-zinc-700 disabled:to-zinc-700 disabled:text-zinc-500 text-white text-sm font-medium rounded-lg transition-all flex items-center gap-2"
+                        >
+                          {isRegenerating ? (
+                            <>
+                              <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                              重新生成中...
+                            </>
+                          ) : (
+                            <>
+                              <RefreshCw className="h-4 w-4" />
+                              从提示词重新生成
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      {/* Code Section */}
+                      <div>
+                        <label className="block text-sm font-medium text-zinc-300 mb-2">
+                          代码
+                        </label>
+                        <textarea
+                          value={editCode}
+                          onChange={(e) => setEditCode(e.target.value)}
+                          className="w-full h-72 px-4 py-3 bg-zinc-950 border border-zinc-700 rounded-lg text-zinc-100 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none"
+                          spellCheck={false}
+                        />
+                      </div>
                     </div>
                     <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-zinc-800">
                       <button

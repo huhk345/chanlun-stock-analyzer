@@ -179,15 +179,26 @@ const strategy = {
     //   step: 1,
     // },
   ],
-  decide({ klines, position, params }) {
-    // Your strategy logic here
+  decide({ klines, currentIndex, currentKline, account, position, trades, params, chanlun, currency, initialCash }) {
     // Available inputs:
-    //   klines - array of kline data
-    //   position - current position { shares, averageCost, marketValue, unrealizedPnl, unrealizedPnlPercent }
-    //   params - strategy parameters with defaults applied
-    //   account - account state { initialCash, cash, equity, currency }
-    //   currentIndex - current kline index
-    //   currentKline - current kline data
+    //   klines       - Array of kline data (oldest to newest, up to currentIndex)
+    //   currentIndex - Zero-based index of currentKline in klines
+    //   currentKline - Current kline { date, open, high, low, close, volume, amount }
+    //   account      - { initialCash, cash, equity, currency }
+    //   position     - { shares, averageCost, marketValue, unrealizedPnl, unrealizedPnlPercent }
+    //   trades       - Previously executed trade snapshots
+    //   currency     - Currency string (e.g. 'CNY')
+    //   initialCash  - Initial cash amount
+    //
+    // [params]  - Strategy params + computed indicator values (flat key-value pairs):
+    //   Strategy params defined in the params[] array above (READ-ONLY -- define them there).
+    //   Indicator values AUTO-INJECTED at each step (access via params.MA5, params.BOLL_UP, etc.):
+    //     Built-in: MA5, MA10, MA20, MA60, BOLL_UP/MID/LOW, MACD_DIF/DEA/MACD
+    //     User-defined: params.{seriesName} (series names defined by the indicator's calculate output)
+    //   Example: params.MA5 > params.MA20
+    //
+    // [chanlun] - ChanLun analysis { mergedKlines, fractions, strokes, segments, hubs }
+    //   Always provided.
 
     return { action: 'HOLD' };
   },
