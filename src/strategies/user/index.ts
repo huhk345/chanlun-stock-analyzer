@@ -1,7 +1,9 @@
 import type { UserStrategyDefinition } from '../../types/strategy';
+import { chanlunVolumePullbackStrategy } from './chanlun-volume-pullback';
 import { exampleMovingAverageCrossStrategy } from './example-moving-average-cross';
 
 export const userStrategies: readonly UserStrategyDefinition[] = [
+  chanlunVolumePullbackStrategy,
   exampleMovingAverageCrossStrategy,
 ];
 

@@ -21,7 +21,7 @@ const MAX_STRATEGIES = 50;
 /**
  * Maximum code size per strategy (in characters)
  */
-const MAX_CODE_SIZE = 20 * 1024; // 20 KB
+const MAX_CODE_SIZE = 100 * 1024; // 20 KB
 
 /**
  * Validates stored strategy data

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   X, Plus, Trash2, Download, Upload, Save, Code, AlertCircle, CheckCircle,
-  Cpu, ChevronDown, Search, RefreshCw, Wand2, Settings, Brain,
+  Cpu, ChevronDown, Search, RefreshCw, Wand2, Settings,
 } from 'lucide-react';
 import Editor from 'react-simple-code-editor';
 import Prism from 'prismjs';
@@ -105,40 +105,34 @@ export default function StrategyDialog({
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [detailEditCode, setDetailEditCode] = useState('');
   const [reasoningText, setReasoningText] = useState('');
-  const [reasoningVisible, setReasoningVisible] = useState(false);
+  const [notification, setNotification] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const modelDropdownRef = useRef<HTMLDivElement | null>(null);
-  const wasGenerating = useRef(false);
   const codeStartedRef = useRef(false);
+  const notificationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Detect generation start/end for reasoning exit animation
+  useEffect(() => {
+    if (notification) {
+      if (notificationTimer.current) clearTimeout(notificationTimer.current);
+      notificationTimer.current = setTimeout(() => setNotification(null), 3500);
+    }
+    return () => { if (notificationTimer.current) clearTimeout(notificationTimer.current); };
+  }, [notification]);
+
+  // Reset reasoning state when generation starts
   useEffect(() => {
     if (isGenerating || isRegenerating) {
-      setReasoningVisible(true);
       setReasoningText('');
-      wasGenerating.current = true;
       codeStartedRef.current = false;
-    } else if (wasGenerating.current) {
-      wasGenerating.current = false;
-      const timer = setTimeout(() => {
-        setReasoningVisible(false);
-        setReasoningText('');
-      }, 400);
-      return () => clearTimeout(timer);
     }
   }, [isGenerating, isRegenerating]);
 
-  // Dismiss thinking card as soon as the first code chunk arrives
+  // Clear reasoning text when first code chunk arrives
   useEffect(() => {
     if ((isGenerating || isRegenerating) && detailEditCode && !codeStartedRef.current) {
       codeStartedRef.current = true;
-      wasGenerating.current = false;
-      const timer = setTimeout(() => {
-        setReasoningVisible(false);
-        setReasoningText('');
-      }, 400);
-      return () => clearTimeout(timer);
+      setReasoningText('');
     }
     if (!isGenerating && !isRegenerating) {
       codeStartedRef.current = false;
@@ -205,7 +199,7 @@ export default function StrategyDialog({
       setNewPrompt('');
       setDetailEditCode('');
       setReasoningText('');
-      setReasoningVisible(false);
+      setNotification(null);
       setIsRegenerating(false);
     }
   }, [isOpen]);
@@ -328,8 +322,12 @@ export default function StrategyDialog({
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'AI 生成失败，请重试';
-      alert(msg);
-      setGenerationResult({ success: false, errors: [msg] });
+      setNotification({ type: 'error', message: msg });
+      setChatHistory([]);
+      setSelectedChatIndex(-1);
+      setDetailEditCode('');
+      setViewingStrategy(null);
+      setActiveTab('create');
     } finally {
       setIsGenerating(false);
       setStreamingCode('');
@@ -482,7 +480,11 @@ export default function StrategyDialog({
       loadStrategies();
       onStrategySaved?.();
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'AI 重新生成失败');
+      const msg = error instanceof Error ? error.message : 'AI 重新生成失败';
+      setNotification({ type: 'error', message: msg });
+      setChatHistory(updatedHistory.slice(0, -1));
+      setSelectedChatIndex(Math.max(0, updatedHistory.length - 2));
+      setDetailEditCode(updatedHistory[updatedHistory.length - 2]?.code || '');
     } finally {
       setIsRegenerating(false);
     }
@@ -499,6 +501,63 @@ export default function StrategyDialog({
     }
     setSelectedChatIndex(index);
     setDetailEditCode(savedHistory[index].code);
+  };
+
+  const handleRegenerateEntry = async (index: number) => {
+    if (!viewingStrategy) return;
+    const prompt = chatHistory[index]?.prompt;
+    if (!prompt && prompt !== '') return;
+    setIsRegenerating(true);
+    const entryId = `chat-${Date.now()}`;
+    const newEntry: ChatEntry = {
+      id: entryId,
+      prompt,
+      code: '',
+      model: selectedModel || undefined,
+      createdAt: new Date().toISOString(),
+    };
+    const updatedHistory = [...chatHistory, newEntry];
+    setChatHistory(updatedHistory);
+    setSelectedChatIndex(updatedHistory.length - 1);
+    setDetailEditCode('');
+    setReasoningText('');
+    try {
+      const fullCode = await generateStrategyCode(
+        prompt,
+        availableIndicatorIds,
+        (chunk) => {
+          setDetailEditCode((prev) => prev + chunk);
+        },
+        selectedModel || undefined,
+        (reasoning) => {
+          setReasoningText(reasoning);
+        },
+      );
+      const cleaned = extractCodeFromResponse(fullCode);
+      const finalHistory = updatedHistory.map((entry, i) =>
+        i === updatedHistory.length - 1 ? { ...entry, code: cleaned } : entry
+      );
+      setChatHistory(finalHistory);
+      setDetailEditCode(cleaned);
+      const updated: StoredStrategy = {
+        ...viewingStrategy,
+        code: cleaned,
+        chatHistory: finalHistory,
+        updatedAt: new Date().toISOString(),
+      };
+      saveStoredStrategy(updated);
+      setViewingStrategy(updated);
+      loadStrategies();
+      onStrategySaved?.();
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'AI 重新生成失败';
+      setNotification({ type: 'error', message: msg });
+      setChatHistory(updatedHistory.slice(0, -1));
+      setSelectedChatIndex(Math.max(0, updatedHistory.length - 2));
+      setDetailEditCode(updatedHistory[updatedHistory.length - 2]?.code || '');
+    } finally {
+      setIsRegenerating(false);
+    }
   };
 
   const handleExport = () => {
@@ -572,6 +631,19 @@ export default function StrategyDialog({
             管理策略 ({storageStats.count}/{storageStats.maxCount})
           </button>
         </div>
+
+        {/* Toast notification */}
+        {notification && (
+          <div className={`flex items-center gap-2 px-4 py-2.5 text-xs font-medium border-b ${
+            notification.type === 'error'
+              ? 'bg-red-950/30 border-red-900/40 text-red-300'
+              : 'bg-green-950/30 border-green-900/40 text-green-300'
+          }`}>
+            {notification.type === 'error' ? <AlertCircle className="h-4 w-4 shrink-0" /> : <CheckCircle className="h-4 w-4 shrink-0" />}
+            <span className="flex-1">{notification.message}</span>
+            <button onClick={() => setNotification(null)} className="p-0.5 hover:opacity-70"><X className="h-3.5 w-3.5" /></button>
+          </div>
+        )}
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">
@@ -861,23 +933,39 @@ export default function StrategyDialog({
                     <div
                       key={entry.id}
                       onClick={() => handleSelectChatEntry(i)}
-                      className={`w-full text-left px-3 py-2.5 rounded-lg transition-colors cursor-pointer ${
+                      className={`w-full flex items-start gap-1 px-3 py-2.5 rounded-lg transition-colors cursor-pointer ${
                         i === selectedChatIndex
                           ? 'bg-cyan-500/10 border border-cyan-500/30'
                           : 'hover:bg-zinc-800 border border-transparent'
                       }`}
                     >
-                      <p className="text-xs text-zinc-300 leading-relaxed select-text">
-                        {entry.prompt || '(空提示词)'}
-                      </p>
-                      <p className="text-[10px] text-zinc-600 mt-1">
-                        {entry.code ? `✓ ${new Date(entry.createdAt).toLocaleString('zh-CN')}` : (
-                          <span className="inline-flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                            生成中...
-                          </span>
+                      <div className="flex-1 min-w-0 text-left">
+                        <p className="text-xs text-zinc-300 leading-relaxed select-text">
+                          {entry.prompt || '(空提示词)'}
+                        </p>
+                        {reasoningText && !entry.code && i === selectedChatIndex && (
+                          <p className="text-[10px] text-zinc-400 mt-1.5 leading-relaxed line-clamp-3 select-text">
+                            {reasoningText.length > 300 ? reasoningText.slice(0, 300) + '...' : reasoningText}
+                          </p>
                         )}
-                      </p>
+                        <p className="text-[10px] text-zinc-600 mt-1">
+                          {entry.code ? `✓ ${new Date(entry.createdAt).toLocaleString('zh-CN')}` : (
+                            <span className="inline-flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                              {reasoningText ? '思考中...' : '生成中...'}
+                            </span>
+                          )}
+                        </p>
+                      </div>
+                      {entry.code && !isRegenerating && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleRegenerateEntry(i); }}
+                          className="p-1 hover:bg-zinc-700 rounded-lg transition-colors shrink-0 mt-0.5"
+                          title="重新生成"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5 text-zinc-500 hover:text-cyan-400" />
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -916,7 +1004,7 @@ export default function StrategyDialog({
 
               {/* Right Panel: Code Editor */}
               <div className="flex-1 flex flex-col min-w-0">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+                <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800">
                   <h3 className="text-sm font-medium text-zinc-300">
                     {selectedChatIndex >= 0 && chatHistory[selectedChatIndex]?.code
                       ? '代码'
@@ -941,52 +1029,15 @@ export default function StrategyDialog({
                   </div>
                 </div>
 
-                {/* Editor container with floating reasoning overlay */}
-                <div className="flex-1 relative min-h-0">
-                  {/* Floating reasoning card */}
-                  {reasoningVisible && (
-                    <div
-                      className={`absolute left-3 right-3 top-3 z-10 bg-zinc-800/95 backdrop-blur-sm border border-zinc-700/80 rounded-xl shadow-2xl shadow-black/40 overflow-hidden transition-all duration-300 ease-out ${
-                        (isGenerating || isRegenerating)
-                          ? 'opacity-100 translate-y-0 scale-100'
-                          : 'opacity-0 -translate-y-2 scale-95 pointer-events-none'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between px-4 py-2.5 border-b border-zinc-700/50">
-                        <div className="flex items-center gap-2">
-                          <Brain className="h-4 w-4 text-cyan-400" />
-                          <span className="text-xs font-semibold text-cyan-400">
-                            {(isGenerating || isRegenerating) ? '思考中' : '思考过程'}
-                          </span>
-                          {(isGenerating || isRegenerating) && (
-                            <span className="flex gap-1">
-                              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-                              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-                              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: '300ms' }} />
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <div className="px-4 py-3 max-h-48 overflow-y-auto">
-                        <p className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap select-text">
-                          {reasoningText
-                            ? reasoningText.length > 500
-                              ? reasoningText.slice(0, 500) + '...'
-                              : reasoningText
-                            : '正在分析策略需求...'}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Code editor */}
-                  <div className="absolute inset-0 p-3 overflow-y-auto">
-                    <div className="editor-container h-full min-h-[30vh]">
+                {/* Code editor */}
+                <div className="flex-1 overflow-y-auto p-1">
+                  {selectedChatIndex >= 0 ? (
+                    <div className="editor-container h-full min-h-[400px]">
                       <Editor
                         value={detailEditCode}
                         onValueChange={setDetailEditCode}
                         highlight={(code) => Prism.highlight(code, Prism.languages.javascript, 'javascript')}
-                        padding={12}
+                        padding={8}
                         style={{
                           fontFamily: '"Fira Code", "Fira Mono", monospace',
                           fontSize: 12,
@@ -995,12 +1046,17 @@ export default function StrategyDialog({
                           border: '1px solid #3f3f46',
                           borderRadius: '0.5rem',
                           flex: 1,
+                          minHeight: '100%',
                         }}
                         textareaId="detail-code-editor"
                         placeholder="代码将在这里显示..."
                       />
                     </div>
-                  </div>
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-zinc-500 text-sm">
+                      点击左侧历史记录查看代码，或在底部输入提示词生成新版本
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

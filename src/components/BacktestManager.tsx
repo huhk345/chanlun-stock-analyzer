@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Play, ShieldAlert, CheckCircle, Download, ChevronLeft, ChevronRight, SkipForward, RotateCcw, Wand2, ChevronDown } from 'lucide-react';
 import { Kline, BacktestResult, BacktestTrade } from '../types/stock';
 import { SupabaseUser } from '../utils/supabase';
@@ -45,17 +46,37 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
   // Strategy dropdown
   const [strategyDropdownOpen, setStrategyDropdownOpen] = useState(false);
   const strategyDropdownRef = useRef<HTMLDivElement | null>(null);
+  const strategyButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [buttonRect, setButtonRect] = useState<DOMRect | null>(null);
 
-  // Close dropdown on outside click
+  // Close dropdown on outside click + reposition on scroll/resize
   useEffect(() => {
     if (!strategyDropdownOpen) return;
     const handler = (e: MouseEvent) => {
-      if (strategyDropdownRef.current && !strategyDropdownRef.current.contains(e.target as Node)) {
+      const el = document.getElementById('strategy-portal-dropdown');
+      if (
+        strategyButtonRef.current &&
+        !strategyButtonRef.current.contains(e.target as Node) &&
+        el &&
+        !el.contains(e.target as Node)
+      ) {
         setStrategyDropdownOpen(false);
       }
     };
+    const reposition = () => {
+      if (strategyButtonRef.current) {
+        setButtonRect(strategyButtonRef.current.getBoundingClientRect());
+      }
+    };
+    reposition();
     document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    document.addEventListener('scroll', reposition, true);
+    window.addEventListener('resize', reposition);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('scroll', reposition, true);
+      window.removeEventListener('resize', reposition);
+    };
   }, [strategyDropdownOpen]);
 
   // Strategy dialog
@@ -318,6 +339,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
               <label className="block text-xs font-semibold text-zinc-400 mb-2 font-sans">选择策略</label>
               <div className="relative" ref={strategyDropdownRef}>
                 <button
+                  ref={strategyButtonRef}
                   type="button"
                   onClick={() => setStrategyDropdownOpen((o) => !o)}
                   className="flex items-center gap-2 px-4 py-2.5 bg-zinc-800 border border-zinc-700 hover:border-cyan-500/50 rounded-lg text-sm text-zinc-200 transition-all cursor-pointer w-full"
@@ -329,9 +351,18 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
                   <ChevronDown className={`h-4 w-4 text-zinc-500 transition-transform ${strategyDropdownOpen ? 'rotate-180' : ''}`} />
                 </button>
 
-                {strategyDropdownOpen && (
-                  <div className="absolute z-50 left-0 right-0 mt-1.5 bg-zinc-950 border border-zinc-800 rounded-xl shadow-2xl shadow-black/60 overflow-hidden">
-                    <div className="max-h-56 overflow-y-auto">
+                {strategyDropdownOpen && buttonRect && createPortal(
+                  <div
+                    id="strategy-portal-dropdown"
+                    style={{
+                      position: 'fixed',
+                      left: buttonRect.left,
+                      top: buttonRect.bottom + 6,
+                      width: buttonRect.width,
+                    }}
+                    className="z-[9999] bg-zinc-950 border border-zinc-800 rounded-xl shadow-2xl shadow-black/60 overflow-hidden"
+                  >
+                    <div className="max-h-[60vh] overflow-y-auto">
                       {allStrategies.map((s) => {
                         const active = s.id === selectedStrategyId;
                         return (
@@ -356,7 +387,8 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
                         );
                       })}
                     </div>
-                  </div>
+                  </div>,
+                  document.body
                 )}
               </div>
               {selectedStrategy?.description && (
