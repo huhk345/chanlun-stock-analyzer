@@ -34,6 +34,7 @@ import {
   formatPricingLabel,
 } from '../utils/openrouter';
 import type { OpenRouterModel } from '../utils/openrouter';
+import ConfirmDialog from './ConfirmDialog';
 
 interface IndicatorDialogProps {
   isOpen: boolean;
@@ -90,6 +91,7 @@ export default function IndicatorDialog({
   const [editPrompt, setEditPrompt] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const modelDropdownRef = useRef<HTMLDivElement | null>(null);
 
@@ -289,13 +291,18 @@ export default function IndicatorDialog({
   };
 
   const handleDeleteIndicator = (id: string) => {
-    if (!confirm('确定要删除此指标？')) return;
-    deleteStoredIndicator(id);
+    setDeleteConfirmId(id);
+  };
+
+  const confirmDeleteIndicator = () => {
+    if (!deleteConfirmId) return;
+    deleteStoredIndicator(deleteConfirmId);
     loadIndicators();
-    if (selectedIndicator?.id === id) {
+    if (selectedIndicator?.id === deleteConfirmId) {
       setSelectedIndicator(null);
       setEditCode('');
     }
+    setDeleteConfirmId(null);
   };
 
   const handleEditIndicator = (indicator: StoredIndicator) => {
@@ -652,7 +659,8 @@ export default function IndicatorDialog({
                   {storedIndicators.map((indicator) => (
                     <div
                       key={indicator.id}
-                      className="bg-zinc-800 border border-zinc-700 rounded-lg p-4 hover:border-zinc-600 transition-colors"
+                      onClick={() => handleEditIndicator(indicator)}
+                      className="bg-zinc-800 border border-zinc-700 rounded-lg p-4 hover:border-zinc-600 transition-colors cursor-pointer"
                     >
                       <div className="flex items-start justify-between">
                         <div className="flex-1 min-w-0">
@@ -678,14 +686,14 @@ export default function IndicatorDialog({
                         </div>
                         <div className="flex items-center gap-2 ml-4">
                           <button
-                            onClick={() => handleEditIndicator(indicator)}
+                            onClick={(e) => { e.stopPropagation(); handleEditIndicator(indicator); }}
                             className="p-2 hover:bg-zinc-700 rounded-lg transition-colors"
                             title="编辑"
                           >
                             <Code className="h-4 w-4 text-zinc-400" />
                           </button>
                           <button
-                            onClick={() => handleDeleteIndicator(indicator.id)}
+                            onClick={(e) => { e.stopPropagation(); handleDeleteIndicator(indicator.id); }}
                             className="p-2 hover:bg-red-900/30 rounded-lg transition-colors"
                             title="删除"
                           >
@@ -778,6 +786,12 @@ export default function IndicatorDialog({
           )}
         </div>
       </div>
+      <ConfirmDialog
+        isOpen={deleteConfirmId !== null}
+        message="确定要删除此指标？"
+        onConfirm={confirmDeleteIndicator}
+        onCancel={() => setDeleteConfirmId(null)}
+      />
     </div>
   );
 }

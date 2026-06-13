@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   X, Plus, Trash2, Download, Upload, Save, Code, AlertCircle, CheckCircle,
-  Cpu, ChevronDown, Search, RefreshCw, Wand2, Settings,
+  Cpu, ChevronDown, Search, RefreshCw, Wand2, Settings, Brain,
 } from 'lucide-react';
 import Editor from 'react-simple-code-editor';
 import Prism from 'prismjs';
@@ -25,7 +25,6 @@ import {
   validateStrategyCode,
   loadStoredStrategyById,
 } from '../utils/strategyLoader';
-import { isValidStrategyId } from '../utils/strategyAdapter';
 import {
   generateStrategyCode,
   extractCodeFromResponse,
@@ -39,6 +38,7 @@ import {
   formatPricingLabel,
 } from '../utils/openrouter';
 import type { OpenRouterModel } from '../utils/openrouter';
+import ConfirmDialog from './ConfirmDialog';
 
 interface StrategyDialogProps {
   isOpen: boolean;
@@ -46,10 +46,11 @@ interface StrategyDialogProps {
   onStrategyCreated?: (strategy: UserStrategyDefinition) => void;
   /** Called when an existing strategy is saved after editing */
   onStrategySaved?: () => void;
+  /** Called when a strategy is deleted */
+  onStrategyDeleted?: () => void;
   existingStrategyIds?: string[];
   availableIndicatorIds?: string[];
   symbol?: string;
-  defaultTab?: 'create' | 'manage';
 }
 
 function getLocalApiKey(key: string): string {
@@ -73,12 +74,12 @@ export default function StrategyDialog({
   onClose,
   onStrategyCreated,
   onStrategySaved,
+  onStrategyDeleted,
   existingStrategyIds = [],
   availableIndicatorIds = [],
   symbol,
-  defaultTab = 'create',
 }: StrategyDialogProps) {
-  const [activeTab, setActiveTab] = useState<'create' | 'manage'>(defaultTab);
+  const [activeTab, setActiveTab] = useState<'create' | 'manage'>('create');
   const [storedStrategies, setStoredStrategies] = useState<StoredStrategy[]>([]);
   const [storageStats, setStorageStats] = useState(getStrategyStorageStats());
 
@@ -103,8 +104,46 @@ export default function StrategyDialog({
   const [newPrompt, setNewPrompt] = useState('');
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [detailEditCode, setDetailEditCode] = useState('');
+  const [reasoningText, setReasoningText] = useState('');
+  const [reasoningVisible, setReasoningVisible] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const modelDropdownRef = useRef<HTMLDivElement | null>(null);
+  const wasGenerating = useRef(false);
+  const codeStartedRef = useRef(false);
+
+  // Detect generation start/end for reasoning exit animation
+  useEffect(() => {
+    if (isGenerating || isRegenerating) {
+      setReasoningVisible(true);
+      setReasoningText('');
+      wasGenerating.current = true;
+      codeStartedRef.current = false;
+    } else if (wasGenerating.current) {
+      wasGenerating.current = false;
+      const timer = setTimeout(() => {
+        setReasoningVisible(false);
+        setReasoningText('');
+      }, 400);
+      return () => clearTimeout(timer);
+    }
+  }, [isGenerating, isRegenerating]);
+
+  // Dismiss thinking card as soon as the first code chunk arrives
+  useEffect(() => {
+    if ((isGenerating || isRegenerating) && detailEditCode && !codeStartedRef.current) {
+      codeStartedRef.current = true;
+      wasGenerating.current = false;
+      const timer = setTimeout(() => {
+        setReasoningVisible(false);
+        setReasoningText('');
+      }, 400);
+      return () => clearTimeout(timer);
+    }
+    if (!isGenerating && !isRegenerating) {
+      codeStartedRef.current = false;
+    }
+  }, [detailEditCode, isGenerating, isRegenerating]);
 
   // Load models on mount
   useEffect(() => {
@@ -159,15 +198,17 @@ export default function StrategyDialog({
       setGeneratedCode('');
       setGenerationResult(null);
       setStreamingCode('');
-      setActiveTab(defaultTab);
+      setActiveTab('create');
       setViewingStrategy(null);
       setChatHistory([]);
       setSelectedChatIndex(-1);
       setNewPrompt('');
       setDetailEditCode('');
+      setReasoningText('');
+      setReasoningVisible(false);
       setIsRegenerating(false);
     }
-  }, [isOpen, defaultTab]);
+  }, [isOpen]);
 
   const loadStrategies = () => {
     setStoredStrategies(getAllStoredStrategies());
@@ -218,101 +259,96 @@ export default function StrategyDialog({
     setGenerationResult(null);
     setStreamingCode('');
     setGeneratedCode('');
+    setReasoningText('');
+
+    const chatId = `chat-${Date.now()}`;
+    const strategyId = `temp-${Date.now()}`;
+
+    // Create temporary entry with empty code
+    const entry: ChatEntry = {
+      id: chatId,
+      prompt: userDescription,
+      code: '',
+      model: selectedModel || undefined,
+      createdAt: new Date().toISOString(),
+    };
+
+    const tempStrategy: StoredStrategy = {
+      id: strategyId,
+      name: '正在生成...',
+      code: '',
+      prompt: userDescription,
+      model: selectedModel || undefined,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      chatHistory: [entry],
+    };
+
+    // Jump to the edit page (manage tab with chat list on left) immediately
+    setChatHistory([entry]);
+    setSelectedChatIndex(0);
+    setDetailEditCode('');
+    setViewingStrategy(tempStrategy);
+    setActiveTab('manage');
 
     try {
       const fullCode = await generateStrategyCode(
         userDescription,
         availableIndicatorIds,
         (chunk) => {
-          setStreamingCode((prev) => prev + chunk);
+          setDetailEditCode((prev) => prev + chunk);
         },
         selectedModel,
+        (reasoning) => {
+          setReasoningText(reasoning);
+        },
       );
 
       const cleaned = extractCodeFromResponse(fullCode);
-
       setGeneratedCode(cleaned);
-      setGenerationResult({
-        success: true,
+      setDetailEditCode(cleaned);
+
+      const finalEntry: ChatEntry = {
+        id: chatId,
+        prompt: userDescription,
         code: cleaned,
-        explanation: 'AI 已根据你的描述生成策略代码。请检查代码，确认无误后点击"保存策略"。',
+        model: selectedModel || undefined,
+        createdAt: new Date().toISOString(),
+      };
+      setChatHistory([finalEntry]);
+      setViewingStrategy({
+        id: strategyId,
+        name: (cleaned.match(/name:\s*['"]([^'"]+)['"]/)?.[1]) || '未命名策略',
+        code: cleaned,
+        prompt: userDescription,
+        model: selectedModel || undefined,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        chatHistory: [finalEntry],
       });
     } catch (error) {
-      setGenerationResult({
-        success: false,
-        errors: [error instanceof Error ? error.message : 'AI 生成失败，请重试'],
-      });
+      const msg = error instanceof Error ? error.message : 'AI 生成失败，请重试';
+      alert(msg);
+      setGenerationResult({ success: false, errors: [msg] });
     } finally {
       setIsGenerating(false);
       setStreamingCode('');
     }
   };
 
-  const handleSaveGenerated = () => {
-    const code = generatedCode.trim();
-    if (!code) return;
-
-    const validation = validateStrategyCode(code);
-    if (!validation.valid) {
-      alert(`代码验证失败:\n${validation.errors.join('\n')}`);
-      return;
-    }
-
-    const idMatch = code.match(/id:\s*['"]([^'"]+)['"]/);
-    const nameMatch = code.match(/name:\s*['"]([^'"]+)['"]/);
-
-    if (!idMatch || !nameMatch) {
-      alert('无法从代码中解析策略 ID 和名称');
-      return;
-    }
-
-    const id = idMatch[1];
-    const name = nameMatch[1];
-
-    if (!isValidStrategyId(id)) {
-      alert('无效的策略 ID 格式。请使用小写 kebab-case (例如 "my-strategy")');
-      return;
-    }
-
-    if (existingStrategyIds.includes(id)) {
-      alert(`策略 ID "${id}" 已存在，请使用不同的 ID。`);
-      return;
-    }
-
-    try {
-      const stored: StoredStrategy = {
-        id,
-        name,
-        code: code,
-        prompt: userDescription || undefined,
-        model: selectedModel || undefined,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      saveStoredStrategy(stored);
-
-      const definition = loadStoredStrategyById(id);
-      if (definition) {
-        onStrategyCreated?.(definition);
-      }
-
-      // Switch to manage tab and edit the newly saved strategy instead of closing
-      loadStrategies();
-      handleEditStrategy(stored);
-      setActiveTab('manage');
-    } catch (error) {
-      alert(error instanceof Error ? error.message : '保存策略失败');
-    }
+  const handleDeleteStrategy = (id: string) => {
+    setDeleteConfirmId(id);
   };
 
-  const handleDeleteStrategy = (id: string) => {
-    if (!confirm('确定要删除此策略？')) return;
-    deleteStoredStrategy(id);
+  const confirmDeleteStrategy = () => {
+    if (!deleteConfirmId) return;
+    deleteStoredStrategy(deleteConfirmId);
     loadStrategies();
-    if (viewingStrategy?.id === id) {
+    if (viewingStrategy?.id === deleteConfirmId) {
       setViewingStrategy(null);
     }
+    setDeleteConfirmId(null);
+    onStrategyDeleted?.();
   };
 
   const handleEditStrategy = (strategy: StoredStrategy) => {
@@ -345,23 +381,59 @@ export default function StrategyDialog({
       alert(`代码验证失败:\n${validation.errors.join('\n')}`);
       return;
     }
-    try {
-      const updated: StoredStrategy = {
-        ...viewingStrategy,
-        code: latestCode,
-        chatHistory: updatedHistory,
-        updatedAt: new Date().toISOString(),
-      };
-      saveStoredStrategy(updated);
-      loadStrategies();
-      onStrategySaved?.();
-      onClose();
-      setChatHistory([]);
-      setSelectedChatIndex(-1);
-      setDetailEditCode('');
-    } catch (error) {
-      alert(error instanceof Error ? error.message : '保存失败');
+    const existingStrategies = getAllStoredStrategies();
+    const isNew = !existingStrategies.some((s) => s.id === viewingStrategy.id) || viewingStrategy.id.startsWith('temp-');
+    if (isNew) {
+      const idMatch = latestCode.match(/id:\s*['"]([^'"]+)['"]/);
+      const nameMatch = latestCode.match(/name:\s*['"]([^'"]+)['"]/);
+      if (!idMatch || !nameMatch) {
+        alert('无法从代码中解析策略 ID 和名称');
+        return;
+      }
+      const id = idMatch[1];
+      const name = nameMatch[1];
+      if (existingStrategies.some((s) => s.id === id) || existingStrategyIds.includes(id)) {
+        alert(`策略 ID "${id}" 已存在，请修改代码中的 ID。`);
+        return;
+      }
+      try {
+        const stored: StoredStrategy = {
+          id,
+          name,
+          code: latestCode,
+          prompt: chatHistory[0]?.prompt,
+          model: selectedModel || undefined,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          chatHistory: updatedHistory,
+        };
+        saveStoredStrategy(stored);
+        const definition = loadStoredStrategyById(id);
+        if (definition) onStrategyCreated?.(definition);
+        loadStrategies();
+        onClose();
+      } catch (error) {
+        alert(error instanceof Error ? error.message : '保存策略失败');
+      }
+    } else {
+      try {
+        const updated: StoredStrategy = {
+          ...viewingStrategy,
+          code: latestCode,
+          chatHistory: updatedHistory,
+          updatedAt: new Date().toISOString(),
+        };
+        saveStoredStrategy(updated);
+        loadStrategies();
+        onStrategySaved?.();
+        onClose();
+      } catch (error) {
+        alert(error instanceof Error ? error.message : '保存失败');
+      }
     }
+    setChatHistory([]);
+    setSelectedChatIndex(-1);
+    setDetailEditCode('');
   };
 
   const handleGenerateNewEntry = async () => {
@@ -379,13 +451,19 @@ export default function StrategyDialog({
     setChatHistory(updatedHistory);
     setSelectedChatIndex(updatedHistory.length - 1);
     setDetailEditCode('');
+    setReasoningText('');
     setNewPrompt('');
     try {
       const fullCode = await generateStrategyCode(
         newEntry.prompt,
         availableIndicatorIds,
-        (chunk) => {},
+        (chunk) => {
+          setDetailEditCode((prev) => prev + chunk);
+        },
         selectedModel || undefined,
+        (reasoning) => {
+          setReasoningText(reasoning);
+        },
       );
       const cleaned = extractCodeFromResponse(fullCode);
       const finalHistory = updatedHistory.map((entry, i) =>
@@ -498,7 +576,7 @@ export default function StrategyDialog({
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">
           {activeTab === 'create' && (
-            <div className="space-y-5">
+            <div className="flex flex-col h-full space-y-4">
               {/* API Key Warning */}
               {!hasAnyApiKey() && (
                 <div className="p-3 bg-amber-950/20 border border-amber-900/30 rounded-lg flex items-start gap-3">
@@ -592,7 +670,7 @@ export default function StrategyDialog({
               </div>
 
               {/* Description Input */}
-              <div>
+              <div className="flex-1 flex flex-col min-h-0">
                 <label className="block text-sm font-medium text-zinc-300 mb-2">
                   用自然语言描述你的交易策略
                 </label>
@@ -600,7 +678,11 @@ export default function StrategyDialog({
                   value={userDescription}
                   onChange={(e) => setUserDescription(e.target.value)}
                   placeholder="例如：我想创建一个策略，当5日均线上穿20日均线且成交量放大时买入，当5日均线下穿20日均线时卖出"
-                  className="w-full h-28 px-4 py-3 bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none"
+                  className={`w-full flex-1 min-h-[80px] px-4 py-3 bg-zinc-800 border rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none transition-all ${
+                    isGenerating
+                      ? 'border-cyan-500/70 animate-pulse'
+                      : 'border-zinc-700'
+                  }`}
                 />
               </div>
 
@@ -667,41 +749,7 @@ export default function StrategyDialog({
                 </div>
               )}
 
-              {/* Generated Code Editor */}
-              {generatedCode && !isGenerating && (
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm font-medium text-zinc-300">
-                      生成的代码（可编辑）
-                    </label>
-                    <button
-                      onClick={handleSaveGenerated}
-                      className="px-4 py-1.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-1.5"
-                    >
-                      <Save className="h-3.5 w-3.5" />
-                      保存策略
-                    </button>
-                  </div>
-                  <div className="editor-container">
-                    <Editor
-                      value={generatedCode}
-                      onValueChange={setGeneratedCode}
-                      highlight={(code) => Prism.highlight(code, Prism.languages.javascript, 'javascript')}
-                      padding={16}
-                      style={{
-                        fontFamily: '"Fira Code", "Fira Mono", monospace',
-                        fontSize: 12,
-                        lineHeight: 1.5,
-                        backgroundColor: '#09090b',
-                        border: '1px solid #3f3f46',
-                        borderRadius: '0.5rem',
-                        minHeight: '18rem',
-                      }}
-                      textareaId="create-code-editor"
-                    />
-                  </div>
-                </div>
-              )}
+
             </div>
           )}
 
@@ -738,7 +786,8 @@ export default function StrategyDialog({
                   {storedStrategies.map((strategy) => (
                     <div
                       key={strategy.id}
-                      className="bg-zinc-800 border border-zinc-700 rounded-lg p-4 hover:border-zinc-600 transition-colors"
+                      onClick={() => handleEditStrategy(strategy)}
+                      className="bg-zinc-800 border border-zinc-700 rounded-lg p-4 hover:border-zinc-600 transition-colors cursor-pointer"
                     >
                       <div className="flex items-start justify-between">
                         <div className="flex-1 min-w-0">
@@ -759,14 +808,14 @@ export default function StrategyDialog({
                         </div>
                         <div className="flex items-center gap-2 ml-4">
                           <button
-                            onClick={() => handleEditStrategy(strategy)}
+                            onClick={(e) => { e.stopPropagation(); handleEditStrategy(strategy); }}
                             className="p-2 hover:bg-zinc-700 rounded-lg transition-colors"
                             title="编辑"
                           >
                             <Code className="h-4 w-4 text-zinc-400" />
                           </button>
                           <button
-                            onClick={() => handleDeleteStrategy(strategy.id)}
+                            onClick={(e) => { e.stopPropagation(); handleDeleteStrategy(strategy.id); }}
                             className="p-2 hover:bg-red-900/30 rounded-lg transition-colors"
                             title="删除"
                           >
@@ -789,7 +838,12 @@ export default function StrategyDialog({
                 <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
                   <div className="flex items-center gap-2 min-w-0">
                     <button
-                      onClick={() => setViewingStrategy(null)}
+                      onClick={() => {
+                        if (viewingStrategy && !getAllStoredStrategies().some((s) => s.id === viewingStrategy.id)) {
+                          setActiveTab('create');
+                        }
+                        setViewingStrategy(null);
+                      }}
                       className="p-1 hover:bg-zinc-700 rounded-lg transition-colors shrink-0"
                       title="返回列表"
                     >
@@ -804,22 +858,27 @@ export default function StrategyDialog({
                 {/* Chat History List */}
                 <div className="flex-1 overflow-y-auto p-2 space-y-1">
                   {chatHistory.map((entry, i) => (
-                    <button
+                    <div
                       key={entry.id}
                       onClick={() => handleSelectChatEntry(i)}
-                      className={`w-full text-left px-3 py-2.5 rounded-lg transition-colors ${
+                      className={`w-full text-left px-3 py-2.5 rounded-lg transition-colors cursor-pointer ${
                         i === selectedChatIndex
                           ? 'bg-cyan-500/10 border border-cyan-500/30'
                           : 'hover:bg-zinc-800 border border-transparent'
                       }`}
                     >
-                      <p className="text-xs text-zinc-300 line-clamp-2 leading-relaxed">
+                      <p className="text-xs text-zinc-300 leading-relaxed select-text">
                         {entry.prompt || '(空提示词)'}
                       </p>
                       <p className="text-[10px] text-zinc-600 mt-1">
-                        {entry.code ? `✓ ${new Date(entry.createdAt).toLocaleString('zh-CN')}` : '生成中...'}
+                        {entry.code ? `✓ ${new Date(entry.createdAt).toLocaleString('zh-CN')}` : (
+                          <span className="inline-flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                            生成中...
+                          </span>
+                        )}
                       </p>
-                    </button>
+                    </div>
                   ))}
                 </div>
 
@@ -829,7 +888,11 @@ export default function StrategyDialog({
                     value={newPrompt}
                     onChange={(e) => setNewPrompt(e.target.value)}
                     placeholder="输入新的提示词，继续改进策略..."
-                    className="w-full h-20 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-100 placeholder-zinc-500 text-xs focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none"
+                    className={`w-full h-20 px-3 py-2 bg-zinc-800 border rounded-lg text-zinc-100 placeholder-zinc-500 text-xs focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none transition-all ${
+                      isRegenerating
+                        ? 'border-cyan-500/70 animate-pulse'
+                        : 'border-zinc-700'
+                    }`}
                   />
                   <button
                     onClick={handleGenerateNewEntry}
@@ -857,7 +920,7 @@ export default function StrategyDialog({
                   <h3 className="text-sm font-medium text-zinc-300">
                     {selectedChatIndex >= 0 && chatHistory[selectedChatIndex]?.code
                       ? '代码'
-                      : isRegenerating ? '正在生成...' : '选择或生成一个版本'}
+                      : (isGenerating || isRegenerating) ? '正在生成...' : '选择或生成一个版本'}
                   </h3>
                   <div className="flex items-center gap-2">
                     <button
@@ -877,14 +940,53 @@ export default function StrategyDialog({
                     </button>
                   </div>
                 </div>
-                <div className="flex-1 p-4 overflow-y-auto">
-                  {selectedChatIndex >= 0 ? (
-                    <div className="editor-container h-full">
+
+                {/* Editor container with floating reasoning overlay */}
+                <div className="flex-1 relative min-h-0">
+                  {/* Floating reasoning card */}
+                  {reasoningVisible && (
+                    <div
+                      className={`absolute left-3 right-3 top-3 z-10 bg-zinc-800/95 backdrop-blur-sm border border-zinc-700/80 rounded-xl shadow-2xl shadow-black/40 overflow-hidden transition-all duration-300 ease-out ${
+                        (isGenerating || isRegenerating)
+                          ? 'opacity-100 translate-y-0 scale-100'
+                          : 'opacity-0 -translate-y-2 scale-95 pointer-events-none'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between px-4 py-2.5 border-b border-zinc-700/50">
+                        <div className="flex items-center gap-2">
+                          <Brain className="h-4 w-4 text-cyan-400" />
+                          <span className="text-xs font-semibold text-cyan-400">
+                            {(isGenerating || isRegenerating) ? '思考中' : '思考过程'}
+                          </span>
+                          {(isGenerating || isRegenerating) && (
+                            <span className="flex gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+                              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+                              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="px-4 py-3 max-h-48 overflow-y-auto">
+                        <p className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap select-text">
+                          {reasoningText
+                            ? reasoningText.length > 500
+                              ? reasoningText.slice(0, 500) + '...'
+                              : reasoningText
+                            : '正在分析策略需求...'}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Code editor */}
+                  <div className="absolute inset-0 p-3 overflow-y-auto">
+                    <div className="editor-container h-full min-h-[30vh]">
                       <Editor
                         value={detailEditCode}
                         onValueChange={setDetailEditCode}
                         highlight={(code) => Prism.highlight(code, Prism.languages.javascript, 'javascript')}
-                        padding={16}
+                        padding={12}
                         style={{
                           fontFamily: '"Fira Code", "Fira Mono", monospace',
                           fontSize: 12,
@@ -892,24 +994,25 @@ export default function StrategyDialog({
                           backgroundColor: '#09090b',
                           border: '1px solid #3f3f46',
                           borderRadius: '0.5rem',
-                          minHeight: '30vh',
                           flex: 1,
                         }}
                         textareaId="detail-code-editor"
                         placeholder="代码将在这里显示..."
                       />
                     </div>
-                  ) : (
-                    <div className="flex items-center justify-center h-full text-zinc-500 text-sm">
-                      点击左侧历史记录查看代码，或在底部输入提示词生成新版本
-                    </div>
-                  )}
+                  </div>
                 </div>
               </div>
             </div>
           )}
         </div>
       </div>
+      <ConfirmDialog
+        isOpen={deleteConfirmId !== null}
+        message="确定要删除此策略？"
+        onConfirm={confirmDeleteStrategy}
+        onCancel={() => setDeleteConfirmId(null)}
+      />
     </div>
   );
 }

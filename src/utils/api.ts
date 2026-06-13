@@ -447,6 +447,7 @@ function responseTextSafe(text: string): string {
 // ---------------------------------------------------------------------------
 
 export type StreamCallback = (chunk: string) => void;
+export type ReasoningCallback = (reasoning: string) => void;
 
 async function callOpenRouterChatStream(
   apiKey: string,
@@ -454,6 +455,7 @@ async function callOpenRouterChatStream(
   messages: ChatMessage[],
   onToken: StreamCallback,
   temperature = 0.7,
+  onReasoning?: ReasoningCallback,
 ): Promise<string> {
   console.log(`[AI] OpenRouter stream -> ${model} (${messages.length} msg)`);
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -510,7 +512,12 @@ async function callOpenRouterChatStream(
 
         try {
           const parsed = JSON.parse(data);
-          const content = parsed?.choices?.[0]?.delta?.content || '';
+          const delta = parsed?.choices?.[0]?.delta;
+          const content = delta?.content || '';
+          const reasoning = delta?.reasoning || delta?.reasoning_content || '';
+          if (reasoning && onReasoning) {
+            onReasoning(reasoning);
+          }
           if (content) {
             full += content;
             onToken(content);
@@ -1175,6 +1182,7 @@ export async function generateStrategyCode(
   availableIndicatorIds: string[] = [],
   onToken?: StreamCallback,
   model?: string,
+  onReasoning?: ReasoningCallback,
 ): Promise<string> {
   const OPENROUTER_API_KEY = getOpenRouterApiKey();
   const GEMINI_API_KEY = getGeminiApiKey();
@@ -1201,6 +1209,7 @@ export async function generateStrategyCode(
         ],
         onToken,
         0.3,
+        onReasoning,
       );
     }
 

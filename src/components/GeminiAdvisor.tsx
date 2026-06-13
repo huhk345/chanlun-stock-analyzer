@@ -30,6 +30,7 @@ import {
   formatPricingLabel,
   OpenRouterModel,
 } from '../utils/openrouter';
+import ConfirmDialog from './ConfirmDialog';
 
 interface GeminiAdvisorProps {
   symbol: string;
@@ -107,6 +108,7 @@ export default function GeminiAdvisor({
   const shareCardRef = useRef<HTMLDivElement | null>(null);
   const [shareContent, setShareContent] = useState<string | null>(null);
   const [shareStatus, setShareStatus] = useState<'idle' | 'generating' | 'success' | 'error'>('idle');
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   const modelDropdownRef = useRef<HTMLDivElement | null>(null);
 
@@ -245,9 +247,13 @@ export default function GeminiAdvisor({
   const handleClearChat = () => {
     if (chatLoading) return;
     if (chatMessages.length === 0) return;
-    if (!window.confirm('确定清空当前对话? 此操作不可撤销。')) return;
+    setShowClearConfirm(true);
+  };
+
+  const confirmClearChat = () => {
     setChatMessages([]);
     setChatError('');
+    setShowClearConfirm(false);
   };
 
   const handleSuggestedQuestion = (q: string) => {
@@ -766,6 +772,15 @@ export default function GeminiAdvisor({
           分享失败，请重试
         </div>
       )}
+      <ConfirmDialog
+        isOpen={showClearConfirm}
+        title="清空对话"
+        message="确定清空当前对话？此操作不可撤销。"
+        confirmText="确认清空"
+        variant="danger"
+        onConfirm={confirmClearChat}
+        onCancel={() => setShowClearConfirm(false)}
+      />
     </div>
   );
 }
