@@ -1,0 +1,89 @@
+name: 缠论日报
+
+on:
+  # 每个交易日 (周一至周五) 北京时间 15:30 执行 (UTC 07:30)
+  schedule:
+    - cron: '30 7 * * 1-5'
+  # 支持手动触发
+  workflow_dispatch:
+    inputs:
+      stocks:
+        description: '股票代码 (逗号分隔, 如: 000001,600519)'
+        required: false
+        default: ''
+      model:
+        description: 'AI 模型 (OpenRouter 模型 ID)'
+        required: false
+        default: 'google/gemini-2.0-flash-exp:free'
+      notify:
+        description: '通知方式 (逗号分隔: console,serverchan,email,issue)'
+        required: false
+        default: 'console,issue'
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  daily-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install tsx for TypeScript execution
+        run: npm install -D tsx
+
+      - name: Generate ChanLun Daily Report
+        env:
+          VITE_TICKFLOW_API_KEY: ${{ secrets.VITE_TICKFLOW_API_KEY }}
+          VITE_OPENROUTER_API_KEY: ${{ secrets.VITE_OPENROUTER_API_KEY }}
+          VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
+          AI_MODEL: ${{ github.event.inputs.model || 'google/gemini-2.0-flash-exp:free' }}
+          STOCKS: ${{ github.event.inputs.stocks || '' }}
+          # 通知配置
+          SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+          NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          NOTIFY: ${{ github.event.inputs.notify || 'console,issue' }}
+        run: |
+          ARGS="--output ./reports"
+          if [ -n "$STOCKS" ]; then
+            ARGS="$ARGS --stocks $STOCKS"
+          fi
+          ARGS="$ARGS --notify $NOTIFY"
+          npx tsx scripts/chanlun-report.ts $ARGS
+
+      - name: Commit and push reports
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          DATE=$(date +%Y-%m-%d)
+          git add ./reports/ || true
+          if git diff --staged --quiet; then
+            echo "No new reports to commit"
+          else
+            git commit -m "chanlun daily report ${DATE}"
+            git push
+          fi
+
+      - name: Upload reports as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chanlun-reports-${{ github.run_number }}
+          path: ./reports/
+          retention-days: 30
