@@ -14,11 +14,11 @@ on:
       model:
         description: 'AI 模型 (OpenRouter 模型 ID)'
         required: false
-        default: 'nex-agi/nex-n2-pro:free'
+        default: 'deepseek-v4-flash-free'
       notify:
         description: '通知方式 (逗号分隔: console,serverchan,email,issue)'
         required: false
-        default: 'console,issue'
+        default: 'console,email'
 
 permissions:
   contents: write
