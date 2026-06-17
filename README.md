@@ -95,6 +95,29 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
 4. Use the AI Advisor panel on the right to ask questions about trends, buy/sell points, divergences, and strategies
 5. Configure API keys via the Settings modal (gear icon)
 
+### Daily Report (CLI)
+
+A scheduled daily report system generates automated ChanLun analysis for selected stocks.
+
+**How it works:**
+- A GitHub Actions workflow ([`.github/workflows/daily-report.yml`](.github/workflows/daily-report.yml)) runs every trading day at 19:30 CST
+- Fetches K-line data via TickFlow API, computes ChanLun structures, and generates AI-powered analysis reports
+- Searches stock news via Exa API and summarizes market hotspots
+- Outputs Markdown reports and sends notifications (ServerChan/Email/GitHub Issue)
+
+**Configuration:**
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `VITE_OPENCODE_API_KEY` | Yes | OpenCode API key for AI analysis ([https://opencode.ai](https://opencode.ai)) |
+| `EXA_API_KEY` | No | Exa API key for news search ([https://exa.ai](https://exa.ai)) |
+| `SERVERCHAN_KEY` | No | ServerChan key for WeChat push ([https://sct.ftqq.com](https://sct.ftqq.com)) |
+| `RESEND_API_KEY` | No | Resend API key for email notifications ([https://resend.com](https://resend.com)) |
+
+**Manual run:**
+```bash
+npx tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
+```
+
 ### Keywords
 
 `ChanLun` `缠论` `Technical Analysis` `Stock Analysis` `A-Share` `Fraction` `Stroke` `Segment` `Hub` `Divergence` `Buy/Sell Points` `AI Analysis` `Gemini` `OpenRouter` `Lightweight Charts` `React` `TypeScript` `Vite` `Tailwind CSS` `Quantitative Trading`
@@ -175,6 +198,31 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
 ### 关键词
 
 `缠论` `ChanLun` `技术分析` `股票分析` `A股` `分型` `笔` `线段` `中枢` `背驰` `买卖点` `AI分析` `Gemini` `OpenRouter` `Lightweight Charts` `React` `TypeScript` `Vite` `Tailwind CSS` `量化交易`
+
+---
+
+### 日报系统 (CLI)
+
+自动缠论日报系统，定时生成选定个股的缠论分析报告。
+
+**工作流程：**
+- GitHub Actions 工作流 ([`.github/workflows/daily-report.yml`](.github/workflows/daily-report.yml)) 每个交易日 19:30 (CST) 自动执行
+- 通过 TickFlow API 获取 K 线数据，计算缠论结构，调用 AI 生成分析报告
+- 通过 Exa API 搜索个股新闻并总结市场热点
+- 输出 Markdown 报告，支持 ServerChan/邮件/GitHub Issue 通知
+
+**环境变量：**
+| 变量 | 必须 | 说明 |
+|------|------|------|
+| `VITE_OPENCODE_API_KEY` | 是 | OpenCode API Key, 用于 AI 分析 ([https://opencode.ai](https://opencode.ai)) |
+| `EXA_API_KEY` | 否 | Exa API Key, 用于新闻搜索 ([https://exa.ai](https://exa.ai)) |
+| `SERVERCHAN_KEY` | 否 | ServerChan Key, 用于微信推送 ([https://sct.ftqq.com](https://sct.ftqq.com)) |
+| `RESEND_API_KEY` | 否 | Resend API Key, 用于邮件通知 ([https://resend.com](https://resend.com)) |
+
+**手动运行：**
+```bash
+npx tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
+```
 
 ---
 
