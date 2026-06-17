@@ -50,6 +50,7 @@ jobs:
           VITE_TICKFLOW_API_KEY: ${{ secrets.VITE_TICKFLOW_API_KEY }}
           VITE_OPENROUTER_API_KEY: ${{ secrets.VITE_OPENROUTER_API_KEY }}
           VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
+          VITE_OPENCODE_API_KEY: ${{ secrets.VITE_OPENCODE_API_KEY }}
           AI_MODEL: ${{ github.event.inputs.model || 'google/gemini-2.0-flash-exp:free' }}
           STOCKS: ${{ github.event.inputs.stocks || '' }}
           # Exa 搜索 (财联社新闻/热点检索)
