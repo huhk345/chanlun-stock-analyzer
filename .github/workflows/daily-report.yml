@@ -1,9 +1,9 @@
 name: 缠论日报
 
 on:
-  # 每个交易日 (周一至周五) 北京时间 15:30 执行 (UTC 07:30)
+  # 每个交易日 (周一至周五) 北京时间 19:30 执行 (UTC 07:30)
   schedule:
-    - cron: '30 7 * * 1-5'
+    - cron: '30 11 * * 1-5'
   # 支持手动触发
   workflow_dispatch:
     inputs:
@@ -14,7 +14,7 @@ on:
       model:
         description: 'AI 模型 (OpenRouter 模型 ID)'
         required: false
-        default: 'google/gemini-2.0-flash-exp:free'
+        default: 'nex-agi/nex-n2-pro:free'
       notify:
         description: '通知方式 (逗号分隔: console,serverchan,email,issue)'
         required: false
@@ -52,6 +52,8 @@ jobs:
           VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
           AI_MODEL: ${{ github.event.inputs.model || 'google/gemini-2.0-flash-exp:free' }}
           STOCKS: ${{ github.event.inputs.stocks || '' }}
+          # Exa 搜索 (财联社新闻/热点检索)
+          EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
           # 通知配置
           SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
