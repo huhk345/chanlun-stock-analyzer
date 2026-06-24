@@ -810,9 +810,10 @@ async function analyzeStock(symbol: string): Promise<string> {
 // Notification providers
 // ---------------------------------------------------------------------------
 
-type NotifyChannel = 'console' | 'serverchan' | 'email' | 'issue';
+type NotifyChannel = 'console' | 'serverchan' | 'email' | 'issue' | 'feishu';
 
 const SERVERCHAN_KEY = process.env.SERVERCHAN_KEY || '';
+const FEISHU_WEBHOOK = process.env.FEISHU_WEBHOOK || '';
 const EMAIL_TO = process.env.NOTIFY_EMAIL_TO || '';
 const EMAIL_FROM = process.env.NOTIFY_EMAIL_FROM || '';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
@@ -946,6 +947,136 @@ async function notifyGitHubIssue(title: string, content: string): Promise<void> 
   console.log(`[通知] GitHub Issue: 创建成功 #${data.number} — ${data.html_url}`);
 }
 
+/** 飞书机器人通知 — 使用自定义机器人 webhook */
+async function notifyFeishu(title: string, content: string): Promise<void> {
+  if (!FEISHU_WEBHOOK) { console.log('[通知] 飞书: 未配置 FEISHU_WEBHOOK, 跳过'); return; }
+  console.log('[通知] 飞书: 发送中...');
+  
+  // 1. 发送摘要消息
+  const summary: string[] = [];
+  
+  const dateMatch = content.match(/缠论日报汇总 — (\d{4}-\d{2}-\d{2})/);
+  if (dateMatch) {
+    summary.push(`**📅 ${dateMatch[1]} 缠论日报**`);
+    summary.push('');
+  }
+  
+  // 提取个股信息
+  const stockSections = content.split(/^---$/m).filter(s => s.includes('缠论日报'));
+  for (const section of stockSections) {
+    const codeMatch = section.match(/^# (\d{6}\.(?:SH|SZ)) 缠论日报/m);
+    if (!codeMatch) continue;
+    const code = codeMatch[1];
+    
+    const priceMatch = section.match(/最新收盘:\s*([\d.]+)/);
+    const changeMatch = section.match(/涨跌幅:\s*([-\d.]+)%/);
+    
+    const price = priceMatch ? priceMatch[1] : 'N/A';
+    let change = 'N/A';
+    if (changeMatch) {
+      const val = parseFloat(changeMatch[1]);
+      change = val >= 0 ? `+${changeMatch[1]}%` : `${changeMatch[1]}%`;
+    }
+    
+    summary.push(`• ${code}: ${price} (${change})`);
+  }
+  
+  summary.push('');
+  summary.push('━━━━━━━━━━━━━━━━━━━━');
+  summary.push('*本报告由缠论量化分析系统自动生成*');
+  
+  // 发送摘要消息
+  const summaryMessage = {
+    msg_type: 'post',
+    content: {
+      post: {
+        zh_cn: {
+          title: title,
+          content: [
+            [
+              {
+                tag: 'text',
+                text: summary.join('\n'),
+              },
+            ],
+          ],
+        },
+      },
+    },
+  };
+  
+  await sendFeishuMessage(summaryMessage);
+  
+  // 2. 发送完整报告内容（分段发送，避免单条消息过长）
+  // 飞书单条消息限制约 30KB，这里按 20KB 分段
+  const MAX_CHUNK_SIZE = 20000;
+  const chunks: string[] = [];
+  
+  if (content.length > MAX_CHUNK_SIZE) {
+    // 分段处理
+    let remaining = content;
+    while (remaining.length > 0) {
+      chunks.push(remaining.slice(0, MAX_CHUNK_SIZE));
+      remaining = remaining.slice(MAX_CHUNK_SIZE);
+    }
+  } else {
+    chunks.push(content);
+  }
+  
+  // 发送分段消息
+  for (let i = 0; i < chunks.length; i++) {
+    const chunkTitle = chunks.length > 1 ? `${title} (第 ${i + 1}/${chunks.length} 部分)` : title;
+    const chunkMessage = {
+      msg_type: 'post',
+      content: {
+        post: {
+          zh_cn: {
+            title: chunkTitle,
+            content: [
+              [
+                {
+                  tag: 'text',
+                  text: chunks[i],
+                },
+              ],
+            ],
+          },
+        },
+      },
+    };
+    
+    await sendFeishuMessage(chunkMessage);
+    
+    // 避免发送过快（飞书限制每分钟最多 20 条消息）
+    if (i < chunks.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+  
+  console.log('[通知] 飞书: 发送成功 (摘要 + 完整报告)');
+}
+
+/** 发送飞书消息的辅助函数 */
+async function sendFeishuMessage(message: any): Promise<void> {
+  const resp = await fetch(FEISHU_WEBHOOK, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(message),
+  });
+  
+  if (!resp.ok) {
+    const errText = await resp.text();
+    console.error(`[通知] 飞书失败: ${resp.status} - ${errText.slice(0, 200)}`);
+    throw new Error(`飞书消息发送失败: ${resp.status}`);
+  }
+  
+  const data = await resp.json() as any;
+  if (data.code !== 0 && data.StatusCode !== 0) {
+    console.error(`[通知] 飞书失败: ${data.msg || data.StatusMessage || '未知错误'}`);
+    throw new Error(`飞书消息发送失败: ${data.msg || data.StatusMessage}`);
+  }
+}
+
 async function sendNotifications(channels: NotifyChannel[], title: string, content: string, attachmentPath?: string): Promise<void> {
   for (const ch of channels) {
     try {
@@ -956,6 +1087,7 @@ async function sendNotifications(channels: NotifyChannel[], title: string, conte
         case 'serverchan': await notifyServerChan(title, content); break;
         case 'email': await notifyEmail(title, content, attachmentPath); break;
         case 'issue': await notifyGitHubIssue(title, content); break;
+        case 'feishu': await notifyFeishu(title, content); break;
       }
     } catch (err: any) {
       console.error(`[通知] ${ch} 失败:`, err.message);

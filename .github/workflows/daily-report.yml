@@ -16,7 +16,7 @@ on:
         required: false
         default: 'deepseek-v4-flash-free'
       notify:
-        description: '通知方式 (逗号分隔: console,serverchan,email,issue)'
+        description: '通知方式 (逗号分隔: console,serverchan,email,issue,feishu)'
         required: false
         default: 'console,email'
 
@@ -51,18 +51,19 @@ jobs:
           VITE_OPENROUTER_API_KEY: ${{ secrets.VITE_OPENROUTER_API_KEY }}
           VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
           VITE_OPENCODE_API_KEY: ${{ secrets.VITE_OPENCODE_API_KEY }}
-          AI_MODEL: ${{ github.event.inputs.model || 'google/gemini-2.0-flash-exp:free' }}
+          AI_MODEL: ${{ github.event.inputs.model || 'deepseek-v4-flash-free' }}
           STOCKS: ${{ github.event.inputs.stocks || secrets.MY_STOCKS || '' }}
           # Exa 搜索 (财联社新闻/热点检索)
           EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
           # 通知配置
           SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
           NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          NOTIFY: ${{ github.event.inputs.notify || 'console,issue' }}
+          NOTIFY: ${{ github.event.inputs.notify || 'console,email' }}
         run: |
           ARGS="--output ./reports"
           if [ -n "$STOCKS" ]; then
