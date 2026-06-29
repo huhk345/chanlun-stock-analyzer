@@ -10,3 +10,4 @@ coverage/
 script/
 reports/
 data/
+src/strategies/user/
