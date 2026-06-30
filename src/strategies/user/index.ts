@@ -26,7 +26,7 @@ export function validateStrategyIds(): void {
   }
 }
 
-if (import.meta.env.DEV) {
+if (typeof import.meta.env !== 'undefined' && import.meta.env.DEV) {
   validateStrategyIds();
 }
 
