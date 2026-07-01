@@ -18,7 +18,7 @@ if (typeof globalThis.localStorage === 'undefined') {
   };
 }
 
-import { userStrategies } from '../src/strategies/user/index.ts';
+import { loadStrategies } from '../src/strategies/user/index.ts';
 import { runBacktest } from '../src/utils/backtestRunner.ts';
 import {
   calcAStockFees,
@@ -568,7 +568,7 @@ function parseArgs() {
 // CLI Help Printer
 // ---------------------------------------------------------------------------
 
-function printHelp() {
+function printHelp(userStrategies: readonly UserStrategyDefinition[]) {
   console.log(`
 缠论/通用策略回测框架 CLI 工具 (Generic Backtest CLI)
 ===================================================
@@ -597,10 +597,13 @@ function printHelp() {
 // ---------------------------------------------------------------------------
 
 async function main() {
+  // Load strategies dynamically in Node.js
+  const userStrategies = await loadStrategies();
+
   const options = parseArgs();
 
   if (options.help || options.h || Object.keys(options).length === 0) {
-    printHelp();
+    printHelp(userStrategies);
     process.exit(0);
   }
 
@@ -611,7 +614,7 @@ async function main() {
 
   if (!strategyId || !startDate || !endDate) {
     console.error('错误: 缺少必填参数 --strategy, --startDate 或 --endDate.');
-    printHelp();
+    printHelp(userStrategies);
     process.exit(1);
   }
 
