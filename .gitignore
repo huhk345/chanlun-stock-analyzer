@@ -11,3 +11,6 @@ script/
 reports/
 data/
 src/strategies/user/
+data-test/
+data-validate/
+autoresearch/
