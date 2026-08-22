@@ -53,6 +53,18 @@ export interface Hub {
   level: number;    // 中枢级别: 1=笔中枢, 2=线段中枢
 }
 
+export type BSPointType = 'B1' | 'B2' | 'B3' | 'S1' | 'S2' | 'S3';
+
+export interface BSPoint {
+  id: string;
+  type: BSPointType;
+  label: string;          // 一买/二买/三买/一卖/二卖/三卖
+  price: number;          // Signal price (stroke end fractal extreme)
+  originalIndex: number;  // Index in the original K-line array
+  date: string;
+  strokeIndex: number;    // Index of the stroke that generated this point
+}
+
 export interface StockInfo {
   symbol: string;
   name: string;

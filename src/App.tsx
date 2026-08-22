@@ -8,13 +8,14 @@ import ConfigView from './components/ConfigView';
 import AboutView from './components/AboutView';
 import StockInfoPanel from './components/StockInfoPanel';
 import { SupabaseUser } from './utils/supabase';
-import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade } from './types/stock';
+import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade, BSPoint } from './types/stock';
 import {
   mergeKlines,
   findFractions,
   calculateStrokes,
   calculateSegments,
-  calculateHubs
+  calculateHubs,
+  calculateBSPoints
 } from './utils/chanlun';
 import { fetchStockData, fetchStockBasicInfo, resolveSymbol } from './utils/api';
 
@@ -87,6 +88,7 @@ export default function App() {
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [hubs, setHubs] = useState<Hub[]>([]);
+  const [bsPoints, setBsPoints] = useState<BSPoint[]>([]);
   const [dataSource, setDataSource] = useState('');
   const [stockBasicInfo, setStockBasicInfo] = useState<StockBasicInfo | null>(null);
   const [stockMeta, setStockMeta] = useState<StockMeta | null>(null);
@@ -116,6 +118,7 @@ export default function App() {
       const computedStrokes = calculateStrokes(fractions);
       const computedSegments = calculateSegments(computedStrokes);
       const computedHubs = calculateHubs(computedStrokes);
+      const computedBSPoints = calculateBSPoints(rawKlines, computedStrokes);
 
       // Wait for basic info and sync React state
       const basicInfo = await basicInfoPromise;
@@ -152,6 +155,7 @@ export default function App() {
       setStrokes(computedStrokes);
       setSegments(computedSegments);
       setHubs(computedHubs);
+      setBsPoints(computedBSPoints);
       setBacktestTrades([]);
       setDataSource(data.source || 'TickFlow API');
       setStockBasicInfo(basicInfo);
@@ -285,6 +289,7 @@ export default function App() {
                 strokes={strokes}
                 segments={segments}
                 hubs={hubs}
+                bsPoints={bsPoints}
                 symbol={symbol}
                 stockBasicInfo={stockBasicInfo}
                 industry={stockMeta?.industry}

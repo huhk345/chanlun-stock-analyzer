@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { createChart, createSeriesMarkers, CandlestickSeries, LineSeries, HistogramSeries, IChartApi, ISeriesApi, ISeriesMarkersPluginApi, CandlestickData, LineData, HistogramData, Time, ColorType, CrosshairMode } from 'lightweight-charts';
 import { AlertCircle, TrendingUp, TrendingDown, Briefcase, User, ChevronRight, AlertTriangle, ExternalLink, FileText, Plus } from 'lucide-react';
-import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade } from '../types/stock';
+import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade, BSPoint } from '../types/stock';
 import { calculateSMA, calculateBollingerBands, calculateMACD } from '../utils/indicators';
 import { userIndicators } from '../indicators/user';
 import { loadStoredIndicators } from '../utils/indicatorLoader';
@@ -23,6 +23,7 @@ interface ChanlunChartProps {
   strokes: Stroke[];
   segments: Segment[];
   hubs: Hub[];
+  bsPoints?: BSPoint[];
   symbol: string;
   stockBasicInfo?: StockBasicInfo | null;
   industry?: string;
@@ -35,7 +36,7 @@ function dateToTime(dateStr: string): Time {
   return dateStr as Time;
 }
 
-export default function ChanlunChart({ klines, fractions, strokes, segments, hubs, symbol, stockBasicInfo, industry, actualController, reductionPlans, backtestTrades }: ChanlunChartProps) {
+export default function ChanlunChart({ klines, fractions, strokes, segments, hubs, bsPoints, symbol, stockBasicInfo, industry, actualController, reductionPlans, backtestTrades }: ChanlunChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -53,6 +54,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
   const segmentSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const tradeMarkersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const bsMarkersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
 
   // User-defined indicator series refs - stores series by indicatorId-seriesId
   const userIndicatorSeriesRefs = useRef<Record<string, ISeriesApi<'Line'> | ISeriesApi<'Histogram'>>>({});
@@ -64,6 +66,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
   const [showHubs, setShowHubs] = useState(true);
   const [showFractions, setShowFractions] = useState(false);
   const [showTradeSignals, setShowTradeSignals] = useState(true);
+  const [showBSPoints, setShowBSPoints] = useState(true);
 
   // Display triggers for indicators
   const [showMA5, setShowMA5] = useState(false);
@@ -315,6 +318,10 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
     // Trade markers plugin for backtest buy/sell points
     const tradeMarkersPlugin = createSeriesMarkers(candleSeries, []);
     tradeMarkersPluginRef.current = tradeMarkersPlugin;
+
+    // ChanLun 1-3 type buy/sell point markers
+    const bsMarkersPlugin = createSeriesMarkers(candleSeries, []);
+    bsMarkersPluginRef.current = bsMarkersPlugin;
 
     // Crosshair move handler
     chart.subscribeCrosshairMove((param) => {
@@ -638,6 +645,34 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
 
     tradeMarkersPluginRef.current.setMarkers(markers);
   }, [backtestTrades, klines, showTradeSignals]);
+
+  // Update ChanLun 1-3 type buy/sell point markers
+  useEffect(() => {
+    if (!bsMarkersPluginRef.current || klines.length === 0) return;
+
+    if (!showBSPoints || !bsPoints || bsPoints.length === 0) {
+      bsMarkersPluginRef.current.setMarkers([]);
+      return;
+    }
+
+    const BS_STYLE: Record<string, { position: 'aboveBar' | 'belowBar'; shape: 'arrowUp' | 'arrowDown'; color: string }> = {
+      B1: { position: 'belowBar', shape: 'arrowUp', color: '#ef4444' },
+      B2: { position: 'belowBar', shape: 'arrowUp', color: '#f97316' },
+      B3: { position: 'belowBar', shape: 'arrowUp', color: '#ec4899' },
+      S1: { position: 'aboveBar', shape: 'arrowDown', color: '#22c55e' },
+      S2: { position: 'aboveBar', shape: 'arrowDown', color: '#14b8a6' },
+      S3: { position: 'aboveBar', shape: 'arrowDown', color: '#06b6d4' }
+    };
+
+    const markers = bsPoints.map(p => ({
+      time: dateToTime(p.date),
+      ...BS_STYLE[p.type],
+      text: p.label,
+      size: 1.4,
+    }));
+
+    bsMarkersPluginRef.current.setMarkers(markers);
+  }, [bsPoints, klines, showBSPoints]);
 
   // Toggle visibility
   useEffect(() => {
@@ -1016,17 +1051,28 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
                   中枢
                 </button>
                 <button
-                  onClick={() => setShowTradeSignals(!showTradeSignals)}
+                  onClick={() => setShowBSPoints(!showBSPoints)}
                   className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
-                    showTradeSignals && backtestTrades && backtestTrades.length > 0 ? 'bg-emerald-500/90 text-white shadow-sm shadow-emerald-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                    showBSPoints && bsPoints && bsPoints.length > 0 ? 'bg-fuchsia-500/90 text-white shadow-sm shadow-fuchsia-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                   }`}
-                  title="切换回测买卖点"
-                  id="toggle-trades"
+                  title="切换缠论1-3类买卖点"
+                  id="toggle-bspoints"
                 >
-                  <span className={`w-1 h-1 rounded-full ${showTradeSignals && backtestTrades && backtestTrades.length > 0 ? 'bg-white' : 'bg-emerald-400'}`} />
-                  买卖点
-                </button>
-              </div>
+                  <span className={`w-1 h-1 rounded-full ${showBSPoints && bsPoints && bsPoints.length > 0 ? 'bg-white' : 'bg-fuchsia-400'}`} />
+                  三类点
+              </button>
+              <button
+                onClick={() => setShowTradeSignals(!showTradeSignals)}
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium font-sans flex items-center gap-1 transition-all cursor-pointer ${
+                  showTradeSignals && backtestTrades && backtestTrades.length > 0 ? 'bg-emerald-500/90 text-white shadow-sm shadow-emerald-500/20' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                }`}
+                title="切换回测买卖点"
+                id="toggle-trades"
+              >
+                <span className={`w-1 h-1 rounded-full ${showTradeSignals && backtestTrades && backtestTrades.length > 0 ? 'bg-white' : 'bg-emerald-400'}`} />
+                买卖点
+              </button>
+            </div>
               <div className="flex items-center gap-1 bg-zinc-800/15 rounded-xl px-2.5 py-1.5 border border-zinc-700/20">
                 <span className="text-[9px] font-bold text-zinc-500 tracking-wider mr-0.5 bg-zinc-800/60 px-1.5 py-0.5 rounded-md leading-none">指</span>
                 <button

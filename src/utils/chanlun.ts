@@ -1,4 +1,4 @@
-import { Kline, MergedKline, Fraction, Stroke, Segment, Hub } from '../types/stock';
+import { Kline, MergedKline, Fraction, Stroke, Segment, Hub, BSPoint, BSPointType } from '../types/stock';
 
 /**
  * Step 1: Combine overlapping K-lines (包含关系处理)
@@ -384,4 +384,241 @@ export function calculateSegmentHubs(segments: Segment[]): Hub[] {
     direction: seg.direction
   }));
   return _identifyHubsGeneric(segmentLines, 2);
+}
+
+// ---------------------------------------------------------------------------
+// 买卖点识别 (Buy/Sell Points 1-3)
+// 移植自 doc/czsc-master (czsc Rust 实现)：
+//   - crates/czsc-signals/src/utils/cxt.rs::check_first_buy / check_first_sell
+//   - crates/czsc-signals/src/cxt.rs::cxt_first_buy_V221126 (窗口 21→5 滑动)
+//   - crates/czsc-signals/src/cxt.rs::cxt_third_bs_V230318 (5 笔中枢 + 离开笔)
+// 二买/二卖采用缠论经典定义：一买后次级别反弹再回调不创新低。
+// ---------------------------------------------------------------------------
+
+/** 笔高点 = max(起点, 终点)，对齐 BI::get_high */
+function strokeHigh(s: Stroke): number {
+  return Math.max(s.start.price, s.end.price);
+}
+
+/** 笔低点 = min(起点, 终点)，对齐 BI::get_low */
+function strokeLow(s: Stroke): number {
+  return Math.min(s.start.price, s.end.price);
+}
+
+/** 价差力度 = |终点价 - 起点价|，对齐 BI::get_power_price */
+function strokePowerPrice(s: Stroke): number {
+  return Math.abs(s.end.price - s.start.price);
+}
+
+/** 笔长度（无包含关系 K 线数量近似），对齐 BI::get_length */
+function strokeLength(s: Stroke): number {
+  return s.end.index - s.start.index + 1;
+}
+
+/** 成交量力度：笔内部原始 K 线成交量之和（不含首尾分型 K 线），对齐 BI::get_power_volume */
+function strokePowerVolume(s: Stroke, klines: Kline[]): number {
+  let vol = 0;
+  for (let i = s.start.originalIndex + 1; i < s.end.originalIndex; i++) {
+    vol += klines[i]?.volume ?? 0;
+  }
+  return vol;
+}
+
+function _mean(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
+/**
+ * 一买结构判定（下跌趋势背驰），移植 check_first_buy：
+ * 1. 奇数笔且首尾同为向下笔；
+ * 2. 首笔高点为区间最高、末笔低点为区间最低（趋势结构）；
+ * 3. 关键笔（创新低的向下笔）序列；
+ * 4. 末笔价差力度 < 前一同向笔与关键笔均值的最大值，且量/长度至少其一同步衰竭。
+ */
+export function checkFirstBuy(bis: Stroke[], klines: Kline[]): boolean {
+  const n = bis.length;
+  if (n < 5 || n % 2 !== 1) return false;
+  if (bis[n - 1].direction !== 'down') return false;
+  if (bis[0].direction !== bis[n - 1].direction) return false;
+
+  let maxHigh = -Infinity;
+  let minLow = Infinity;
+  for (const b of bis) {
+    maxHigh = Math.max(maxHigh, strokeHigh(b));
+    minLow = Math.min(minLow, strokeLow(b));
+  }
+  if (maxHigh !== strokeHigh(bis[0]) || minLow !== strokeLow(bis[n - 1])) return false;
+
+  const keyBis: Stroke[] = [];
+  for (let i = 0; i <= n - 3; i += 2) {
+    if (i === 0) {
+      keyBis.push(bis[0]);
+    } else if (strokeLow(bis[i]) < strokeLow(bis[i - 2])) {
+      keyBis.push(bis[i]);
+    }
+  }
+  if (keyBis.length === 0) return false;
+
+  const last = bis[n - 1];
+  const prev = bis[n - 3];
+  const bcPrice =
+    strokePowerPrice(last) <
+    Math.max(strokePowerPrice(prev), _mean(keyBis.map(strokePowerPrice)));
+  const bcVolume =
+    strokePowerVolume(last, klines) <
+    Math.max(
+      strokePowerVolume(prev, klines),
+      _mean(keyBis.map(b => strokePowerVolume(b, klines)))
+    );
+  const bcLength =
+    strokeLength(last) <
+    Math.max(strokeLength(prev), _mean(keyBis.map(strokeLength)));
+  return bcPrice && (bcVolume || bcLength);
+}
+
+/**
+ * 一卖结构判定（上涨趋势背驰），check_first_buy 的镜像，移植 check_first_sell。
+ */
+export function checkFirstSell(bis: Stroke[], klines: Kline[]): boolean {
+  const n = bis.length;
+  if (n < 5 || n % 2 !== 1) return false;
+  if (bis[n - 1].direction !== 'up') return false;
+  if (bis[0].direction !== bis[n - 1].direction) return false;
+
+  let maxHigh = -Infinity;
+  let minLow = Infinity;
+  for (const b of bis) {
+    maxHigh = Math.max(maxHigh, strokeHigh(b));
+    minLow = Math.min(minLow, strokeLow(b));
+  }
+  if (maxHigh !== strokeHigh(bis[n - 1]) || minLow !== strokeLow(bis[0])) return false;
+
+  const keyBis: Stroke[] = [];
+  for (let i = 0; i <= n - 3; i += 2) {
+    if (i === 0) {
+      keyBis.push(bis[0]);
+    } else if (strokeHigh(bis[i]) > strokeHigh(bis[i - 2])) {
+      keyBis.push(bis[i]);
+    }
+  }
+  if (keyBis.length === 0) return false;
+
+  const last = bis[n - 1];
+  const prev = bis[n - 3];
+  const bcPrice =
+    strokePowerPrice(last) <
+    Math.max(strokePowerPrice(prev), _mean(keyBis.map(strokePowerPrice)));
+  const bcVolume =
+    strokePowerVolume(last, klines) <
+    Math.max(
+      strokePowerVolume(prev, klines),
+      _mean(keyBis.map(b => strokePowerVolume(b, klines)))
+    );
+  const bcLength =
+    strokeLength(last) <
+    Math.max(strokeLength(prev), _mean(keyBis.map(strokeLength)));
+  return bcPrice && (bcVolume || bcLength);
+}
+
+const BS_LABELS: Record<BSPointType, string> = {
+  B1: '一买',
+  B2: '二买',
+  B3: '三买',
+  S1: '一卖',
+  S2: '二卖',
+  S3: '三卖'
+};
+
+/** 一类买卖点检测窗口，对齐 cxt_first_buy_V221126 的 [21..5] 奇数序列 */
+const BS1_WINDOWS = [21, 19, 17, 15, 13, 11, 9, 7, 5];
+
+/**
+ * 计算缠论三类买卖点：
+ * - B1/S1：趋势背驰（checkFirstBuy/checkFirstSell，窗口滑动）；
+ * - B2/S2：一买/一卖后次级别反弹、再次回调不创新低/新高；
+ * - B3/S3：5 笔中枢（b1∧b3 重叠），离开后的回抽整笔不回中枢区间。
+ *
+ * 返回按 originalIndex 升序的买卖点列表。
+ */
+export function calculateBSPoints(klines: Kline[], strokes: Stroke[]): BSPoint[] {
+  const points: BSPoint[] = [];
+  const n = strokes.length;
+  if (klines.length === 0 || n < 5) return points;
+
+  const seen = new Set<string>();
+  const lastFiredAt = new Map<BSPointType, number>();
+
+  const pushPoint = (type: BSPointType, strokeIdx: number, dedupeGap: number) => {
+    const prevAt = lastFiredAt.get(type);
+    if (prevAt !== undefined && strokeIdx - prevAt < dedupeGap) return;
+    const stroke = strokes[strokeIdx];
+    const isBuy = type.startsWith('B');
+    const point: BSPoint = {
+      id: `bs-${type}-${stroke.end.originalIndex}`,
+      type,
+      label: BS_LABELS[type],
+      price: stroke.end.price,
+      originalIndex: stroke.end.originalIndex,
+      date: stroke.end.date,
+      strokeIndex: strokeIdx
+    };
+    const key = `${type}-${stroke.end.originalIndex}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    lastFiredAt.set(type, strokeIdx);
+    points.push(point);
+  };
+
+  // ---- B1/S1：一类买卖点（趋势背驰），窗口从大到小取首个命中 ----
+  for (let e = 4; e < n; e++) {
+    for (const w of BS1_WINDOWS) {
+      const start = e - w + 1;
+      if (start < 0) continue;
+      const seg = strokes.slice(start, e + 1);
+      if (checkFirstBuy(seg, klines)) {
+        pushPoint('B1', e, 3);
+        break;
+      }
+      if (checkFirstSell(seg, klines)) {
+        pushPoint('S1', e, 3);
+        break;
+      }
+    }
+  }
+
+  // ---- B2/S2：二类买卖点（一买/一卖后回调不创新低/新高）----
+  for (const p of [...points]) {
+    const k = p.strokeIndex;
+    if (p.type === 'B1' && k + 2 < n) {
+      const pullback = strokes[k + 2];
+      if (pullback.direction === 'down' && strokeLow(pullback) > strokeLow(strokes[k])) {
+        pushPoint('B2', k + 2, 1);
+      }
+    }
+    if (p.type === 'S1' && k + 2 < n) {
+      const rally = strokes[k + 2];
+      if (rally.direction === 'up' && strokeHigh(rally) < strokeHigh(strokes[k])) {
+        pushPoint('S2', k + 2, 1);
+      }
+    }
+  }
+
+  // ---- B3/S3：三类买卖点（中枢离开后回抽不回区间），对齐 cxt_third_bs_V230318 ----
+  for (let e = 4; e < n; e++) {
+    const b1 = strokes[e - 4];
+    const b3 = strokes[e - 2];
+    const b5 = strokes[e];
+    const zsZd = Math.max(strokeLow(b1), strokeLow(b3));
+    const zsZg = Math.min(strokeHigh(b1), strokeHigh(b3));
+    if (zsZd > zsZg) continue; // 无有效中枢
+    if (b5.direction === 'down' && strokeLow(b5) > zsZg) {
+      pushPoint('B3', e, 3);
+    } else if (b5.direction === 'up' && strokeHigh(b5) < zsZd) {
+      pushPoint('S3', e, 3);
+    }
+  }
+
+  points.sort((a, b) => a.originalIndex - b.originalIndex || a.type.localeCompare(b.type));
+  return points;
 }
