@@ -7,6 +7,8 @@ import GeminiAdvisor from './components/GeminiAdvisor';
 import ConfigView from './components/ConfigView';
 import AboutView from './components/AboutView';
 import StockInfoPanel from './components/StockInfoPanel';
+import MarketDashboard from './components/MarketDashboard';
+import IndexAnalysis from './components/IndexAnalysis';
 import { SupabaseUser } from './utils/supabase';
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade, BSPoint } from './types/stock';
 import {
@@ -41,11 +43,24 @@ const CHAT_RAIL_MAX = 800;
 const CHAT_RAIL_DEFAULT = 420;
 const NAVBAR_HEIGHT = 56;
 
+type ViewMode = 'dashboard' | 'indexes' | 'analyzer';
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState<SupabaseUser | null>(null);
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [isChatVisible, setIsChatVisible] = useState(true);
+
+  // View routing: dashboard is the index page; analyzer is the stock workspace.
+  // Entering analyzer via ?view=analyzer or a shared ?code= link.
+  const initialParams = new URLSearchParams(window.location.search);
+  const initialView: ViewMode =
+    initialParams.get('view') === 'analyzer' || initialParams.get('code')
+      ? 'analyzer'
+      : initialParams.get('view') === 'indexes'
+        ? 'indexes'
+        : 'dashboard';
+  const [view, setView] = useState<ViewMode>(initialView);
 
   // Prevent double API calls in StrictMode
   const hasInitialized = useRef(false);
@@ -162,6 +177,7 @@ export default function App() {
 
       // Update URL with stock code for bookmark/refresh support
       const url = new URL(window.location.href);
+      url.searchParams.set('view', 'analyzer');
       url.searchParams.set('code', querySymbol);
       window.history.replaceState({}, '', url.toString());
 
@@ -173,12 +189,41 @@ export default function App() {
     }
   };
 
-  // Run on mount to display a majestic default chart
+  // Search from navbar / dashboard always lands on the analyzer view
+  const handleSearch = (querySymbol: string) => {
+    setView('analyzer');
+    fetchAndProcessStock(querySymbol);
+  };
+
+  const handleViewChange = (nextView: ViewMode) => {
+    setView(nextView);
+    const url = new URL(window.location.href);
+    if (nextView === 'dashboard') {
+      url.searchParams.set('view', 'dashboard');
+      url.searchParams.delete('code');
+    } else if (nextView === 'indexes') {
+      url.searchParams.set('view', 'indexes');
+      url.searchParams.delete('code');
+    } else {
+      url.searchParams.set('view', 'analyzer');
+      if (symbol) url.searchParams.set('code', symbol);
+    }
+    window.history.replaceState({}, '', url.toString());
+
+    // First entry into the analyzer loads the current symbol
+    if (nextView === 'analyzer' && klines.length === 0 && !isLoading) {
+      fetchAndProcessStock(symbol);
+    }
+  };
+
+  // Run on mount: only the analyzer view needs the default chart immediately
   useEffect(() => {
     if (hasInitialized.current) return;
     hasInitialized.current = true;
-    const urlCode = new URLSearchParams(window.location.search).get('code') || '000001.ss';
-    fetchAndProcessStock(urlCode);
+    if (initialView === 'analyzer') {
+      const urlCode = new URLSearchParams(window.location.search).get('code') || '000001.ss';
+      fetchAndProcessStock(urlCode);
+    }
   }, []);
 
   // Persist rail width whenever it settles.
@@ -234,12 +279,14 @@ export default function App() {
         currentUser={currentUser}
         onOpenConfig={() => setIsConfigOpen(true)}
         onOpenAbout={() => setIsAboutOpen(true)}
-        onSearch={fetchAndProcessStock}
+        onSearch={handleSearch}
         isLoading={isLoading}
-        activeSymbol={symbol}
+        activeSymbol={view === 'analyzer' ? symbol : undefined}
         klines={klines}
-        stockBasicInfo={stockBasicInfo}
+        stockBasicInfo={view === 'analyzer' ? stockBasicInfo : undefined}
         isMobile={isMobile}
+        view={view}
+        onViewChange={handleViewChange}
       />
 
       {/* Config View Modal */}
@@ -252,7 +299,22 @@ export default function App() {
         dataSource={dataSource}
       />
 
+      {/* Main Container - Dashboard (index) view */}
+      {view === 'dashboard' && (
+        <main className="flex-1 w-full px-[10px] py-[10px] md:px-6 md:py-6 lg:px-8">
+          <MarketDashboard onSelectStock={handleSearch} />
+        </main>
+      )}
+
+      {/* Main Container - Index ChanLun buy/sell points view */}
+      {view === 'indexes' && (
+        <main className="flex-1 w-full px-[10px] py-[10px] md:px-6 md:py-6 lg:px-8">
+          <IndexAnalysis onSelectStock={handleSearch} />
+        </main>
+      )}
+
       {/* Main Container - Chart + Backtest scroll under the fixed right rail */}
+      {view === 'analyzer' && (
       <main
         className="flex-1 w-full px-[10px] py-[10px] md:px-6 md:py-6 lg:px-8 transition-[padding] duration-200"
         style={{ paddingRight: isMobile ? `10px` : `calc(${railOffset}px + 1rem)` }}
@@ -328,9 +390,10 @@ export default function App() {
         )}
 
       </main>
+      )}
 
-      {/* Fixed AI Right Rail - always-on-top side panel (desktop only) */}
-      {isChatVisible && !isMobile && (
+      {/* Fixed AI Right Rail - always-on-top side panel (desktop only, analyzer view) */}
+      {view === 'analyzer' && isChatVisible && !isMobile && (
         <aside
           className="fixed right-0 z-40 flex shadow-[-12px_0_32px_-12px_rgba(0,0,0,0.6)]"
           style={{
@@ -370,7 +433,7 @@ export default function App() {
       )}
 
       {/* Floating tab to re-open the rail when collapsed (desktop only) */}
-      {!isChatVisible && !isMobile && (
+      {view === 'analyzer' && !isChatVisible && !isMobile && (
         <button
           type="button"
           onClick={() => setIsChatVisible(true)}
@@ -385,7 +448,7 @@ export default function App() {
       )}
 
       {/* Mobile floating AI toggle */}
-      {!isChatVisible && isMobile && (
+      {view === 'analyzer' && !isChatVisible && isMobile && (
         <button
           type="button"
           onClick={() => setIsChatVisible(true)}
@@ -399,7 +462,7 @@ export default function App() {
       {/* Humble Footer */}
       <footer
         className="border-t border-zinc-850 py-3 md:py-6 mt-0 md:mt-12 text-center text-[10px] font-mono text-zinc-500 transition-[padding] duration-200 px-3"
-        style={{ paddingRight: isMobile ? 0 : `${railOffset}px` }}
+        style={{ paddingRight: isMobile || view === 'dashboard' ? 0 : `${railOffset}px` }}
       >
         <p>© 2026 缠论量化工作台。由 Google AI Studio 构建。<a href="https://github.com/huhk345/chanlun-stock-analyzer" target="_blank" rel="noopener noreferrer" className="underline hover:text-zinc-300 transition-colors">源代码</a></p>
         <p className="mt-1">本工具仅供学习研究使用, 不构成任何投资建议, 投资有风险, 入市需谨慎。</p>

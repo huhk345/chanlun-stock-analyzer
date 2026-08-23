@@ -18,6 +18,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
+import { acquireTickFlowSlot } from '../src/utils/rateLimiter';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -32,9 +33,6 @@ const DEFAULT_OUTPUT_DIR = path.resolve(import.meta.dirname, '..', 'data');
 
 // 10年交易日 ≈ 3650天
 const KLINE_COUNT = 3650;
-
-// API 请求间隔 (ms), 避免触发限流
-const REQUEST_DELAY = 500;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -136,6 +134,8 @@ async function fetchKlines(symbol: string, maxRetries = 3): Promise<Kline[] | nu
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
+      // Proactively throttle to 55/min, under the free tier's 60/min cap.
+      await acquireTickFlowSlot();
       const resp = await fetch(url, { headers });
       if (resp.status === 429) {
         // 限流: 等待后重试
@@ -294,10 +294,8 @@ async function main() {
         failed++;
       }
 
-      // 请求间隔
-      if (i < symbols.length - 1) {
-        await delay(REQUEST_DELAY);
-      }
+      // Throttling to stay under 55/min is handled inside fetchKlines via
+      // acquireTickFlowSlot(); no extra fixed delay needed here.
     }
 
     console.log(`\n--- ${config.name} 下载完成 ---`);

@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User, LogOut, CheckCircle, AlertTriangle, Settings, Search, LineChart, Clock, X, ChevronDown, TrendingUp, TrendingDown, Info } from 'lucide-react';
+import { User, LogOut, CheckCircle, AlertTriangle, Settings, Search, LineChart, Clock, X, ChevronDown, TrendingUp, TrendingDown, Info, LayoutDashboard, ChartCandlestick } from 'lucide-react';
 import { getCurrentUser, signInUser, signUpUser, signOutUser, isUsingMockDb, SupabaseUser } from '../utils/supabase';
 import { Kline, StockBasicInfo } from '../types/stock';
+
+type ViewMode = 'dashboard' | 'indexes' | 'analyzer';
 
 interface NavbarProps {
   onUserChanged: (user: SupabaseUser | null) => void;
@@ -14,6 +16,8 @@ interface NavbarProps {
   klines?: Kline[];
   stockBasicInfo?: StockBasicInfo | null;
   isMobile?: boolean;
+  view?: ViewMode;
+  onViewChange?: (view: ViewMode) => void;
 }
 
 interface SearchHistoryItem {
@@ -31,7 +35,7 @@ const PRESET_STOCKS = [
 const MAX_HISTORY = 30;
 const SEARCH_HISTORY_KEY = 'chanlun_search_history';
 
-export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpenAbout, onSearch, isLoading, activeSymbol, klines, stockBasicInfo, isMobile }: NavbarProps) {
+export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpenAbout, onSearch, isLoading, activeSymbol, klines, stockBasicInfo, isMobile, view = 'analyzer', onViewChange }: NavbarProps) {
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -262,6 +266,51 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
 
         {/* Vertical Divider */}
         <div className="hidden md:block h-7 w-px bg-gradient-to-b from-transparent via-zinc-800 to-transparent" />
+
+        {/* View Switcher: 市场总览 / 个股分析 */}
+        {onViewChange && (
+          <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-zinc-900/70 border border-zinc-800/60 shrink-0 ml-1 md:ml-3">
+            <button
+              type="button"
+              onClick={() => onViewChange('dashboard')}
+              className={`flex items-center gap-1.5 h-8 px-2 md:px-3 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                view === 'dashboard'
+                  ? 'bg-blue-500/15 text-blue-400 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.3)]'
+                  : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60'
+              }`}
+              title="市场总览"
+            >
+              <LayoutDashboard className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">总览</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onViewChange('indexes')}
+              className={`flex items-center gap-1.5 h-8 px-2 md:px-3 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                view === 'indexes'
+                  ? 'bg-blue-500/15 text-blue-400 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.3)]'
+                  : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60'
+              }`}
+              title="指数缠论买卖点 (沪深300 / 中证500)"
+            >
+              <ChartCandlestick className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">缠论买卖点</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onViewChange('analyzer')}
+              className={`flex items-center gap-1.5 h-8 px-2 md:px-3 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                view === 'analyzer'
+                  ? 'bg-blue-500/15 text-blue-400 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.3)]'
+                  : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60'
+              }`}
+              title="个股分析"
+            >
+              <LineChart className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">个股分析</span>
+            </button>
+          </div>
+        )}
 
         {/* Center: Search */}
         {onSearch && (

@@ -17,6 +17,7 @@
 import Exa from 'exa-js';
 import * as fs from 'fs';
 import * as path from 'path';
+import { acquireTickFlowSlot } from '../src/utils/rateLimiter';
 
 // 手动加载 .env 文件 (CLI 环境下不会自动加载)
 function loadEnvFile(): void {
@@ -138,6 +139,7 @@ async function fetchIndexQuotes(): Promise<IndexQuote[]> {
       const url = `${TICKFLOW_BASE_URL}/v1/klines?symbol=${idx.symbol}&period=1d&count=2`;
       const headers: Record<string, string> = {};
       if (TICKFLOW_API_KEY) headers['x-api-key'] = TICKFLOW_API_KEY;
+      await acquireTickFlowSlot();
       const resp = await fetch(url, { headers });
       if (!resp.ok) continue;
       const json = await resp.json();
@@ -400,6 +402,7 @@ async function fetchStockData(symbol: string): Promise<{ symbol: string; klines:
   if (TICKFLOW_API_KEY) headers['x-api-key'] = TICKFLOW_API_KEY;
 
   console.log(`[TickFlow] 获取 ${displayName} 数据...`);
+  await acquireTickFlowSlot();
   const resp = await fetch(url, { headers });
   if (!resp.ok) throw new Error(`TickFlow API 失败 (${resp.status}): ${displayName}`);
 

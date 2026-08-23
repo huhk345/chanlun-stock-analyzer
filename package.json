@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "sync-index": "cp data/hs300/_constituents.json public/index-members.hs300.json && cp data/zz500/_constituents.json public/index-members.zz500.json"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",

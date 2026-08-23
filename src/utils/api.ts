@@ -1,4 +1,5 @@
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo } from '../types/stock';
+import { acquireTickFlowSlot } from './rateLimiter';
 
 // Helper function to get API keys from localStorage or environment variables
 function getApiKey(key: string): string {
@@ -91,16 +92,62 @@ export async function fetchStockData(symbol: string): Promise<{
     headers['x-api-key'] = TICKFLOW_API_KEY;
   }
 
-  const response = await fetch(tickflowUrl, { headers });
+  // TickFlow may signal rate limiting either via HTTP 429 or via a 200 body
+  // containing the "请求频率超限" message with a "请 Nms 后重试" hint.
+  // Parse that hint to wait exactly the suggested duration before retrying.
+  const extractRateLimitDelay = (text: string): number | null => {
+    const msMatch = text.match(/请\s*(\d+)\s*ms\s*后重试/);
+    if (msMatch) return parseInt(msMatch[1], 10);
+    const secMatch = text.match(/请\s*(\d+(?:\.\d+)?)\s*秒?\s*后重试/);
+    if (secMatch) return Math.ceil(parseFloat(secMatch[1]) * 1000);
+    return null;
+  };
 
-  console.log(`[TickFlow] Response status: ${response.status}`);
+  const MAX_RETRIES = 4;
+  let lastError: Error | null = null;
 
-  if (!response.ok) {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    // Proactively throttle to 55/min so we stay under the free tier's 60/min
+    // hard cap before even issuing the request.
+    await acquireTickFlowSlot();
+
+    const response = await fetch(tickflowUrl, { headers });
+
+    console.log(`[TickFlow] Response status: ${response.status} (attempt ${attempt + 1}/${MAX_RETRIES + 1})`);
+
+    if (response.ok) {
+      return await handleTickflowResponse(response, displayName);
+    }
+
     const errorText = await response.text();
     console.error(`TickFlow API error: ${response.status} - ${errorText}`);
-    throw new Error(`Unable to fetch data for symbol "${displayName}" from TickFlow API. Status: ${response.status}`);
+
+    const delayMs = extractRateLimitDelay(errorText);
+    if (delayMs != null && attempt < MAX_RETRIES) {
+      console.warn(`[TickFlow] Rate limited. Waiting ${delayMs}ms before retry...`);
+      await new Promise((r) => setTimeout(r, delayMs));
+      lastError = new Error(
+        `TickFlow 免费接口请求频率超限 (60/min)。已等待 ${Math.round(delayMs / 1000)} 秒后自动重试。若频繁触发, 建议在配置中填入完整服务 API Key (https://api.tickflow.org)。`
+      );
+      continue;
+    }
+
+    throw new Error(
+      `Unable to fetch data for symbol "${displayName}" from TickFlow API. Status: ${response.status}` +
+        (errorText ? ` - ${errorText}` : '')
+    );
   }
 
+  throw lastError ?? new Error(`Unable to fetch data for symbol "${displayName}" from TickFlow API after retries.`);
+}
+
+async function handleTickflowResponse(response: Response, displayName: string): Promise<{
+  symbol: string;
+  name: string;
+  klines: Kline[];
+  source: string;
+  period: string;
+}> {
   const responseData = await response.json();
   console.log(`[TickFlow] Response data keys: ${Object.keys(responseData || {}).join(', ')}`);
 
