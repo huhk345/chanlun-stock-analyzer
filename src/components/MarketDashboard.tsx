@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, Activity, Waves, TrendingUp, LayoutGrid, ListOrdered, ChevronRight, AlertTriangle, Flame, Star, X } from 'lucide-react';
+import { RefreshCw, Activity, Waves, TrendingUp, LayoutGrid, ListOrdered, ChevronRight, AlertTriangle, Flame, Star, X, Trophy } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from 'recharts';
 import {
   IndexQuote,
@@ -7,6 +7,7 @@ import {
   MarketFlowToday,
   DailyFlowPoint,
   FlowItem,
+  HotSector,
   MarketSentiment,
   StockQuote,
   fetchIndexQuotes,
@@ -15,6 +16,7 @@ import {
   fetchMarketFlowHistory,
   fetchSectorFlowTop,
   fetchStockFlowTop,
+  fetchHotSectors,
   fetchMarketSentiment,
   formatYi,
   formatSignedYi,
@@ -121,6 +123,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
   const [sectorIn, setSectorIn] = useState<FlowItem[]>([]);
   const [sectorOut, setSectorOut] = useState<FlowItem[]>([]);
   const [stockTop, setStockTop] = useState<FlowItem[]>([]);
+  const [hotSectors, setHotSectors] = useState<HotSector[]>([]);
   const [sentiment, setSentiment] = useState<MarketSentiment | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
 
@@ -166,7 +169,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
     setFatalError('');
 
     try {
-      const [idxRes, bfRes, histRes, secInRes, secOutRes, stockRes, sentRes] = await Promise.allSettled([
+      const [idxRes, bfRes, histRes, secInRes, secOutRes, stockRes, sentRes, hotSecRes] = await Promise.allSettled([
         fetchIndexQuotes(),
         fetchMarketBreadthAndFlow(),
         fetchMarketFlowHistory(30),
@@ -174,6 +177,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
         fetchSectorFlowTop(0, 10),
         fetchStockFlowTop(1, 10),
         fetchMarketSentiment(),
+        fetchHotSectors(10),
       ]);
 
       if (idxRes.status === 'fulfilled') setIndices(idxRes.value);
@@ -190,6 +194,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
       setSectorIn(secInRes.status === 'fulfilled' ? secInRes.value : []);
       setSectorOut(secOutRes.status === 'fulfilled' ? secOutRes.value : []);
       setStockTop(stockRes.status === 'fulfilled' ? stockRes.value : []);
+      setHotSectors(hotSecRes.status === 'fulfilled' ? hotSecRes.value : []);
       setSentiment(sentRes.status === 'fulfilled' ? sentRes.value : null);
       setUpdatedAt(new Date());
     } finally {
@@ -269,7 +274,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
           : 'bg-zinc-500/15 text-zinc-300 border-zinc-600/50';
 
   // ---- 错落双列布局: 左列 (涨跌停/板块) 与右列 (资金/趋势/个股榜) 独立堆叠, 右列整体下沉错位 ----
-  const hasLeft = !!sentiment || sectorIn.length > 0 || sectorOut.length > 0;
+  const hasLeft = watchlist.length > 0 || !!sentiment || hotSectors.length > 0 || sectorIn.length > 0 || sectorOut.length > 0;
   const hasRight = !!flow || chartData.length > 1 || stockTop.length > 0;
 
   const flowUnavailable =
@@ -344,88 +349,6 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
           ))}
         </div>
       )}
-
-      {/* ---- 自选股跟踪: 自加入以来的涨跌 ---- */}
-      <Panel
-        icon={Star}
-        title="自选股跟踪"
-        subtitle="来自缠论买卖点扫描 · 自加入以来的涨跌"
-        right={
-          watchlist.length > 0 ? (
-            <button
-              type="button"
-              onClick={() => refreshWatchQuotes(watchlist)}
-              disabled={watchLoading}
-              className="flex items-center gap-1 h-6 px-2 rounded-md bg-zinc-900/70 border border-zinc-800 text-[10px] text-zinc-400 hover:text-blue-400 hover:border-blue-500/40 transition-colors cursor-pointer disabled:opacity-50"
-              title="刷新自选行情"
-            >
-              <RefreshCw className={`h-3 w-3 ${watchLoading ? 'animate-spin' : ''}`} />
-              行情
-            </button>
-          ) : undefined
-        }
-      >
-        {watchlist.length === 0 ? (
-          <p className="text-[11px] text-zinc-500 py-0.5 text-center leading-relaxed">
-            暂无自选股 · 前往「缠论买卖点扫描」点击 ☆ 自选 可将信号股加入跟踪, 并记录加入理由
-          </p>
-        ) : (
-          <div className="space-y-px -my-1">
-            {watchlist.map((it) => {
-              const q = watchQuotes[toTencentSymbol(it.symbolKey)];
-              const price = q?.price || 0;
-              const chg = price > 0 && it.basePrice > 0 ? ((price - it.basePrice) / it.basePrice) * 100 : null;
-              const days = Math.floor((Date.now() - it.addedAt) / 86400000);
-              const displayName = q?.name || it.name || '—';
-              return (
-                <div key={it.symbolKey} className="flex items-center gap-1 group">
-                  <button
-                    type="button"
-                    onClick={() => onSelectStock(it.symbolKey.replace('.SH', '.SS'))}
-                    className="flex-1 min-w-0 flex items-center gap-2.5 px-2 py-1 rounded-md hover:bg-blue-500/10 border border-transparent hover:border-blue-500/20 transition-colors cursor-pointer text-left"
-                    title={`查看 ${displayName} (${it.code}) 缠论分析 · ${it.baseDate} 以 ${it.basePrice.toFixed(2)} 加入`}
-                  >
-                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-bold shrink-0 ${TYPE_STYLE[it.signalType]}`}>
-                      {it.signalLabel}
-                    </span>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs text-zinc-200 truncate group-hover:text-blue-400 transition-colors">{displayName}</span>
-                        <span className="text-[9px] font-mono text-zinc-600 shrink-0">{it.code}</span>
-                      </div>
-                      {it.reason && (
-                        <p className="text-[10px] text-zinc-500 truncate mt-0.5" title={it.reason}>{it.reason}</p>
-                      )}
-                    </div>
-                    <div className="ml-auto flex items-center gap-2.5 font-mono text-[11px] tabular-nums shrink-0">
-                      <span className="hidden sm:flex flex-col items-end leading-tight">
-                        <span className="text-[9px] text-zinc-600">{it.baseDate} 加入</span>
-                        <span className="text-zinc-400">{it.basePrice.toFixed(2)}</span>
-                      </span>
-                      <span className="w-14 text-right text-zinc-200">{price > 0 ? price.toFixed(2) : '--'}</span>
-                      <span className={`w-16 text-right font-semibold ${chg === null ? 'text-zinc-600' : upClass(chg)}`}>
-                        {chg === null ? '--' : `${chg > 0 ? '+' : ''}${chg.toFixed(2)}%`}
-                      </span>
-                      <span className="hidden md:inline w-9 text-right text-zinc-500 text-[10px]">
-                        {days === 0 ? '今日' : `${days}天`}
-                      </span>
-                    </div>
-                    <ChevronRight className="h-3.5 w-3.5 text-zinc-700 group-hover:text-blue-400 transition-colors shrink-0" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => removeWatch(it.symbolKey)}
-                    className="p-1.5 rounded-md text-zinc-600 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer opacity-100 md:opacity-0 md:group-hover:opacity-100 shrink-0"
-                    title="移出自选"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </Panel>
 
       {flowUnavailable && !fatalError && (
         <div className="px-4 py-3 bg-amber-950/20 border border-amber-900/30 text-amber-400 rounded-xl flex items-center gap-3 text-xs">
@@ -511,9 +434,137 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
       {(hasLeft || hasRight) && (
         <div className="grid lg:grid-cols-12 gap-4 md:gap-6 items-start">
 
-          {/* 左列: 涨跌停梯队 + 板块资金流向 */}
+          {/* 左列: 自选股跟踪 + 热门板块与龙头 + 涨跌停梯队 + 板块资金流向 */}
           {hasLeft && (
             <div className={`order-2 lg:order-1 ${hasRight ? 'lg:col-span-7' : 'lg:col-span-12'} flex flex-col gap-4 md:gap-6`}>
+
+              {/* 自选股跟踪: 自加入以来的涨跌 */}
+              <Panel
+                icon={Star}
+                title="自选股跟踪"
+                subtitle="来自缠论买卖点扫描 · 自加入以来的涨跌"
+                right={
+                  watchlist.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => refreshWatchQuotes(watchlist)}
+                      disabled={watchLoading}
+                      className="flex items-center gap-1 h-6 px-2 rounded-md bg-zinc-900/70 border border-zinc-800 text-[10px] text-zinc-400 hover:text-blue-400 hover:border-blue-500/40 transition-colors cursor-pointer disabled:opacity-50"
+                      title="刷新自选行情"
+                    >
+                      <RefreshCw className={`h-3 w-3 ${watchLoading ? 'animate-spin' : ''}`} />
+                      行情
+                    </button>
+                  ) : undefined
+                }
+              >
+                {watchlist.length === 0 ? (
+                  <p className="text-[11px] text-zinc-500 py-0.5 text-center leading-relaxed">
+                    暂无自选股 · 前往「缠论买卖点扫描」点击 ☆ 自选 可将信号股加入跟踪, 并记录加入理由
+                  </p>
+                ) : (
+                  <div className="space-y-px -my-1">
+                    {watchlist.map((it) => {
+                      const q = watchQuotes[toTencentSymbol(it.symbolKey)];
+                      const price = q?.price || 0;
+                      const chg = price > 0 && it.basePrice > 0 ? ((price - it.basePrice) / it.basePrice) * 100 : null;
+                      const days = Math.floor((Date.now() - it.addedAt) / 86400000);
+                      const displayName = q?.name || it.name || '—';
+                      return (
+                        <div key={it.symbolKey} className="flex items-center gap-1 group">
+                          <button
+                            type="button"
+                            onClick={() => onSelectStock(it.symbolKey.replace('.SH', '.SS'))}
+                            className="flex-1 min-w-0 flex items-center gap-2.5 px-2 py-1 rounded-md hover:bg-blue-500/10 border border-transparent hover:border-blue-500/20 transition-colors cursor-pointer text-left"
+                            title={`查看 ${displayName} (${it.code}) 缠论分析 · ${it.baseDate} 以 ${it.basePrice.toFixed(2)} 加入`}
+                          >
+                            <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-bold shrink-0 ${TYPE_STYLE[it.signalType]}`}>
+                              {it.signalLabel}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-xs text-zinc-200 truncate group-hover:text-blue-400 transition-colors">{displayName}</span>
+                                <span className="text-[9px] font-mono text-zinc-600 shrink-0">{it.code}</span>
+                              </div>
+                              {it.reason && (
+                                <p className="text-[10px] text-zinc-500 truncate mt-0.5" title={it.reason}>{it.reason}</p>
+                              )}
+                            </div>
+                            <div className="ml-auto flex items-center gap-2.5 font-mono text-[11px] tabular-nums shrink-0">
+                              <span className="hidden sm:flex flex-col items-end leading-tight">
+                                <span className="text-[9px] text-zinc-600">{it.baseDate} 加入</span>
+                                <span className="text-zinc-400">{it.basePrice.toFixed(2)}</span>
+                              </span>
+                              <span className="w-14 text-right text-zinc-200">{price > 0 ? price.toFixed(2) : '--'}</span>
+                              <span className={`w-16 text-right font-semibold ${chg === null ? 'text-zinc-600' : upClass(chg)}`}>
+                                {chg === null ? '--' : `${chg > 0 ? '+' : ''}${chg.toFixed(2)}%`}
+                              </span>
+                              <span className="hidden md:inline w-9 text-right text-zinc-500 text-[10px]">
+                                {days === 0 ? '今日' : `${days}天`}
+                              </span>
+                            </div>
+                            <ChevronRight className="h-3.5 w-3.5 text-zinc-700 group-hover:text-blue-400 transition-colors shrink-0" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removeWatch(it.symbolKey)}
+                            className="p-1.5 rounded-md text-zinc-600 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer opacity-100 md:opacity-0 md:group-hover:opacity-100 shrink-0"
+                            title="移出自选"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </Panel>
+
+              {/* 热门板块与领涨龙头 */}
+              {hotSectors.length > 0 && (
+                <Panel
+                  icon={Trophy}
+                  title="热门板块与龙头"
+                  subtitle="行业板块涨幅榜 · 点击龙头股查看缠论分析"
+                >
+                  <div className="space-y-0.5">
+                    {hotSectors.map((s, idx) => (
+                      <div
+                        key={s.code}
+                        className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-zinc-800/40 transition-colors"
+                      >
+                        <span className="text-[10px] font-mono text-zinc-600 w-4 shrink-0">{idx + 1}</span>
+                        <div className="w-[76px] sm:w-[88px] min-w-0 shrink-0">
+                          <span className="block text-xs text-zinc-200 truncate" title={s.name}>{s.name}</span>
+                          <span className={`block font-mono text-[10px] tabular-nums ${upClass(s.changePercent)}`}>
+                            {s.changePercent >= 0 ? '+' : ''}{s.changePercent.toFixed(2)}%
+                          </span>
+                        </div>
+                        <div className="hidden sm:flex flex-col items-end leading-tight shrink-0">
+                          <span className="text-[9px] text-zinc-600">主力净流入</span>
+                          <span className={`font-mono text-[11px] tabular-nums ${upClass(s.mainInflow)}`}>
+                            {formatSignedYi(s.mainInflow)}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => onSelectStock(s.leaderCode)}
+                          className="ml-auto min-w-0 flex items-center gap-1.5 pl-1.5 pr-1 py-0.5 rounded-md hover:bg-blue-500/10 border border-transparent hover:border-blue-500/20 transition-colors cursor-pointer group"
+                          title={`查看 ${s.leaderName} (${s.leaderCode}) 缠论分析`}
+                        >
+                          <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1 py-px shrink-0">龙头</span>
+                          <span className="text-xs text-zinc-200 truncate group-hover:text-blue-400 transition-colors">{s.leaderName}</span>
+                          <span className={`font-mono text-[11px] tabular-nums shrink-0 ${upClass(s.leaderChangePercent)}`}>
+                            {s.leaderChangePercent >= 0 ? '+' : ''}{s.leaderChangePercent.toFixed(2)}%
+                          </span>
+                          <ChevronRight className="h-3 w-3 text-zinc-700 group-hover:text-blue-400 transition-colors shrink-0" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-3 text-[10px] text-zinc-600 font-mono">按板块涨跌幅排序 · 龙头为该板块今日领涨个股</p>
+                </Panel>
+              )}
 
               {/* 涨跌停与连板梯队 */}
               {sentiment && (

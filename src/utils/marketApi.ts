@@ -242,6 +242,43 @@ export function fetchStockFlowTop(po: 0 | 1, count = 10): Promise<FlowItem[]> {
   return fetchFlowList(STOCK_FS, po, count);
 }
 
+export interface HotSector {
+  code: string;                // 板块代码 e.g. BK1616
+  name: string;                // 板块名称
+  changePercent: number;       // 板块涨跌幅 %
+  mainInflow: number;          // 主力净流入 (元)
+  mainPercent: number;         // 主力净占比 %
+  leaderCode: string;          // 领涨龙头代码
+  leaderName: string;          // 领涨龙头名称
+  leaderChangePercent: number; // 领涨龙头涨跌幅 %
+}
+
+// 热门行业板块排行 (按涨跌幅) + 各板块领涨龙头股
+// f128 龙头名称 / f140 龙头代码 / f136 龙头涨跌幅
+export async function fetchHotSectors(count = 10): Promise<HotSector[]> {
+  const url = `${EM_DELAY_BASE}/api/qt/clist/get?fid=f3&po=1&pz=${count}&pn=1&np=1&fltt=2&invt=2&fs=m:90+t:2&fields=f12,f14,f3,f62,f184,f128,f136,f140`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`板块行情接口错误 (${resp.status})`);
+
+  const json = await resp.json();
+  const diff = json?.data?.diff;
+  if (!Array.isArray(diff)) throw new Error('未获取到板块数据');
+
+  const num = (v: unknown) => (typeof v === 'number' ? v : parseFloat(String(v)) || 0);
+  return diff
+    .map((it: any) => ({
+      code: String(it.f12 || ''),
+      name: String(it.f14 || ''),
+      changePercent: num(it.f3),
+      mainInflow: num(it.f62),
+      mainPercent: num(it.f184),
+      leaderCode: String(it.f140 || ''),
+      leaderName: String(it.f128 || '').trim(),
+      leaderChangePercent: num(it.f136),
+    }))
+    .filter((s: HotSector) => s.code && s.name && s.leaderCode && s.leaderName);
+}
+
 // 涨跌停/炸板统计 + 连板梯队
 // 池子接口必须显式传 date, 因此从今天(北京时间)起逐日回溯, 最多 15 个自然日以覆盖节假日
 export async function fetchMarketSentiment(): Promise<MarketSentiment> {
