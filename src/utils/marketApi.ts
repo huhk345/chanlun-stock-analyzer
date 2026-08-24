@@ -2,7 +2,8 @@
 // 市场总览数据层
 // 数据来源:
 //   - 腾讯行情 (web.sqt.gtimg.cn): 指数实时/收盘行情, 支持 CORS, GBK 编码
-//   - 东方财富 (push2delay / push2his): 涨跌家数、大盘资金流向、板块/个股资金排行
+//   - 东方财富 (push2delay / push2his): 涨跌家数、大盘资金流向、板块/个股资金排行、全球指数
+//   - Binance (data-api.binance.vision): 主流加密货币行情, 支持 CORS
 // ---------------------------------------------------------------------------
 
 export interface IndexQuote {
@@ -116,6 +117,223 @@ export interface StockQuote {
   name: string;
   price: number;
   changePercent: number;
+}
+
+// ---------------------------------------------------------------------------
+// 环球市场: 全球主要指数 + 主流加密货币
+// ---------------------------------------------------------------------------
+
+export interface GlobalIndexQuote {
+  code: string;          // e.g. DJIA
+  name: string;          // 道琼斯
+  price: number;
+  prevClose: number;
+  change: number;        // 涨跌额
+  changePercent: number; // 涨跌幅 %
+}
+
+// 全球主要指数: 恒生 / 日经225 / 道琼斯 / 标普500 / 纳斯达克 / 富时100 / 德国DAX
+const GLOBAL_INDEX_SECIDS = '100.HSI,100.N225,100.DJIA,100.SPX,100.NDX,100.FTSE,100.GDAXI';
+// 全球科技相关指数: 恒生科技 / 费城半导体ETF(iShares) / 台湾加权 / 韩国KOSPI
+const TECH_INDEX_SECIDS = '124.HSTECH,105.SOXX,100.TWII,100.KS11';
+// 大宗商品与汇率: COMEX黄金 / NYMEX原油(WTI) / 布伦特原油 / 美元指数 / 美元兑离岸人民币
+const COMMODITY_SECIDS = '101.GC00Y,102.CL00Y,112.B00Y,100.UDI,133.USDCNH';
+
+// 通用: 按东财 secid 批量获取报价 (字段 f2价格 f3涨跌% f4涨跌额 f12代码 f14名称 f18昨收)
+async function fetchQuotesBySecids(secids: string, errMsg: string): Promise<GlobalIndexQuote[]> {
+  const url = `${EM_DELAY_BASE}/api/qt/ulist.np/get?fltt=2&secids=${secids}&fields=f2,f3,f4,f12,f14,f18`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`${errMsg} (${resp.status})`);
+
+  const json = await resp.json();
+  const diff = json?.data?.diff;
+  if (!Array.isArray(diff) || diff.length === 0) throw new Error(`未获取到${errMsg}数据`);
+
+  const num = (v: unknown) => (typeof v === 'number' ? v : parseFloat(String(v)) || 0);
+  return diff.map((it: any) => ({
+    code: String(it.f12 || ''),
+    name: String(it.f14 || ''),
+    price: num(it.f2),
+    prevClose: num(it.f18),
+    change: num(it.f4),
+    changePercent: num(it.f3),
+  }));
+}
+
+export async function fetchGlobalIndexQuotes(): Promise<GlobalIndexQuote[]> {
+  return fetchQuotesBySecids(GLOBAL_INDEX_SECIDS, '全球指数');
+}
+
+export async function fetchTechIndexQuotes(): Promise<GlobalIndexQuote[]> {
+  return fetchQuotesBySecids(TECH_INDEX_SECIDS, '科技指数');
+}
+
+export async function fetchCommodityQuotes(): Promise<GlobalIndexQuote[]> {
+  return fetchQuotesBySecids(COMMODITY_SECIDS, '商品汇率');
+}
+
+export interface CryptoQuote {
+  symbol: string;        // e.g. BTCUSDT
+  base: string;          // e.g. BTC
+  name: string;          // 比特币
+  price: number;         // USD
+  changePercent: number; // 24h 涨跌幅 %
+  high: number;          // 24h 最高
+  low: number;           // 24h 最低
+  quoteVolume: number;   // 24h 成交额 (USDT)
+}
+
+const CRYPTO_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'BCHUSDT'];
+const CRYPTO_NAMES: Record<string, string> = {
+  BTCUSDT: '比特币 (BTC)',
+  ETHUSDT: '以太坊 (ETH)',
+  SOLUSDT: 'SOL',
+  BNBUSDT: 'BNB',
+  XRPUSDT: '瑞波币 (XRP)',
+  BCHUSDT: '比特币现金 (BCH)',
+};
+
+// 主流加密货币行情 (Binance 公共行情接口, 24h ticker, USD 计价)
+export async function fetchCryptoQuotes(): Promise<CryptoQuote[]> {
+  const symbols = encodeURIComponent(JSON.stringify(CRYPTO_SYMBOLS));
+  const resp = await fetch(`https://data-api.binance.vision/api/v3/ticker/24hr?symbols=${symbols}`);
+  if (!resp.ok) throw new Error(`加密货币行情接口错误 (${resp.status})`);
+
+  const arr = await resp.json();
+  if (!Array.isArray(arr) || arr.length === 0) throw new Error('未获取到加密货币行情');
+
+  const map = new Map<string, CryptoQuote>();
+  for (const it of arr) {
+    const symbol = String(it.symbol || '');
+    map.set(symbol, {
+      symbol,
+      base: symbol.replace('USDT', ''),
+      name: CRYPTO_NAMES[symbol] || symbol,
+      price: parseFloat(it.lastPrice) || 0,
+      changePercent: parseFloat(it.priceChangePercent) || 0,
+      high: parseFloat(it.highPrice) || 0,
+      low: parseFloat(it.lowPrice) || 0,
+      quoteVolume: parseFloat(it.quoteVolume) || 0,
+    });
+  }
+  // 按预设顺序输出
+  return CRYPTO_SYMBOLS.map((s) => map.get(s)).filter((q): q is CryptoQuote => !!q);
+}
+
+// 加密货币实时行情: Binance WebSocket @ticker 流 (每秒推送 24h 滚动统计)
+// 返回取消订阅函数; 断线自动重连; onStatus 用于上报连接状态 (live=true 表示实时推送中)
+export function subscribeCryptoQuotes(
+  onUpdate: (quotes: CryptoQuote[]) => void,
+  onStatus?: (live: boolean) => void,
+): () => void {
+  const streams = CRYPTO_SYMBOLS.map((s) => `${s.toLowerCase()}@ticker`).join('/');
+  const latest = new Map<string, CryptoQuote>();
+  let ws: WebSocket | null = null;
+  let closed = false;
+  let live = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const setLive = (v: boolean) => {
+    if (live === v) return;
+    live = v;
+    onStatus?.(v);
+  };
+
+  const connect = () => {
+    if (closed) return;
+    try {
+      ws = new WebSocket(`wss://data-stream.binance.vision/stream?streams=${streams}`);
+    } catch {
+      retryTimer = setTimeout(connect, 5000);
+      return;
+    }
+    ws.onopen = () => setLive(true);
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        const d = msg?.data;
+        if (!d || d.e !== '24hrTicker') return;
+        setLive(true);
+        const symbol = String(d.s || '');
+        if (!CRYPTO_NAMES[symbol]) return;
+        latest.set(symbol, {
+          symbol,
+          base: symbol.replace('USDT', ''),
+          name: CRYPTO_NAMES[symbol] || symbol,
+          price: parseFloat(d.c) || 0,
+          changePercent: parseFloat(d.P) || 0,
+          high: parseFloat(d.h) || 0,
+          low: parseFloat(d.l) || 0,
+          quoteVolume: parseFloat(d.q) || 0,
+        });
+        // 按预设顺序输出
+        onUpdate(CRYPTO_SYMBOLS.map((s) => latest.get(s)).filter((q): q is CryptoQuote => !!q));
+      } catch { /* 忽略单条消息解析错误 */ }
+    };
+    ws.onclose = () => {
+      setLive(false);
+      if (!closed) retryTimer = setTimeout(connect, 5000);
+    };
+    ws.onerror = () => ws?.close();
+  };
+
+  connect();
+  return () => {
+    closed = true;
+    if (retryTimer) clearTimeout(retryTimer);
+    if (ws) { ws.onclose = null; ws.close(); }
+  };
+}
+
+// 加密货币价格展示: 大币种保留2位小数, 小币种保留更多精度
+export function formatCryptoPrice(value: number): string {
+  if (value >= 1) return value.toFixed(2);
+  if (value >= 0.01) return value.toFixed(4);
+  return value.toFixed(6);
+}
+
+// ---------------------------------------------------------------------------
+// 交易时段判断 (按交易所所在时区, 自动处理夏令时, 忽略节假日)
+// ---------------------------------------------------------------------------
+
+type Session = [number, number]; // 当地时间 [开始分钟, 结束分钟]
+
+function isOpenAt(tz: string, sessions: Session[]): boolean {
+  let weekday = -1;
+  let minutes = -1;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hour12: false,
+      weekday: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).formatToParts(new Date());
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+    const wdMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    weekday = wdMap[get('weekday')] ?? -1;
+    minutes = (parseInt(get('hour'), 10) % 24) * 60 + parseInt(get('minute'), 10);
+  } catch {
+    return false;
+  }
+  if (weekday <= 0 || weekday >= 6) return false; // 周末休市
+  return sessions.some(([s, e]) => minutes >= s && minutes <= e);
+}
+
+// A 股是否交易中 (含集合竞价与收盘尾差): 周一至周五 09:15–11:30 / 13:00–15:05 北京时间
+export function isCnMarketOpen(): boolean {
+  return isOpenAt('Asia/Shanghai', [[555, 690], [780, 905]]);
+}
+
+// 全球主要指数 (港股/日经/美股/富时/DAX) 是否任一在交易
+export function anyGlobalMarketOpen(): boolean {
+  return (
+    isOpenAt('Asia/Hong_Kong', [[570, 720], [780, 960]]) ||   // 港股 09:30–12:00 / 13:00–16:00
+    isOpenAt('Asia/Tokyo', [[540, 690], [750, 900]]) ||       // 日经 09:00–11:30 / 12:30–15:00
+    isOpenAt('America/New_York', [[570, 960]]) ||             // 美股 09:30–16:00
+    isOpenAt('Europe/London', [[480, 990]]) ||                // 富时 08:00–16:30
+    isOpenAt('Europe/Berlin', [[540, 1050]])                  // DAX 09:00–17:30
+  );
 }
 
 // 批量获取个股/ETF/指数实时或收盘行情 (腾讯行情, symbols 形如 'sh600519' / 'sz000001')

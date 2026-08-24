@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, Activity, Waves, TrendingUp, LayoutGrid, ListOrdered, ChevronRight, AlertTriangle, Flame, Star, X, Trophy } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { RefreshCw, Activity, Waves, TrendingUp, LayoutGrid, ListOrdered, ChevronRight, AlertTriangle, Flame, Star, X, Trophy, Globe, Coins } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from 'recharts';
 import {
   IndexQuote,
@@ -10,6 +10,8 @@ import {
   HotSector,
   MarketSentiment,
   StockQuote,
+  GlobalIndexQuote,
+  CryptoQuote,
   fetchIndexQuotes,
   fetchStockQuotes,
   fetchMarketBreadthAndFlow,
@@ -18,9 +20,17 @@ import {
   fetchStockFlowTop,
   fetchHotSectors,
   fetchMarketSentiment,
+  fetchGlobalIndexQuotes,
+  fetchTechIndexQuotes,
+  fetchCommodityQuotes,
+  fetchCryptoQuotes,
+  subscribeCryptoQuotes,
+  isCnMarketOpen,
+  anyGlobalMarketOpen,
   formatYi,
   formatSignedYi,
   formatVolume,
+  formatCryptoPrice,
 } from '../utils/marketApi';
 import { WatchItem, loadWatchlist, removeFromWatchlist, toTencentSymbol } from '../utils/watchlistStorage';
 import { TYPE_STYLE } from './IndexAnalysis';
@@ -31,6 +41,25 @@ interface MarketDashboardProps {
 
 // A股配色习惯: 红涨绿跌 / 红流入绿流出
 const upClass = (v: number) => (v > 0 ? 'text-red-500' : v < 0 ? 'text-green-500' : 'text-zinc-400');
+
+// 价格变动闪烁: 价格更新时短暂高亮卡片 (红=上涨, 绿=下跌)
+function usePriceFlash(price: number): 'up' | 'down' | null {
+  const prevRef = useRef<number | null>(null);
+  const [flash, setFlash] = useState<'up' | 'down' | null>(null);
+  useEffect(() => {
+    const prev = prevRef.current;
+    prevRef.current = price;
+    if (prev === null || price === prev) return;
+    setFlash(price > prev ? 'up' : 'down');
+    const t = setTimeout(() => setFlash(null), 800);
+    return () => clearTimeout(t);
+  }, [price]);
+  return flash;
+}
+
+// 闪烁样式: ring 高亮, 不与卡片原有边框冲突
+const flashClass = (flash: 'up' | 'down' | null) =>
+  flash === 'up' ? 'ring-1 ring-red-500/60' : flash === 'down' ? 'ring-1 ring-green-500/60' : '';
 
 function Panel({
   icon: Icon,
@@ -69,8 +98,9 @@ function Panel({
 function IndexCard({ q }: { q: IndexQuote }) {
   const up = q.change >= 0;
   const amp = q.prevClose > 0 ? ((q.high - q.low) / q.prevClose) * 100 : 0;
+  const flash = usePriceFlash(q.price);
   return (
-    <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-3.5 hover:border-zinc-700 transition-colors">
+    <div className={`bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-3.5 hover:border-zinc-700 transition-all duration-300 ${flashClass(flash)}`}>
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-semibold text-zinc-200 truncate">{q.name}</span>
         <span className="text-[9px] font-mono text-zinc-600 shrink-0">{q.code}</span>
@@ -87,13 +117,72 @@ function IndexCard({ q }: { q: IndexQuote }) {
         <span>{up ? '+' : ''}{q.change.toFixed(2)}</span>
         <span className="font-semibold">{up ? '+' : ''}{q.changePercent.toFixed(2)}%</span>
       </div>
-      <div className="mt-3 grid grid-cols-3 gap-x-2 gap-y-1 text-[10px] font-mono tabular-nums text-zinc-500">
-        <div><span className="text-zinc-600">开</span> {q.open.toFixed(2)}</div>
-        <div><span className="text-zinc-600">高</span> {q.high.toFixed(2)}</div>
-        <div className="text-right"><span className="text-zinc-600">低</span> {q.low.toFixed(2)}</div>
-        <div><span className="text-zinc-600">振</span> {amp.toFixed(2)}%</div>
-        <div><span className="text-zinc-600">量</span> {formatVolume(q.volume)}</div>
-        <div className="text-right"><span className="text-zinc-600">额</span> {formatYi(q.amount, 0)}</div>
+      <div className="mt-3 space-y-0.5 text-[10px] font-mono tabular-nums text-zinc-500">
+        <div className="flex items-center gap-x-2 whitespace-nowrap">
+          <span><span className="text-zinc-600">开</span> {q.open.toFixed(2)}</span>
+          <span><span className="text-zinc-600">高</span> {q.high.toFixed(2)}</span>
+          <span className="ml-auto"><span className="text-zinc-600">低</span> {q.low.toFixed(2)}</span>
+        </div>
+        <div className="flex items-center gap-x-2 whitespace-nowrap">
+          <span><span className="text-zinc-600">振</span> {amp.toFixed(2)}%</span>
+          <span><span className="text-zinc-600">量</span> {formatVolume(q.volume)}</span>
+          <span className="ml-auto"><span className="text-zinc-600">额</span> {formatYi(q.amount, 0)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 卡片网格: 固定 4 列 (11 张卡 = 整 3 行), 行高均分填满面板
+const denseGridStyle = { gridAutoRows: '1fr' } as const;
+
+function GlobalIndexCard({ q, decimals = 2 }: { q: GlobalIndexQuote; decimals?: number }) {
+  const up = q.change >= 0;
+  const fmt = (v: number) => v.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  const flash = usePriceFlash(q.price);
+  return (
+    <div
+      className={`bg-zinc-900/60 border border-zinc-800/80 rounded-xl px-3 py-2.5 hover:border-zinc-700 transition-all duration-300 min-w-0 ${flashClass(flash)}`}
+      title={`${q.name} (${q.code})`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold text-zinc-200 truncate">{q.name}</span>
+        <span className="text-[9px] font-mono text-zinc-600 shrink-0">{q.code}</span>
+      </div>
+      <div className={`mt-1.5 font-mono font-bold text-base tabular-nums ${up ? 'text-red-500' : 'text-green-500'}`}>
+        {fmt(q.price)}
+      </div>
+      <div className="mt-0.5 flex items-center justify-between gap-2 font-mono text-[10px] tabular-nums">
+        <span className={up ? 'text-red-400' : 'text-green-400'}>
+          {up ? '+' : ''}{q.change.toFixed(decimals)}
+        </span>
+        <span className={`font-semibold ${up ? 'text-red-400' : 'text-green-400'}`}>
+          {up ? '+' : ''}{q.changePercent.toFixed(2)}%
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function CryptoCard({ q }: { q: CryptoQuote }) {
+  const up = q.changePercent >= 0;
+  const flash = usePriceFlash(q.price);
+  return (
+    <div className={`bg-zinc-900/60 border border-zinc-800/80 rounded-xl px-3 py-2.5 hover:border-zinc-700 transition-all duration-300 ${flashClass(flash)}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold text-zinc-200 truncate">{q.name}</span>
+        <span className="text-[9px] font-mono text-amber-500/80 shrink-0">{q.base}</span>
+      </div>
+      <div className={`mt-1.5 font-mono font-bold text-base tabular-nums ${up ? 'text-red-500' : 'text-green-500'}`}>
+        ${formatCryptoPrice(q.price)}
+      </div>
+      <div className="mt-0.5 flex items-center justify-between gap-2 font-mono text-[10px] tabular-nums">
+        <span className={`font-semibold text-[11px] ${up ? 'text-red-400' : 'text-green-400'}`}>
+          24h {up ? '+' : ''}{q.changePercent.toFixed(2)}%
+        </span>
+        <span className="text-zinc-600 text-right" title={`24h 高 ${formatCryptoPrice(q.high)} / 低 ${formatCryptoPrice(q.low)}`}>
+          额 {formatYi(q.quoteVolume, 1)}
+        </span>
       </div>
     </div>
   );
@@ -126,6 +215,12 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
   const [hotSectors, setHotSectors] = useState<HotSector[]>([]);
   const [sentiment, setSentiment] = useState<MarketSentiment | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+
+  // 环球市场: 全球主要指数 + 主流加密货币 (加载失败不影响 A 股主数据)
+  const [globalIndices, setGlobalIndices] = useState<GlobalIndexQuote[]>([]);
+  const [cryptoQuotes, setCryptoQuotes] = useState<CryptoQuote[]>([]);
+  const [techIndices, setTechIndices] = useState<GlobalIndexQuote[]>([]);
+  const [commodities, setCommodities] = useState<GlobalIndexQuote[]>([]);
 
   // 自选股跟踪: 来自「缠论买卖点扫描」的自选, 跟踪自加入以来的涨跌
   const [watchlist, setWatchlist] = useState<WatchItem[]>([]);
@@ -169,7 +264,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
     setFatalError('');
 
     try {
-      const [idxRes, bfRes, histRes, secInRes, secOutRes, stockRes, sentRes, hotSecRes] = await Promise.allSettled([
+      const [idxRes, bfRes, histRes, secInRes, secOutRes, stockRes, sentRes, hotSecRes, globalRes, cryptoRes, techRes, commRes] = await Promise.allSettled([
         fetchIndexQuotes(),
         fetchMarketBreadthAndFlow(),
         fetchMarketFlowHistory(30),
@@ -178,10 +273,20 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
         fetchStockFlowTop(1, 10),
         fetchMarketSentiment(),
         fetchHotSectors(10),
+        fetchGlobalIndexQuotes(),
+        fetchCryptoQuotes(),
+        fetchTechIndexQuotes(),
+        fetchCommodityQuotes(),
       ]);
 
       if (idxRes.status === 'fulfilled') setIndices(idxRes.value);
       else setFatalError(idxRes.reason?.message || '指数行情加载失败');
+
+      // 环球市场: 失败时保留上次数据, 不作为致命错误
+      if (globalRes.status === 'fulfilled') setGlobalIndices(globalRes.value);
+      if (cryptoRes.status === 'fulfilled') setCryptoQuotes(cryptoRes.value);
+      if (techRes.status === 'fulfilled') setTechIndices(techRes.value);
+      if (commRes.status === 'fulfilled') setCommodities(commRes.value);
 
       if (bfRes.status === 'fulfilled') {
         setBreadth(bfRes.value.breadth);
@@ -207,20 +312,68 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
     load();
   }, [load]);
 
-  // 交易时段内每 60 秒自动刷新
+  // 指数实时刷新: 交易时段内高频轻量轮询 (对齐东财网页约 3 秒节奏), 页面隐藏时暂停
+  useEffect(() => {
+    // A 股指数: 每 3 秒
+    const cnTimer = setInterval(() => {
+      if (document.hidden || !isCnMarketOpen()) return;
+      fetchIndexQuotes().then(setIndices).catch(() => {});
+    }, 3000);
+    // 全球指数 + 科技指数: 每 5 秒
+    const globalTimer = setInterval(() => {
+      if (document.hidden || !anyGlobalMarketOpen()) return;
+      fetchGlobalIndexQuotes().then(setGlobalIndices).catch(() => {});
+      fetchTechIndexQuotes().then(setTechIndices).catch(() => {});
+    }, 5000);
+    // 黄金/原油/美元指数/离岸人民币 近乎全天交易, 工作日每 10 秒
+    const commTimer = setInterval(() => {
+      if (document.hidden) return;
+      const day = new Date().getDay();
+      if (day >= 1 && day <= 5) {
+        fetchCommodityQuotes().then(setCommodities).catch(() => {});
+      }
+    }, 10000);
+    return () => { clearInterval(cnTimer); clearInterval(globalTimer); clearInterval(commTimer); };
+  }, []);
+
+  // A 股交易时段内每 60 秒全量刷新 (资金流/情绪等较重接口)
   useEffect(() => {
     const timer = setInterval(() => {
-      const now = new Date();
-      const day = now.getDay();
-      if (day === 0 || day === 6) return;
-      const minutes = now.getHours() * 60 + now.getMinutes();
-      if (minutes >= 555 && minutes <= 905) { // 09:15 - 15:05
-        load(true);
-        refreshWatchQuotes(watchlist);
-      }
+      if (!isCnMarketOpen()) return;
+      load(true);
+      refreshWatchQuotes(watchlist);
     }, 60000);
     return () => clearInterval(timer);
   }, [load, refreshWatchQuotes, watchlist]);
+
+  // 加密货币 7x24 实时行情: WebSocket 每秒推送; 连接失败时回退为每 5 秒轮询
+  useEffect(() => {
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    const startPolling = () => {
+      if (pollTimer) return;
+      fetchCryptoQuotes().then(setCryptoQuotes).catch(() => {});
+      pollTimer = setInterval(() => {
+        fetchCryptoQuotes().then(setCryptoQuotes).catch(() => {});
+      }, 5000);
+    };
+    // 立即拉取一次, 避免等待首条推送
+    fetchCryptoQuotes().then(setCryptoQuotes).catch(() => {});
+    const unsub = subscribeCryptoQuotes(
+      (quotes) => {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } // WS 正常则停用轮询
+        setCryptoQuotes(quotes);
+      },
+      (live) => {
+        if (!live) startPolling(); // WS 断开立即切换轮询, 不等 8 秒
+      },
+    );
+    const fallbackTimer = setTimeout(startPolling, 8000); // 8 秒未收到推送则启用轮询
+    return () => {
+      unsub();
+      clearTimeout(fallbackTimer);
+      if (pollTimer) clearInterval(pollTimer);
+    };
+  }, []);
 
   // ---- 派生数据 ----
   const shIndex = indices.find((i) => i.symbol === 'sh000001');
@@ -347,6 +500,59 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
           {indices.map((q) => (
             <IndexCard key={q.symbol} q={q} />
           ))}
+        </div>
+      )}
+
+      {/* ---- 环球市场 (左) + 商品汇率与加密货币 (右): 等高双栏 ---- */}
+      {(globalIndices.length > 0 || cryptoQuotes.length > 0 || techIndices.length > 0 || commodities.length > 0) && (
+        <div className="grid lg:grid-cols-2 gap-4 md:gap-6">
+          <Panel
+            icon={Globe}
+            title="环球市场"
+            subtitle="全球指数 · 科技指数"
+            right={
+              <span className={`flex items-center gap-1.5 text-[10px] font-mono shrink-0 ${(isCnMarketOpen() || anyGlobalMarketOpen()) ? 'text-green-400' : 'text-zinc-500'}`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${(isCnMarketOpen() || anyGlobalMarketOpen()) ? 'bg-green-400 animate-pulse' : 'bg-zinc-600'}`} />
+                {!(isCnMarketOpen() || anyGlobalMarketOpen()) && 'Money Never Sleeps'}
+              </span>
+            }
+          >
+            {(globalIndices.length > 0 || techIndices.length > 0) && (
+              <section className="flex-1 flex flex-col min-h-0">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5 flex-1" style={denseGridStyle}>
+                  {globalIndices.map((q) => (
+                    <GlobalIndexCard key={q.code} q={q} />
+                  ))}
+                  {techIndices.map((q) => (
+                    <GlobalIndexCard key={q.code} q={q} />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            <p className="mt-3 pt-3 border-t border-zinc-800/60 text-[10px] text-zinc-600 font-mono">
+              各市场交易时段不同, 休市时显示最近收盘数据 · 费半以 iShares 半导体 ETF (SOXX) 为参考 · 数据来源: 东方财富
+            </p>
+          </Panel>
+
+          {(commodities.length > 0 || cryptoQuotes.length > 0) && (
+            <Panel icon={Coins} title="大宗商品与加密货币" subtitle="黄金 · 原油 · 美元指数 · 离岸人民币 · 加密货币">
+              <section className="flex-1 flex flex-col min-h-0">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5 flex-1" style={denseGridStyle}>
+                  {commodities.map((q) => (
+                    <GlobalIndexCard key={q.code} q={q} decimals={q.code === 'USDCNH' ? 4 : 2} />
+                  ))}
+                  {cryptoQuotes.map((q) => (
+                    <CryptoCard key={q.symbol} q={q} />
+                  ))}
+                </div>
+              </section>
+
+              <p className="mt-3 pt-3 border-t border-zinc-800/60 text-[10px] text-zinc-600 font-mono">
+                黄金为 COMEX 主力 · 原油为 NYMEX/ICE 连续合约 · 汇率为美元兑离岸人民币 · 数据来源: 东方财富 / Binance
+              </p>
+            </Panel>
+          )}
         </div>
       )}
 
@@ -824,7 +1030,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
       )}
 
       <p className="text-[10px] font-mono text-zinc-600 text-center">
-        数据来源: 腾讯行情 / 东方财富 (含涨跌停池) · 仅供参考, 不构成投资建议
+        数据来源: 腾讯行情 / 东方财富 (含涨跌停池) / Binance (加密货币) · 仅供参考, 不构成投资建议
       </p>
     </div>
   );
