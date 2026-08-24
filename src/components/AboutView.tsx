@@ -139,7 +139,7 @@ export default function AboutView({ isOpen, onClose, dataSource }: AboutViewProp
           <div className="pt-2 border-t border-zinc-800 space-y-3">
             <div className="flex flex-wrap items-center gap-2">
               <a
-                href="https://github.com"
+                href="https://github.com/huhk345/chanlun-stock-analyzer"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-zinc-300 bg-zinc-950/60 border border-zinc-800 hover:border-blue-500/60 hover:text-blue-400 rounded-lg transition-colors"
