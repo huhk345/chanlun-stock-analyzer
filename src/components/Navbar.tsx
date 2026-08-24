@@ -415,9 +415,9 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
           {/* Market Status */}
           <div className="hidden xl:flex items-center gap-2 h-9 px-3 rounded-md bg-zinc-900/50 border border-zinc-800/60">
             <div className="flex items-center gap-1.5">
-              <div className={`h-1.5 w-1.5 rounded-full ${isMarketOpen() ? 'bg-blue-400 shadow-[0_0_8px_rgba(59,130,246,0.6)]' : 'bg-zinc-600'} ${isMarketOpen() ? 'animate-pulse' : ''}`} />
+              <div className="h-1.5 w-1.5 rounded-full bg-blue-400 shadow-[0_0_8px_rgba(59,130,246,0.6)] animate-pulse" />
               <span className="text-[10px] font-mono font-semibold tracking-wider uppercase text-zinc-400">
-                {isMarketOpen() ? 'Live' : 'Closed'}
+                {isMarketOpen() ? 'Live' : 'Money Never Sleep'}
               </span>
             </div>
             <div className="h-3 w-px bg-zinc-800" />
