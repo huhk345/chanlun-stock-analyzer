@@ -132,8 +132,8 @@ export interface GlobalIndexQuote {
   changePercent: number; // 涨跌幅 %
 }
 
-// 全球主要指数: 恒生 / 日经225 / 道琼斯 / 标普500 / 纳斯达克 / 富时100 / 德国DAX
-const GLOBAL_INDEX_SECIDS = '100.HSI,100.N225,100.DJIA,100.SPX,100.NDX,100.FTSE,100.GDAXI';
+// 全球主要指数: 恒生 / 日经225 / 道琼斯 / 标普500 / 纳斯达克 / 中国金龙 / 富时100 / 德国DAX
+const GLOBAL_INDEX_SECIDS = '100.HSI,100.N225,100.DJIA,100.SPX,100.NDX,251.HXC,100.FTSE,100.GDAXI';
 // 全球科技相关指数: 恒生科技 / 费城半导体ETF(iShares) / 台湾加权 / 韩国KOSPI
 const TECH_INDEX_SECIDS = '124.HSTECH,105.SOXX,100.TWII,100.KS11';
 // 大宗商品与汇率: COMEX黄金 / NYMEX原油(WTI) / 布伦特原油 / 美元指数 / 美元兑离岸人民币
@@ -170,6 +170,119 @@ export async function fetchTechIndexQuotes(): Promise<GlobalIndexQuote[]> {
 
 export async function fetchCommodityQuotes(): Promise<GlobalIndexQuote[]> {
   return fetchQuotesBySecids(COMMODITY_SECIDS, '商品汇率');
+}
+
+// ---------------------------------------------------------------------------
+// 机构多空持仓: 股指期货(IF/IH/IC/IM)前20会员成交持仓排名 (中金所数据, 东方财富数据中心)
+// ---------------------------------------------------------------------------
+
+const EM_DATACENTER_BASE = 'https://datacenter-web.eastmoney.com';
+const INDEX_FUTURES_PREFIXES = ['IF', 'IH', 'IC', 'IM'];
+
+export interface InstitutionPosition {
+  name: string;        // 会员简称 (机构席位)
+  long: number;        // 今日多单
+  short: number;       // 今日空单
+  netLong: number;     // 净多单 (多 - 空)
+  longChange: number;  // 今日多单增减
+  shortChange: number; // 今日空单增减
+  net7d: number;       // 近7个交易日累计净增 (多增 - 空增)
+}
+
+export interface InstitutionPositionSummary {
+  date: string;                    // 数据日期
+  totalLong: number;               // 市场多单合计 (前20会员)
+  totalShort: number;              // 市场空单合计
+  list: InstitutionPosition[];     // 按净多绝对值排序的机构列表
+}
+
+interface DailyPosRow {
+  ORG_CODE: string;
+  MEMBER_NAME_ABBR?: string;
+  ORG_NAME_ABBR_NEW?: string;
+  SECURITY_CODE?: string;
+  LONG_POSITION?: number | null;
+  SHORT_POSITION?: number | null;
+  LP_CHANGE?: number | null;
+  SP_CHANGE?: number | null;
+}
+
+async function fetchDailyPositionRows(day: string): Promise<DailyPosRow[]> {
+  const url = `${EM_DATACENTER_BASE}/api/data/v1/get?reportName=RPT_FUTU_DAILYPOSITION&columns=ALL&pageSize=500&pageNumber=1&source=WEB&client=WEB&sortColumns=LONG_POSITION&sortTypes=-1`
+    + `&filter=(TRADE_DATE='${day}')(TYPE="0")(TRADE_MARKET_CODE="069001009")`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`机构持仓接口错误 (${resp.status})`);
+  const json = await resp.json();
+  const data = json?.result?.data;
+  return Array.isArray(data) ? data : [];
+}
+
+function mergeDay(rows: DailyPosRow[]): Map<string, InstitutionPosition> {
+  const merged = new Map<string, InstitutionPosition>();
+  for (const r of rows) {
+    const code = String(r.SECURITY_CODE || '');
+    if (!INDEX_FUTURES_PREFIXES.includes(code.slice(0, 2))) continue;
+    const key = r.ORG_CODE ?? r.MEMBER_NAME_ABBR ?? '';
+    if (!key) continue;
+    const e = merged.get(String(key)) || { name: r.ORG_NAME_ABBR_NEW || r.MEMBER_NAME_ABBR || '', long: 0, short: 0, netLong: 0, longChange: 0, shortChange: 0, net7d: 0 };
+    e.long += r.LONG_POSITION || 0;
+    e.short += r.SHORT_POSITION || 0;
+    e.longChange += r.LP_CHANGE || 0;
+    e.shortChange += r.SP_CHANGE || 0;
+    e.netLong = e.long - e.short;
+    merged.set(String(key), e);
+  }
+  return merged;
+}
+
+// 最近 n 个交易日 (含 startDate; 跳过周末, 法定节假日由空结果自然跳过)
+function recentTradeDays(startDate: string, n: number): string[] {
+  const days: string[] = [];
+  let d = new Date(`${startDate}T00:00:00Z`);
+  while (days.length < n) {
+    if (d.getUTCDay() !== 0 && d.getUTCDay() !== 6) days.push(d.toISOString().slice(0, 10));
+    d = new Date(d.getTime() - 86400000);
+  }
+  return days;
+}
+
+export async function fetchInstitutionPositions(days = 7): Promise<InstitutionPositionSummary> {
+  // 最新交易日
+  const latestUrl = `${EM_DATACENTER_BASE}/api/data/v1/get?reportName=RPT_FUTU_DAILYPOSITION&columns=TRADE_DATE&pageSize=1&pageNumber=1&sortColumns=TRADE_DATE&sortTypes=-1&filter=(TYPE="0")&source=WEB&client=WEB`;
+  const latestResp = await fetch(latestUrl);
+  if (!latestResp.ok) throw new Error(`机构持仓接口错误 (${latestResp.status})`);
+  const latestJson = await latestResp.json();
+  const latest = latestJson?.result?.data?.[0]?.TRADE_DATE;
+  if (!latest) throw new Error('未获取到机构持仓数据');
+  const date = String(latest).slice(0, 10);
+
+  const tradeDays = recentTradeDays(date, days);
+  const dayResults = await Promise.all(tradeDays.map((day) => fetchDailyPositionRows(day).catch(() => [] as DailyPosRow[])));
+
+  const today = mergeDay(dayResults[0]);
+  // 近7日累计净增
+  const acc = new Map<string, { l: number; s: number }>();
+  for (const rows of dayResults) {
+    for (const [key, e] of mergeDay(rows)) {
+      const a = acc.get(key) || { l: 0, s: 0 };
+      a.l += e.longChange;
+      a.s += e.shortChange;
+      acc.set(key, a);
+    }
+  }
+
+  const list: InstitutionPosition[] = [];
+  let totalLong = 0;
+  let totalShort = 0;
+  for (const [key, e] of today) {
+    totalLong += e.long;
+    totalShort += e.short;
+    const a = acc.get(key);
+    list.push({ ...e, net7d: a ? a.l - a.s : 0 });
+  }
+  list.sort((x, y) => Math.abs(y.netLong) - Math.abs(x.netLong));
+
+  return { date, totalLong, totalShort, list };
 }
 
 export interface CryptoQuote {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { RefreshCw, Activity, Waves, TrendingUp, LayoutGrid, ListOrdered, ChevronRight, AlertTriangle, Flame, Star, X, Trophy, Globe, Coins } from 'lucide-react';
+import { RefreshCw, Activity, Waves, TrendingUp, LayoutGrid, ListOrdered, ChevronRight, AlertTriangle, Flame, Star, X, Trophy, Globe, Coins, Scale } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from 'recharts';
 import {
   IndexQuote,
@@ -12,6 +12,7 @@ import {
   StockQuote,
   GlobalIndexQuote,
   CryptoQuote,
+  InstitutionPositionSummary,
   fetchIndexQuotes,
   fetchStockQuotes,
   fetchMarketBreadthAndFlow,
@@ -25,6 +26,7 @@ import {
   fetchCommodityQuotes,
   fetchCryptoQuotes,
   subscribeCryptoQuotes,
+  fetchInstitutionPositions,
   isCnMarketOpen,
   anyGlobalMarketOpen,
   formatYi,
@@ -113,7 +115,7 @@ function IndexCard({ q }: { q: IndexQuote }) {
           昨收 {q.prevClose.toFixed(2)}
         </span>
       </div>
-      <div className={`mt-1 flex items-baseline gap-2 font-mono text-[11px] tabular-nums ${up ? 'text-red-400' : 'text-green-400'}`}>
+      <div className={`mt-1 flex items-baseline gap-2 font-mono text-xs tabular-nums ${up ? 'text-red-400' : 'text-green-400'}`}>
         <span>{up ? '+' : ''}{q.change.toFixed(2)}</span>
         <span className="font-semibold">{up ? '+' : ''}{q.changePercent.toFixed(2)}%</span>
       </div>
@@ -146,13 +148,13 @@ function GlobalIndexCard({ q, decimals = 2 }: { q: GlobalIndexQuote; decimals?: 
       title={`${q.name} (${q.code})`}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] font-semibold text-zinc-200 truncate">{q.name}</span>
+        <span className="text-xs font-semibold text-zinc-200 truncate">{q.name}</span>
         <span className="text-[9px] font-mono text-zinc-600 shrink-0">{q.code}</span>
       </div>
       <div className={`mt-1.5 font-mono font-bold text-base tabular-nums ${up ? 'text-red-500' : 'text-green-500'}`}>
         {fmt(q.price)}
       </div>
-      <div className="mt-0.5 flex items-center justify-between gap-2 font-mono text-[10px] tabular-nums">
+      <div className="mt-0.5 flex items-center justify-between gap-2 font-mono text-xs tabular-nums">
         <span className={up ? 'text-red-400' : 'text-green-400'}>
           {up ? '+' : ''}{q.change.toFixed(decimals)}
         </span>
@@ -170,14 +172,14 @@ function CryptoCard({ q }: { q: CryptoQuote }) {
   return (
     <div className={`bg-zinc-900/60 border border-zinc-800/80 rounded-xl px-3 py-2.5 hover:border-zinc-700 transition-all duration-300 ${flashClass(flash)}`}>
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] font-semibold text-zinc-200 truncate">{q.name}</span>
+        <span className="text-xs font-semibold text-zinc-200 truncate">{q.name}</span>
         <span className="text-[9px] font-mono text-amber-500/80 shrink-0">{q.base}</span>
       </div>
       <div className={`mt-1.5 font-mono font-bold text-base tabular-nums ${up ? 'text-red-500' : 'text-green-500'}`}>
         ${formatCryptoPrice(q.price)}
       </div>
       <div className="mt-0.5 flex items-center justify-between gap-2 font-mono text-[10px] tabular-nums">
-        <span className={`font-semibold text-[11px] ${up ? 'text-red-400' : 'text-green-400'}`}>
+        <span className={`font-semibold text-xs ${up ? 'text-red-400' : 'text-green-400'}`}>
           24h {up ? '+' : ''}{q.changePercent.toFixed(2)}%
         </span>
         <span className="text-zinc-600 text-right" title={`24h 高 ${formatCryptoPrice(q.high)} / 低 ${formatCryptoPrice(q.low)}`}>
@@ -221,6 +223,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
   const [cryptoQuotes, setCryptoQuotes] = useState<CryptoQuote[]>([]);
   const [techIndices, setTechIndices] = useState<GlobalIndexQuote[]>([]);
   const [commodities, setCommodities] = useState<GlobalIndexQuote[]>([]);
+  const [instPositions, setInstPositions] = useState<InstitutionPositionSummary | null>(null);
 
   // 自选股跟踪: 来自「缠论买卖点扫描」的自选, 跟踪自加入以来的涨跌
   const [watchlist, setWatchlist] = useState<WatchItem[]>([]);
@@ -264,7 +267,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
     setFatalError('');
 
     try {
-      const [idxRes, bfRes, histRes, secInRes, secOutRes, stockRes, sentRes, hotSecRes, globalRes, cryptoRes, techRes, commRes] = await Promise.allSettled([
+      const [idxRes, bfRes, histRes, secInRes, secOutRes, stockRes, sentRes, hotSecRes, globalRes, cryptoRes, techRes, commRes, instRes] = await Promise.allSettled([
         fetchIndexQuotes(),
         fetchMarketBreadthAndFlow(),
         fetchMarketFlowHistory(30),
@@ -277,6 +280,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
         fetchCryptoQuotes(),
         fetchTechIndexQuotes(),
         fetchCommodityQuotes(),
+        fetchInstitutionPositions(),
       ]);
 
       if (idxRes.status === 'fulfilled') setIndices(idxRes.value);
@@ -287,6 +291,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
       if (cryptoRes.status === 'fulfilled') setCryptoQuotes(cryptoRes.value);
       if (techRes.status === 'fulfilled') setTechIndices(techRes.value);
       if (commRes.status === 'fulfilled') setCommodities(commRes.value);
+      if (instRes.status === 'fulfilled') setInstPositions(instRes.value);
 
       if (bfRes.status === 'fulfilled') {
         setBreadth(bfRes.value.breadth);
@@ -426,9 +431,9 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
           ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
           : 'bg-zinc-500/15 text-zinc-300 border-zinc-600/50';
 
-  // ---- 错落双列布局: 左列 (涨跌停/板块) 与右列 (资金/趋势/个股榜) 独立堆叠, 右列整体下沉错位 ----
-  const hasLeft = watchlist.length > 0 || !!sentiment || hotSectors.length > 0 || sectorIn.length > 0 || sectorOut.length > 0;
-  const hasRight = !!flow || chartData.length > 1 || stockTop.length > 0;
+  // ---- 错落双列布局: 左列 (机构持仓/涨跌停/板块) 与右列 (资金/趋势/个股榜/热门板块) 独立堆叠 ----
+  const hasLeft = watchlist.length > 0 || !!sentiment || !!instPositions || sectorIn.length > 0 || sectorOut.length > 0;
+  const hasRight = !!flow || chartData.length > 1 || stockTop.length > 0 || hotSectors.length > 0;
 
   const flowUnavailable =
     !breadth && !flow && sectorIn.length === 0 && sectorOut.length === 0 && stockTop.length === 0 && flowHistory.length === 0;
@@ -510,12 +515,6 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
             icon={Globe}
             title="环球市场"
             subtitle="全球指数 · 科技指数"
-            right={
-              <span className={`flex items-center gap-1.5 text-[10px] font-mono shrink-0 ${(isCnMarketOpen() || anyGlobalMarketOpen()) ? 'text-green-400' : 'text-zinc-500'}`}>
-                <span className={`h-1.5 w-1.5 rounded-full ${(isCnMarketOpen() || anyGlobalMarketOpen()) ? 'bg-green-400 animate-pulse' : 'bg-zinc-600'}`} />
-                {!(isCnMarketOpen() || anyGlobalMarketOpen()) && 'Money Never Sleeps'}
-              </span>
-            }
           >
             {(globalIndices.length > 0 || techIndices.length > 0) && (
               <section className="flex-1 flex flex-col min-h-0">
@@ -640,7 +639,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
       {(hasLeft || hasRight) && (
         <div className="grid lg:grid-cols-12 gap-4 md:gap-6 items-start">
 
-          {/* 左列: 自选股跟踪 + 热门板块与龙头 + 涨跌停梯队 + 板块资金流向 */}
+          {/* 左列: 自选股跟踪 + 机构多空持仓 + 涨跌停梯队 + 板块资金流向 */}
           {hasLeft && (
             <div className={`order-2 lg:order-1 ${hasRight ? 'lg:col-span-7' : 'lg:col-span-12'} flex flex-col gap-4 md:gap-6`}>
 
@@ -696,7 +695,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
                                 <p className="text-[10px] text-zinc-500 truncate mt-0.5" title={it.reason}>{it.reason}</p>
                               )}
                             </div>
-                            <div className="ml-auto flex items-center gap-2.5 font-mono text-[11px] tabular-nums shrink-0">
+                            <div className="ml-auto flex items-center gap-2.5 font-mono text-xs tabular-nums shrink-0">
                               <span className="hidden sm:flex flex-col items-end leading-tight">
                                 <span className="text-[9px] text-zinc-600">{it.baseDate} 加入</span>
                                 <span className="text-zinc-400">{it.basePrice.toFixed(2)}</span>
@@ -726,49 +725,55 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
                 )}
               </Panel>
 
-              {/* 热门板块与领涨龙头 */}
-              {hotSectors.length > 0 && (
+              {/* 机构多空持仓 */}
+              {instPositions && instPositions.list.length > 0 && (
                 <Panel
-                  icon={Trophy}
-                  title="热门板块与龙头"
-                  subtitle="行业板块涨幅榜 · 点击龙头股查看缠论分析"
+                  icon={Scale}
+                  title="机构多空持仓"
+                  subtitle={`股指期货 IF/IH/IC/IM 前20会员 · ${instPositions.date}`}
                 >
-                  <div className="space-y-0.5">
-                    {hotSectors.map((s, idx) => (
-                      <div
-                        key={s.code}
-                        className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-zinc-800/40 transition-colors"
-                      >
-                        <span className="text-[10px] font-mono text-zinc-600 w-4 shrink-0">{idx + 1}</span>
-                        <div className="w-[76px] sm:w-[88px] min-w-0 shrink-0">
-                          <span className="block text-xs text-zinc-200 truncate" title={s.name}>{s.name}</span>
-                          <span className={`block font-mono text-[10px] tabular-nums ${upClass(s.changePercent)}`}>
-                            {s.changePercent >= 0 ? '+' : ''}{s.changePercent.toFixed(2)}%
-                          </span>
-                        </div>
-                        <div className="hidden sm:flex flex-col items-end leading-tight shrink-0">
-                          <span className="text-[9px] text-zinc-600">主力净流入</span>
-                          <span className={`font-mono text-[11px] tabular-nums ${upClass(s.mainInflow)}`}>
-                            {formatSignedYi(s.mainInflow)}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => onSelectStock(s.leaderCode)}
-                          className="ml-auto min-w-0 flex items-center gap-1.5 pl-1.5 pr-1 py-0.5 rounded-md hover:bg-blue-500/10 border border-transparent hover:border-blue-500/20 transition-colors cursor-pointer group"
-                          title={`查看 ${s.leaderName} (${s.leaderCode}) 缠论分析`}
-                        >
-                          <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1 py-px shrink-0">龙头</span>
-                          <span className="text-xs text-zinc-200 truncate group-hover:text-blue-400 transition-colors">{s.leaderName}</span>
-                          <span className={`font-mono text-[11px] tabular-nums shrink-0 ${upClass(s.leaderChangePercent)}`}>
-                            {s.leaderChangePercent >= 0 ? '+' : ''}{s.leaderChangePercent.toFixed(2)}%
-                          </span>
-                          <ChevronRight className="h-3 w-3 text-zinc-700 group-hover:text-blue-400 transition-colors shrink-0" />
-                        </button>
-                      </div>
-                    ))}
+                  <div className="overflow-x-auto -mx-1 px-1">
+                    <table className="w-full text-xs font-mono tabular-nums border-collapse">
+                      <thead>
+                        <tr className="text-zinc-500 text-right">
+                          <th className="py-1 pr-2 font-normal text-left">机构席位</th>
+                          <th className="py-1 px-1 font-normal text-red-500/80">多单</th>
+                          <th className="py-1 px-1 font-normal">多增减</th>
+                          <th className="py-1 px-1 font-normal text-green-500/80">空单</th>
+                          <th className="py-1 px-1 font-normal">空增减</th>
+                          <th className="py-1 px-1 font-normal">净多单</th>
+                          <th className="py-1 pl-1 font-normal">近7日净增</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {instPositions.list.slice(0, 12).map((r) => (
+                          <tr key={r.name} className="border-t border-zinc-800/60 text-right">
+                            <td className="py-[3px] pr-2 text-left text-zinc-200 truncate max-w-[110px]">{r.name}</td>
+                            <td className="py-[3px] px-1 text-red-400">{r.long.toLocaleString('en-US')}</td>
+                            <td className={`py-[3px] px-1 ${upClass(r.longChange)}`}>{r.longChange > 0 ? '+' : ''}{r.longChange.toLocaleString('en-US')}</td>
+                            <td className="py-[3px] px-1 text-green-400">{r.short.toLocaleString('en-US')}</td>
+                            <td className={`py-[3px] px-1 ${r.shortChange > 0 ? 'text-green-400' : r.shortChange < 0 ? 'text-red-400' : 'text-zinc-400'}`}>{r.shortChange > 0 ? '+' : ''}{r.shortChange.toLocaleString('en-US')}</td>
+                            <td className={`py-[3px] px-1 font-semibold ${upClass(r.netLong)}`}>{r.netLong > 0 ? '+' : ''}{r.netLong.toLocaleString('en-US')}</td>
+                            <td className={`py-[3px] pl-1 font-semibold ${upClass(r.net7d)}`}>{r.net7d > 0 ? '+' : ''}{r.net7d.toLocaleString('en-US')}</td>
+                          </tr>
+                        ))}
+                        <tr className="border-t border-zinc-700/60 text-right">
+                          <td className="py-1 pr-2 text-left text-zinc-400 font-semibold">前20会员合计</td>
+                          <td className="py-1 px-1 text-red-400 font-semibold">{instPositions.totalLong.toLocaleString('en-US')}</td>
+                          <td className="py-1 px-1" />
+                          <td className="py-1 px-1 text-green-400 font-semibold">{instPositions.totalShort.toLocaleString('en-US')}</td>
+                          <td className="py-1 px-1" />
+                          <td className={`py-1 px-1 font-bold ${upClass(instPositions.totalLong - instPositions.totalShort)}`}>
+                            {instPositions.totalLong - instPositions.totalShort > 0 ? '+' : ''}{(instPositions.totalLong - instPositions.totalShort).toLocaleString('en-US')}
+                          </td>
+                          <td className="py-1 pl-1" />
+                        </tr>
+                      </tbody>
+                    </table>
                   </div>
-                  <p className="mt-3 text-[10px] text-zinc-600 font-mono">按板块涨跌幅排序 · 龙头为该板块今日领涨个股</p>
+                  <p className="mt-2 text-[10px] text-zinc-600 font-mono">
+                    多/空单为会员持买仓量/持卖仓量 (IF/IH/IC/IM 主力品种合计) · 净多单 = 多单 - 空单 · 近7日净增 = 7个交易日累计(多增 - 空增) · 数据来源: 中金所/东方财富Choice · 席位数据含全部客户, 仅供参考
+                  </p>
                 </Panel>
               )}
 
@@ -871,7 +876,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
                                   <span className="text-[10px] font-mono text-zinc-600 w-4 shrink-0">{idx + 1}</span>
                                   <span className="text-xs text-zinc-200 truncate">{item.name}</span>
                                 </div>
-                                <div className="relative flex items-center gap-2.5 font-mono text-[11px] tabular-nums shrink-0">
+                                <div className="relative flex items-center gap-2.5 font-mono text-xs tabular-nums shrink-0">
                                   <span className={`w-12 text-right ${upClass(item.changePercent)}`}>
                                     {item.changePercent >= 0 ? '+' : ''}{item.changePercent.toFixed(2)}%
                                   </span>
@@ -1006,7 +1011,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
                             <div className="text-[9px] font-mono text-zinc-600">{item.code}</div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2.5 font-mono text-[11px] tabular-nums shrink-0">
+                        <div className="flex items-center gap-2.5 font-mono text-xs tabular-nums shrink-0">
                           <span className="w-14 text-right text-zinc-300">{item.price.toFixed(2)}</span>
                           <span className={`w-12 text-right ${upClass(item.changePercent)}`}>
                             {item.changePercent >= 0 ? '+' : ''}{item.changePercent.toFixed(2)}%
@@ -1020,8 +1025,54 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
                           <ChevronRight className="h-3.5 w-3.5 text-zinc-700 group-hover:text-blue-400 transition-colors shrink-0" />
                         </div>
                       </button>
+                     ))}
+                   </div>
+                </Panel>
+              )}
+
+              {/* 热门板块与领涨龙头 */}
+              {hotSectors.length > 0 && (
+                <Panel
+                  icon={Trophy}
+                  title="热门板块与龙头"
+                  subtitle="行业板块涨幅榜 · 点击龙头股查看缠论分析"
+                >
+                  <div className="space-y-0.5">
+                    {hotSectors.map((s, idx) => (
+                      <div
+                        key={s.code}
+                        className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-zinc-800/40 transition-colors"
+                      >
+                        <span className="text-[10px] font-mono text-zinc-600 w-4 shrink-0">{idx + 1}</span>
+                        <div className="w-[76px] sm:w-[88px] min-w-0 shrink-0">
+                          <span className="block text-xs text-zinc-200 truncate" title={s.name}>{s.name}</span>
+                          <span className={`block font-mono text-xs tabular-nums ${upClass(s.changePercent)}`}>
+                            {s.changePercent >= 0 ? '+' : ''}{s.changePercent.toFixed(2)}%
+                          </span>
+                        </div>
+                        <div className="hidden sm:flex flex-col items-end leading-tight shrink-0">
+                          <span className="text-[9px] text-zinc-600">主力净流入</span>
+                          <span className={`font-mono text-xs tabular-nums ${upClass(s.mainInflow)}`}>
+                            {formatSignedYi(s.mainInflow)}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => onSelectStock(s.leaderCode)}
+                          className="ml-auto min-w-0 flex items-center gap-1.5 pl-1.5 pr-1 py-0.5 rounded-md hover:bg-blue-500/10 border border-transparent hover:border-blue-500/20 transition-colors cursor-pointer group"
+                          title={`查看 ${s.leaderName} (${s.leaderCode}) 缠论分析`}
+                        >
+                          <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1 py-px shrink-0">龙头</span>
+                          <span className="text-xs text-zinc-200 truncate group-hover:text-blue-400 transition-colors">{s.leaderName}</span>
+                          <span className={`font-mono text-xs tabular-nums shrink-0 ${upClass(s.leaderChangePercent)}`}>
+                            {s.leaderChangePercent >= 0 ? '+' : ''}{s.leaderChangePercent.toFixed(2)}%
+                          </span>
+                          <ChevronRight className="h-3 w-3 text-zinc-700 group-hover:text-blue-400 transition-colors shrink-0" />
+                        </button>
+                      </div>
                     ))}
                   </div>
+                  <p className="mt-3 text-[10px] text-zinc-600 font-mono">按板块涨跌幅排序 · 龙头为该板块今日领涨个股</p>
                 </Panel>
               )}
             </div>
