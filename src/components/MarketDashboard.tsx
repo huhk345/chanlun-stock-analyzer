@@ -107,11 +107,11 @@ function IndexCard({ q }: { q: IndexQuote }) {
         <span className="text-xs font-semibold text-zinc-200 truncate">{q.name}</span>
         <span className="text-[9px] font-mono text-zinc-600 shrink-0">{q.code}</span>
       </div>
-      <div className="mt-2 flex items-baseline justify-between gap-2">
+      <div className="mt-2 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
         <span className={`font-mono font-bold text-lg md:text-xl tabular-nums ${up ? 'text-red-500' : 'text-green-500'}`}>
           {q.price.toFixed(2)}
         </span>
-        <span className={`font-mono text-[11px] tabular-nums ${up ? 'text-red-400' : 'text-green-400'}`}>
+        <span className={`font-mono text-[11px] tabular-nums whitespace-nowrap ${up ? 'text-red-400' : 'text-green-400'}`}>
           昨收 {q.prevClose.toFixed(2)}
         </span>
       </div>
@@ -120,15 +120,15 @@ function IndexCard({ q }: { q: IndexQuote }) {
         <span className="font-semibold">{up ? '+' : ''}{q.changePercent.toFixed(2)}%</span>
       </div>
       <div className="mt-3 space-y-0.5 text-[10px] font-mono tabular-nums text-zinc-500">
-        <div className="flex items-center gap-x-2 whitespace-nowrap">
-          <span><span className="text-zinc-600">开</span> {q.open.toFixed(2)}</span>
-          <span><span className="text-zinc-600">高</span> {q.high.toFixed(2)}</span>
-          <span className="ml-auto"><span className="text-zinc-600">低</span> {q.low.toFixed(2)}</span>
+        <div className="flex flex-wrap items-center gap-x-2">
+          <span className="whitespace-nowrap"><span className="text-zinc-600">开</span> {q.open.toFixed(2)}</span>
+          <span className="whitespace-nowrap"><span className="text-zinc-600">高</span> {q.high.toFixed(2)}</span>
+          <span className="ml-auto whitespace-nowrap"><span className="text-zinc-600">低</span> {q.low.toFixed(2)}</span>
         </div>
-        <div className="flex items-center gap-x-2 whitespace-nowrap">
-          <span><span className="text-zinc-600">振</span> {amp.toFixed(2)}%</span>
-          <span><span className="text-zinc-600">量</span> {formatVolume(q.volume)}</span>
-          <span className="ml-auto"><span className="text-zinc-600">额</span> {formatYi(q.amount, 0)}</span>
+        <div className="flex flex-wrap items-center gap-x-2">
+          <span className="whitespace-nowrap"><span className="text-zinc-600">振</span> {amp.toFixed(2)}%</span>
+          <span className="whitespace-nowrap"><span className="text-zinc-600">量</span> {formatVolume(q.volume)}</span>
+          <span className="ml-auto whitespace-nowrap"><span className="text-zinc-600">额</span> {formatYi(q.amount, 0)}</span>
         </div>
       </div>
     </div>
@@ -641,7 +641,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
 
           {/* 左列: 自选股跟踪 + 机构多空持仓 + 涨跌停梯队 + 板块资金流向 */}
           {hasLeft && (
-            <div className={`order-2 lg:order-1 ${hasRight ? 'lg:col-span-7' : 'lg:col-span-12'} flex flex-col gap-4 md:gap-6`}>
+            <div className={`order-2 lg:order-1 ${hasRight ? 'lg:col-span-7' : 'lg:col-span-12'} min-w-0 flex flex-col gap-4 md:gap-6`}>
 
               {/* 自选股跟踪: 自加入以来的涨跌 */}
               <Panel
@@ -902,7 +902,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
 
           {/* 右列: 今日资金流向 + 主力趋势 + 个股榜, 下沉错位 */}
           {hasRight && (
-            <div className={`order-1 lg:order-2 ${hasLeft ? 'lg:col-span-5' : 'lg:col-span-12'} flex flex-col gap-4 md:gap-6`}>
+            <div className={`order-1 lg:order-2 ${hasLeft ? 'lg:col-span-5' : 'lg:col-span-12'} min-w-0 flex flex-col gap-4 md:gap-6`}>
 
               {/* 今日大盘资金流向 */}
               {flow && (
