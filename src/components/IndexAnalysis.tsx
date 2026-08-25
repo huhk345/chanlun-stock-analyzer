@@ -626,35 +626,28 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
             return (
               <div
                 key={id}
-                className="flex-1 min-w-[200px] bg-gradient-to-r from-zinc-950 via-zinc-900 to-zinc-950 rounded-xl border border-zinc-800/80 p-3"
+                className="flex-1 min-w-[180px] bg-gradient-to-r from-zinc-950 via-zinc-900 to-zinc-950 rounded-xl border border-zinc-800/80 p-3"
               >
-                <div className="flex items-center justify-between gap-4">
-                  <div className="flex flex-col min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">{INDEX_META[id].label}</span>
-                      <span className="text-[10px] font-mono text-zinc-600">{info.symbol}</span>
-                    </div>
-                    <h3 className="text-lg font-bold text-zinc-100 mt-0.5">{info.name}</h3>
+                <div className="text-left">
+                  <h3 className="text-base font-bold text-zinc-100 leading-tight">{info.name}</h3>
+                  <span className="text-[11px] font-mono text-zinc-600 mt-0.5 block">{info.symbol}</span>
+                  <div className="mt-3">
+                    <span className={`text-2xl font-bold font-mono tracking-tight ${info.change >= 0 ? 'text-red-500' : 'text-green-500'}`}>
+                      {info.price.toFixed(2)}
+                    </span>
                   </div>
-                  <div className="flex flex-col items-end shrink-0">
-                    <div className="flex items-center gap-2">
-                      <span className={`text-xl font-bold font-mono ${info.change >= 0 ? 'text-red-500' : 'text-green-500'}`}>
-                        {info.price.toFixed(2)}
-                      </span>
-                      {info.change >= 0 ? (
-                        <TrendingUp className="h-4 w-4 text-red-500" />
-                      ) : (
-                        <TrendingDown className="h-4 w-4 text-green-500" />
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className={`text-xs font-mono font-semibold ${info.change >= 0 ? 'text-red-400' : 'text-green-400'}`}>
-                        {info.change >= 0 ? '+' : ''}{info.change.toFixed(2)}
-                      </span>
-                      <span className={`text-xs font-mono font-semibold ${info.change >= 0 ? 'text-red-400' : 'text-green-400'}`}>
-                        ({info.changePercent.toFixed(2)}%)
-                      </span>
-                    </div>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className={`text-sm font-mono font-semibold ${info.change >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+                      {info.change >= 0 ? '+' : ''}{info.change.toFixed(2)}
+                    </span>
+                    <span className={`text-sm font-mono font-semibold ${info.change >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+                      ({info.changePercent.toFixed(2)}%)
+                    </span>
+                    {info.change >= 0 ? (
+                      <TrendingUp className="h-4 w-4 text-red-500" />
+                    ) : (
+                      <TrendingDown className="h-4 w-4 text-green-500" />
+                    )}
                   </div>
                 </div>
               </div>
