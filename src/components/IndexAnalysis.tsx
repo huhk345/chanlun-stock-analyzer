@@ -58,6 +58,21 @@ interface CacheEntry {
 
 type ScanCache = Record<string, CacheEntry>;
 
+/** 预期最新交易日 (北京时间 YYYY-MM-DD, 忽略节假日): 收盘后取当日平日, 否则取上一平日 */
+function expectedTradeDay(): string {
+  const d = new Date(Date.now() + (new Date().getTimezoneOffset() + 480) * 60000);
+  if (d.getUTCHours() < 16) d.setUTCDate(d.getUTCDate() - 1); // 16:00 前日K尚未更新, 视为上一交易日
+  const dow = d.getUTCDay();
+  if (dow === 0) d.setUTCDate(d.getUTCDate() - 2);
+  else if (dow === 6) d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/** 缓存条目是否覆盖预期最新交易日 (按内容判断, 不依赖扫描时间戳) */
+function entryFresh(entry: CacheEntry | undefined): boolean {
+  return !!entry && entry.d >= expectedTradeDay();
+}
+
 function loadCache(): ScanCache {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
@@ -232,12 +247,19 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
   }, []);
 
   // 结果缓存 (localStorage): symbol -> CacheEntry
-  const initialCache = useMemo(loadCache, []);
+  // 新鲜度按内容判断: 缓存末根K线日期落后于预期交易日 -> 该条目过期, 扫描时重新下载
+  const initialCache = useMemo<ScanCache>(() => loadCache(), []);
   const cacheRef = useRef<ScanCache>(initialCache);
   const [cacheInfo, setCacheInfo] = useState(() => ({
     count: Object.keys(initialCache).length,
     latestDate: Object.values(initialCache).reduce<string>((acc, e) => (e.d > acc ? e.d : acc), ''),
   }));
+  /** 挂载时缓存整体已落后于预期交易日: 自动触发一次增量扫描刷新 */
+  const staleOnMountRef = useRef(
+    Object.keys(initialCache).length > 0 &&
+    Object.values(initialCache).reduce<string>((a, e) => (e.d > a ? e.d : a), '') < expectedTradeDay(),
+  );
+  const expectedDay = useMemo(expectedTradeDay, []);
 
   // 扫描状态
   const [progress, setProgress] = useState<ScanProgress>({ running: false, total: 0, done: 0, ok: 0, failed: 0, cached: 0 });
@@ -401,6 +423,9 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
       }));
     } catch (err: any) {
       console.error(err);
+      scanningRef.current = false;
+      setProgress(p => ({ ...p, running: false }));
+      setCustomError('成分股列表获取失败, 请检查网络后重试');
       return;
     }
     pushUnique(customSymbols);
@@ -425,7 +450,9 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
     const worker = async () => {
       while (cursor < universe.length && !controller.signal.aborted) {
         const sym = universe[cursor++];
-        const hit = !force ? cacheRef.current[sym] : undefined;
+        const cachedEntry = cacheRef.current[sym];
+        // 缓存命中条件: 非强制 && 条目数据已达预期最新交易日; 过期条目重新下载计算
+        const hit = !force && entryFresh(cachedEntry) ? cachedEntry : undefined;
 
         if (hit) {
           // 缓存命中: 零请求零计算, 仅做窗口过滤
@@ -484,6 +511,22 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
   }, [customSymbols, progress.running, refreshFlows, selectedIndexes]);
 
   // -------------------------------------------------------------------------
+  // 挂载时数据过期自动刷新: 缓存落后于预期交易日 -> 自动增量重扫落后的标的
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!staleOnMountRef.current) return;
+    let cancelled = false;
+    // 延迟一拍: 避开 StrictMode 模拟卸载时的 abort, 也让挂载流程先完成
+    const t = setTimeout(() => {
+      if (cancelled) return;
+      staleOnMountRef.current = false;
+      startScan(false);
+    }, 0);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [startScan]);
+
+  // -------------------------------------------------------------------------
   // 过滤 / 排序 / 统计
   // -------------------------------------------------------------------------
 
@@ -522,6 +565,7 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
   };
 
   const anyUniverseSelected = selectedIndexes.hs300 || selectedIndexes.zz500 || customSymbols.length > 0;
+  const cacheStale = cacheInfo.latestDate !== '' && cacheInfo.latestDate < expectedDay;
 
   return (
     <div className="space-y-4">
@@ -583,9 +627,13 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
         {/* Start / Stop / Force refresh */}
         <div className="flex items-center gap-2 ml-auto">
           {cacheInfo.count > 0 && !progress.running && (
-            <span className="hidden md:flex items-center gap-1.5 text-[10px] font-mono text-zinc-600" title="localStorage 结果缓存, 增量扫描时直接复用, 无需重新下载与计算">
+            <span
+              className={`hidden md:flex items-center gap-1.5 text-[10px] font-mono ${cacheStale ? 'text-amber-500/90' : 'text-zinc-600'}`}
+              title="localStorage 结果缓存; 增量扫描只复用数据已达最新交易日的条目, 过期条目自动重新下载计算"
+            >
               <Database className="h-3 w-3" />
               缓存 {cacheInfo.count} 只{cacheInfo.latestDate ? ` · 数据至 ${cacheInfo.latestDate}` : ''}
+              {cacheStale && ' · 已过期'}
             </span>
           )}
           {progress.running ? (

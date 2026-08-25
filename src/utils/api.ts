@@ -58,6 +58,251 @@ export function resolveSymbol(symbol: string): { resolved: string; displayName: 
   };
 }
 
+// ---------------------------------------------------------------------------
+// 非A股标的K线: 全球指数/商品汇率/加密货币
+// 用于市场总览卡片点击跳转分析页
+//
+// 数据源路由 (东方财富 push2his 历史K线接口已对境外指数停止返回数据, 故弃用):
+//   - 腾讯 ifzq (支持 CORS): A股/港股指数与ETF -> fqkline, 美股指数与ETF -> usfqkline
+//   - 新浪 JSONP (script 标签注入, 不受 CORS 限制): 环球期货连续合约 / 外汇
+// ---------------------------------------------------------------------------
+
+const TX_KLINE_BASE = 'https://web.ifzq.gtimg.cn/appstock/app';
+const GLOBAL_KLINE_BARS = 1200;
+
+interface GlobalKlineRoute {
+  source: 'tencent' | 'tencent-us' | 'sina-futures' | 'sina-forex';
+  symbol: string; // 对应数据源的代码
+  name: string;   // 展示名称 (代理数据源需标注)
+  label: string;  // 数据源展示
+}
+
+// 市场总览卡片 code -> K线数据源路由
+// 注: FTSE/KS11/TWII/UDI 暂无浏览器可直接访问的指数K线源, 使用高相关 ETF 代理
+const GLOBAL_KLINE_ROUTES: Record<string, GlobalKlineRoute> = {
+  // 港股指数 (腾讯)
+  HSI: { source: 'tencent', symbol: 'hkHSI', name: '恒生指数', label: '腾讯行情' },
+  HSTECH: { source: 'tencent', symbol: 'hkHSTECH', name: '恒生科技指数', label: '腾讯行情' },
+  // 美股指数 (腾讯)
+  DJIA: { source: 'tencent-us', symbol: 'usDJI', name: '道琼斯工业指数', label: '腾讯行情' },
+  SPX: { source: 'tencent-us', symbol: 'usINX', name: '标普500指数', label: '腾讯行情' },
+  NDX: { source: 'tencent-us', symbol: 'usIXIC', name: '纳斯达克综合指数', label: '腾讯行情' },
+  HXC: { source: 'tencent-us', symbol: 'usHXC', name: '纳斯达克中国金龙指数', label: '腾讯行情' },
+  SOXX: { source: 'tencent-us', symbol: 'usSOXX.OQ', name: '费城半导体ETF(SOXX)', label: '腾讯行情' },
+  // 日经225 (新浪环球期货连续合约)
+  N225: { source: 'sina-futures', symbol: 'NK', name: '日经225(期货连续)', label: '新浪财经' },
+  // 欧洲指数: 指数本体无浏览器可访问K线源, 使用 ETF 代理
+  FTSE: { source: 'tencent-us', symbol: 'usEWU.AM', name: '富时100(英国ETF代理)', label: '腾讯行情' },
+  GDAXI: { source: 'tencent', symbol: 'sh513030', name: '德国DAX(德国ETF)', label: '腾讯行情' },
+  // 亚太指数: ETF 代理
+  KS11: { source: 'tencent-us', symbol: 'usEWY.AM', name: '韩国KOSPI(韩国ETF代理)', label: '腾讯行情' },
+  TWII: { source: 'tencent-us', symbol: 'usEWT.AM', name: '台湾加权(台湾ETF代理)', label: '腾讯行情' },
+  // 美元指数: UUP 为跟踪美元指数期货的 ETF
+  UDI: { source: 'tencent-us', symbol: 'usUUP.AM', name: '美元指数(UUP代理)', label: '腾讯行情' },
+  // 汇率 (新浪外汇)
+  USDCNH: { source: 'sina-forex', symbol: 'fx_susdcnh', name: '美元兑离岸人民币', label: '新浪财经' },
+  // 大宗商品 (新浪环球期货连续合约)
+  GC00Y: { source: 'sina-futures', symbol: 'GC', name: 'COMEX黄金期货', label: '新浪财经' },
+  CL00Y: { source: 'sina-futures', symbol: 'CL', name: 'NYMEX原油期货(WTI)', label: '新浪财经' },
+  B00Y: { source: 'sina-futures', symbol: 'OIL', name: '布伦特原油期货', label: '新浪财经' },
+};
+
+// 修正个别数据源 high/low 与 open/close 交叉的脏数据
+function sanitizeKlines(klines: Kline[]): Kline[] {
+  return klines.map((k) => ({
+    ...k,
+    high: Math.max(k.open, k.high, k.low, k.close),
+    low: Math.min(k.open, k.high, k.low, k.close),
+  }));
+}
+
+/**
+ * 新浪 JSONP 加载器: 通过 <script> 标签绕过 CORS。
+ * 新浪把响应用回调包裹成 `window.<cb>(数据);` (函数调用形式),
+ * 故需先在 window 上挂载回调函数, 脚本执行时即可拿到数据。
+ */
+function loadSinaJsonp(urlTemplate: string): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const cb = `__sinajsonp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+    const w = window as any;
+    const script = document.createElement('script');
+    let settled = false;
+    const cleanup = () => {
+      delete w[cb];
+      script.remove();
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error('新浪接口请求超时'));
+    }, 20000);
+
+    w[cb] = (value: any) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanup();
+      if (value == null) reject(new Error('新浪接口返回空数据'));
+      else resolve(value);
+    };
+
+    script.onerror = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanup();
+      reject(new Error('新浪接口加载失败'));
+    };
+    script.src = urlTemplate.replace('__CALLBACK__', `window.${cb}`);
+    document.head.appendChild(script);
+  });
+}
+
+/** 腾讯日 K (fqkline / usfqkline): 行格式 [日期, 开, 收, 高, 低, 量, ..., 额] */
+async function fetchTencentDailyKlines(endpoint: string, txSymbol: string): Promise<Kline[]> {
+  const url = `${TX_KLINE_BASE}/${endpoint}/get?param=${encodeURIComponent(`${txSymbol},day,,,${GLOBAL_KLINE_BARS},qfq`)}`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`腾讯K线接口错误 (${resp.status})`);
+
+  const json = await resp.json();
+  const node = json?.data?.[txSymbol];
+  const rows: unknown[] = node?.qfqday || node?.day || [];
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error(`腾讯未返回 ${txSymbol} 的K线数据`);
+  }
+
+  const klines: Kline[] = [];
+  for (const row of rows) {
+    if (!Array.isArray(row) || row.length < 6) continue;
+    const date = String(row[0]);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    klines.push({
+      date,
+      open: parseFloat(String(row[1])) || 0,
+      close: parseFloat(String(row[2])) || 0,
+      high: parseFloat(String(row[3])) || 0,
+      low: parseFloat(String(row[4])) || 0,
+      volume: parseFloat(String(row[5])) || 0,
+      amount: parseFloat(String(row[8])) || 0,
+    });
+  }
+  return sanitizeKlines(klines);
+}
+
+/** 新浪环球期货日 K: {date, open, high, low, close, volume, ...} */
+async function fetchSinaFuturesDailyKlines(symbol: string): Promise<Kline[]> {
+  const url = `https://stock2.finance.sina.com.cn/futures/api/jsonp.php/__CALLBACK__/GlobalFuturesService.getGlobalFuturesDailyKLine?symbol=${encodeURIComponent(symbol)}`;
+  const rows: any[] = await loadSinaJsonp(url);
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error(`新浪未返回 ${symbol} 的期货K线数据`);
+  }
+
+  const klines: Kline[] = [];
+  for (const r of rows) {
+    const date = String(r?.date || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    klines.push({
+      date,
+      open: parseFloat(r.open) || 0,
+      high: parseFloat(r.high) || 0,
+      low: parseFloat(r.low) || 0,
+      close: parseFloat(r.close) || 0,
+      volume: parseFloat(r.volume) || 0,
+      amount: 0,
+    });
+  }
+  return sanitizeKlines(klines);
+}
+
+/** 新浪外汇日 K: 返回管道分隔字符串, 行格式 "日期,开,低,高,收," */
+async function fetchSinaForexDailyKlines(symbol: string): Promise<Kline[]> {
+  const url = `https://vip.stock.finance.sina.com.cn/forex/api/jsonp.php/__CALLBACK__/NewForexService.getDayKLine?symbol=${encodeURIComponent(symbol)}`;
+  const raw: unknown = await loadSinaJsonp(url);
+  if (typeof raw !== 'string' || raw.length === 0) {
+    throw new Error(`新浪未返回 ${symbol} 的外汇K线数据`);
+  }
+
+  const klines: Kline[] = [];
+  for (const line of raw.split('|')) {
+    const cols = line.split(',');
+    if (cols.length < 5) continue;
+    const date = cols[0];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    klines.push({
+      date,
+      open: parseFloat(cols[1]) || 0,
+      low: parseFloat(cols[2]) || 0,
+      high: parseFloat(cols[3]) || 0,
+      close: parseFloat(cols[4]) || 0,
+      volume: 0,
+      amount: 0,
+    });
+  }
+  return sanitizeKlines(klines);
+}
+
+/** 全球指数/商品/汇率 K线统一入口: 'GI.HSI' -> 按 GLOBAL_KLINE_ROUTES 路由 */
+async function fetchGlobalKlines(code: string): Promise<{ name: string; klines: Kline[]; source: string }> {
+  const route = GLOBAL_KLINE_ROUTES[code];
+  if (!route) {
+    throw new Error(`暂不支持 ${code} 的K线数据 (未知代码)`);
+  }
+
+  let klines: Kline[];
+  switch (route.source) {
+    case 'tencent':
+      klines = await fetchTencentDailyKlines('fqkline', route.symbol);
+      break;
+    case 'tencent-us':
+      klines = await fetchTencentDailyKlines('usfqkline', route.symbol);
+      break;
+    case 'sina-futures':
+      klines = await fetchSinaFuturesDailyKlines(route.symbol);
+      break;
+    case 'sina-forex':
+      klines = await fetchSinaForexDailyKlines(route.symbol);
+      break;
+    default:
+      throw new Error(`未知数据源 ${route.source}`);
+  }
+
+  if (klines.length < 30) {
+    throw new Error(`${route.name} 历史数据不足 (${klines.length} 根, 需要至少 30 根)`);
+  }
+  return { name: route.name, klines: klines.slice(-GLOBAL_KLINE_BARS), source: route.label };
+}
+
+/** Binance 日 K (约 1000 天), pair 形如 'BTCUSDT' */
+async function fetchBinanceDailyKlines(pair: string): Promise<Kline[]> {
+  const url = `https://data-api.binance.vision/api/v3/klines?symbol=${pair}&interval=1d&limit=1000`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Binance K线接口错误 (${resp.status})`);
+
+  const rows = await resp.json();
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error(`Binance 未返回 ${pair} 的K线数据`);
+  }
+
+  const klines: Kline[] = [];
+  for (const r of rows) {
+    const date = new Date(Number(r[0]));
+    klines.push({
+      date: date.toISOString().slice(0, 10),
+      open: parseFloat(r[1]) || 0,
+      high: parseFloat(r[2]) || 0,
+      low: parseFloat(r[3]) || 0,
+      close: parseFloat(r[4]) || 0,
+      volume: parseFloat(r[5]) || 0,
+      amount: parseFloat(r[7]) || 0,
+    });
+  }
+  if (klines.length < 30) {
+    throw new Error(`${pair} 历史数据不足 (${klines.length} 根, 需要至少 30 根)`);
+  }
+  return klines;
+}
+
 // Fetch stock K-line data directly from TickFlow API
 export async function fetchStockData(symbol: string): Promise<{
   symbol: string;
@@ -66,6 +311,28 @@ export async function fetchStockData(symbol: string): Promise<{
   source: string;
   period: string;
 }> {
+  // 全球指数/商品/汇率: 'GI.HSI' (新) 或 'EM.100.HSI' (旧东财 secid 格式)
+  // -> 按 GLOBAL_KLINE_ROUTES 路由到腾讯/新浪/Binance 等多源K线
+  const cleanReq = symbol.trim().toUpperCase();
+  const globalMatch = /^(?:GI|EM)(?:\.\d+)?\.([A-Z0-9]+)$/.exec(cleanReq);
+  if (globalMatch) {
+    const code = globalMatch[1];
+    const { name, klines, source } = await fetchGlobalKlines(code);
+    return {
+      symbol: code,
+      name,
+      klines,
+      source,
+      period: `日线 (近 ${klines.length} 根)`,
+    };
+  }
+
+  // 加密货币: 'BTCUSDT' 等 *USDT 交易对 -> Binance
+  if (/^[A-Z0-9]{2,10}USDT$/.test(cleanReq)) {
+    const klines = await fetchBinanceDailyKlines(cleanReq);
+    return { symbol: cleanReq, name: cleanReq, klines, source: 'Binance', period: '日线 (近1000天)' };
+  }
+
   const { resolved, displayName, isChinaStock } = resolveSymbol(symbol);
 
   if (!isChinaStock) {

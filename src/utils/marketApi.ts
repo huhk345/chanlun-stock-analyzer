@@ -125,6 +125,7 @@ export interface StockQuote {
 
 export interface GlobalIndexQuote {
   code: string;          // e.g. DJIA
+  secid: string;         // 东财 secid, e.g. '100.DJIA' (用于跳转分析页拉取K线)
   name: string;          // 道琼斯
   price: number;
   prevClose: number;
@@ -149,9 +150,17 @@ async function fetchQuotesBySecids(secids: string, errMsg: string): Promise<Glob
   const diff = json?.data?.diff;
   if (!Array.isArray(diff) || diff.length === 0) throw new Error(`未获取到${errMsg}数据`);
 
+  // 代码 -> 完整 secid 映射 (跳转分析页时需要)
+  const secidByCode = new Map<string, string>();
+  for (const s of secids.split(',')) {
+    const [mkt, code] = s.split('.');
+    if (code) secidByCode.set(code, s);
+  }
+
   const num = (v: unknown) => (typeof v === 'number' ? v : parseFloat(String(v)) || 0);
   return diff.map((it: any) => ({
     code: String(it.f12 || ''),
+    secid: secidByCode.get(String(it.f12 || '')) || '',
     name: String(it.f14 || ''),
     price: num(it.f2),
     prevClose: num(it.f18),
@@ -411,9 +420,36 @@ export function formatCryptoPrice(value: number): string {
 
 type Session = [number, number]; // 当地时间 [开始分钟, 结束分钟]
 
-function isOpenAt(tz: string, sessions: Session[]): boolean {
-  let weekday = -1;
-  let minutes = -1;
+export type MarketId = 'cn' | 'hk' | 'jp' | 'tw' | 'kr' | 'us' | 'uk' | 'de';
+
+export interface MarketSessionInfo {
+  id: MarketId;
+  label: string;      // 市场中文名
+  open: boolean;      // 当前是否处于交易时段
+  localTime: string;  // 交易所当地时间 HH:MM
+}
+
+interface MarketDef {
+  id: MarketId;
+  label: string;
+  tz: string;         // IANA 时区
+  sessions: Session[];
+}
+
+// 各市场交易时段定义 (当地时间, 分钟)
+const MARKET_DEFS: MarketDef[] = [
+  { id: 'cn', label: 'A股',  tz: 'Asia/Shanghai',    sessions: [[555, 690], [780, 905]] }, // 09:15–11:30 / 13:00–15:05 含集合竞价与尾差
+  { id: 'hk', label: '港股',  tz: 'Asia/Hong_Kong',   sessions: [[570, 720], [780, 960]] }, // 09:30–12:00 / 13:00–16:00
+  { id: 'jp', label: '日经',  tz: 'Asia/Tokyo',       sessions: [[540, 690], [750, 900]] }, // 09:00–11:30 / 12:30–15:00
+  { id: 'tw', label: '台股',  tz: 'Asia/Taipei',      sessions: [[540, 810]] },             // 09:00–13:30
+  { id: 'kr', label: '韩股',  tz: 'Asia/Seoul',       sessions: [[540, 930]] },             // 09:00–15:30
+  { id: 'us', label: '美股',  tz: 'America/New_York', sessions: [[570, 960]] },             // 09:30–16:00
+  { id: 'uk', label: '富时',  tz: 'Europe/London',    sessions: [[480, 990]] },             // 08:00–16:30
+  { id: 'de', label: 'DAX',  tz: 'Europe/Berlin',    sessions: [[540, 1050]] },            // 09:00–17:30
+];
+
+// 读取某时区当前星期/分钟/时间串
+function readLocal(tz: string): { weekday: number; minutes: number; hhmm: string } | null {
   try {
     const parts = new Intl.DateTimeFormat('en-US', {
       timeZone: tz,
@@ -424,29 +460,66 @@ function isOpenAt(tz: string, sessions: Session[]): boolean {
     }).formatToParts(new Date());
     const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
     const wdMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-    weekday = wdMap[get('weekday')] ?? -1;
-    minutes = (parseInt(get('hour'), 10) % 24) * 60 + parseInt(get('minute'), 10);
+    const weekday = wdMap[get('weekday')] ?? -1;
+    const h = parseInt(get('hour'), 10) % 24;
+    const m = parseInt(get('minute'), 10);
+    if (weekday < 0 || Number.isNaN(h) || Number.isNaN(m)) return null;
+    return { weekday, minutes: h * 60 + m, hhmm: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}` };
   } catch {
-    return false;
+    return null;
   }
-  if (weekday <= 0 || weekday >= 6) return false; // 周末休市
-  return sessions.some(([s, e]) => minutes >= s && minutes <= e);
 }
 
-// A 股是否交易中 (含集合竞价与收盘尾差): 周一至周五 09:15–11:30 / 13:00–15:05 北京时间
+function inSessions(t: { weekday: number; minutes: number } | null, sessions: Session[]): boolean {
+  if (!t) return false;
+  if (t.weekday <= 0 || t.weekday >= 6) return false; // 周末休市
+  return sessions.some(([s, e]) => t.minutes >= s && t.minutes <= e);
+}
+
+// A 股是否交易中 (含集合竞价与收盘尾差)
 export function isCnMarketOpen(): boolean {
-  return isOpenAt('Asia/Shanghai', [[555, 690], [780, 905]]);
+  const t = readLocal('Asia/Shanghai');
+  return inSessions(t, [[555, 690], [780, 905]]);
 }
 
-// 全球主要指数 (港股/日经/美股/富时/DAX) 是否任一在交易
+// 全球主要市场 (港/日/美/英/德) 是否任一在交易
 export function anyGlobalMarketOpen(): boolean {
   return (
-    isOpenAt('Asia/Hong_Kong', [[570, 720], [780, 960]]) ||   // 港股 09:30–12:00 / 13:00–16:00
-    isOpenAt('Asia/Tokyo', [[540, 690], [750, 900]]) ||       // 日经 09:00–11:30 / 12:30–15:00
-    isOpenAt('America/New_York', [[570, 960]]) ||             // 美股 09:30–16:00
-    isOpenAt('Europe/London', [[480, 990]]) ||                // 富时 08:00–16:30
-    isOpenAt('Europe/Berlin', [[540, 1050]])                  // DAX 09:00–17:30
+    (inSessions(readLocal('Asia/Hong_Kong'), [[570, 720], [780, 960]])) ||
+    (inSessions(readLocal('Asia/Tokyo'), [[540, 690], [750, 900]])) ||
+    (inSessions(readLocal('America/New_York'), [[570, 960]])) ||
+    (inSessions(readLocal('Europe/London'), [[480, 990]])) ||
+    (inSessions(readLocal('Europe/Berlin'), [[540, 1050]]))
   );
+}
+
+/** 各市场当前交易状态快照 (供行情面板展示 交易中/休市 徽标) */
+export function getMarketSessions(): Record<MarketId, MarketSessionInfo> {
+  const out = {} as Record<MarketId, MarketSessionInfo>;
+  for (const m of MARKET_DEFS) {
+    const t = readLocal(m.tz);
+    out[m.id] = {
+      id: m.id,
+      label: m.label,
+      open: inSessions(t, m.sessions),
+      localTime: t?.hhmm || '--:--',
+    };
+  }
+  return out;
+}
+
+/** 环球指数东财代码 -> 所属市场 (无对应市场的返回 null) */
+export function marketIdForIndexCode(code: string): MarketId | null {
+  const map: Record<string, MarketId> = {
+    HSI: 'hk', HSTECH: 'hk',
+    N225: 'jp',
+    TWII: 'tw',
+    KS11: 'kr',
+    DJIA: 'us', SPX: 'us', NDX: 'us', HXC: 'us', SOXX: 'us',
+    FTSE: 'uk',
+    GDAXI: 'de',
+  };
+  return map[code] ?? null;
 }
 
 // 批量获取个股/ETF/指数实时或收盘行情 (腾讯行情, symbols 形如 'sh600519' / 'sz000001')

@@ -141,10 +141,12 @@ export default function App() {
       // Fetch stock metadata (industry, controller, reduction plans)
       const resolvedSymbol = data.symbol;
       const pureCode = resolvedSymbol.split('.')[0];
+      // 已知指数代码: 000001.SH 是上证指数而非平安银行, 不套用个股元数据
+      const KNOWN_INDEX_CODES = new Set(['000001', '000016', '000300', '000905', '000852', '000688', '399001', '399006']);
       let meta: StockMeta | null = null;
       try {
         const resp = await fetch('/merged_stock_data.json');
-        if (resp.ok) {
+        if (resp.ok && !KNOWN_INDEX_CODES.has(pureCode)) {
           const cache = await resp.json();
           meta = cache[pureCode] || null;
           // Verify exchange suffix matches the code prefix to avoid misattribution.

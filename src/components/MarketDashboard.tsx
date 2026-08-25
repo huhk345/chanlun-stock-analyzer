@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { RefreshCw, Activity, Waves, TrendingUp, LayoutGrid, ListOrdered, ChevronRight, AlertTriangle, Flame, Star, X, Trophy, Globe, Coins, Scale } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from 'recharts';
 import {
@@ -29,11 +29,14 @@ import {
   fetchInstitutionPositions,
   isCnMarketOpen,
   anyGlobalMarketOpen,
+  getMarketSessions,
+  marketIdForIndexCode,
   formatYi,
   formatSignedYi,
   formatVolume,
   formatCryptoPrice,
 } from '../utils/marketApi';
+import type { MarketId, MarketSessionInfo } from '../utils/marketApi';
 import { WatchItem, loadWatchlist, removeFromWatchlist, toTencentSymbol } from '../utils/watchlistStorage';
 import { TYPE_STYLE } from './IndexAnalysis';
 
@@ -62,6 +65,19 @@ function usePriceFlash(price: number): 'up' | 'down' | null {
 // 闪烁样式: ring 高亮, 不与卡片原有边框冲突
 const flashClass = (flash: 'up' | 'down' | null) =>
   flash === 'up' ? 'ring-1 ring-red-500/60' : flash === 'down' ? 'ring-1 ring-green-500/60' : '';
+
+// 交易状态圆点: 绿色呼吸 = 交易中, 灰色 = 已休市; 悬停显示当地时间
+function SessionDot({ s }: { s?: MarketSessionInfo }) {
+  if (!s) return null;
+  return (
+    <span
+      className={`inline-block h-1.5 w-1.5 rounded-full shrink-0 ${
+        s.open ? 'bg-emerald-400 shadow-[0_0_5px_rgba(52,211,153,0.9)] animate-pulse' : 'bg-zinc-600'
+      }`}
+      title={`${s.label}${s.open ? '交易中' : '已休市'} · 当地时间 ${s.localTime}`}
+    />
+  );
+}
 
 function Panel({
   icon: Icon,
@@ -97,14 +113,21 @@ function Panel({
   );
 }
 
-function IndexCard({ q }: { q: IndexQuote }) {
+function IndexCard({ q, session, onOpen }: { q: IndexQuote; session?: MarketSessionInfo; onOpen?: (symbol: string) => void }) {
   const up = q.change >= 0;
   const amp = q.prevClose > 0 ? ((q.high - q.low) / q.prevClose) * 100 : 0;
   const flash = usePriceFlash(q.price);
   return (
-    <div className={`bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-3.5 hover:border-zinc-700 transition-all duration-300 ${flashClass(flash)}`}>
+    <div
+      onClick={onOpen ? () => onOpen(`${q.code}.${q.symbol.toLowerCase().startsWith('sh') ? 'SS' : 'SZ'}`) : undefined}
+      className={`bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-3.5 hover:border-blue-500/50 transition-all duration-300 ${flashClass(flash)} ${onOpen ? 'cursor-pointer' : ''}`}
+      title={onOpen ? `${q.name} · 点击查看缠论分析` : undefined}
+    >
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-semibold text-zinc-200 truncate">{q.name}</span>
+        <span className="flex items-center gap-1.5 min-w-0">
+          <span className="text-xs font-semibold text-zinc-200 truncate">{q.name}</span>
+          <SessionDot s={session} />
+        </span>
         <span className="text-[9px] font-mono text-zinc-600 shrink-0">{q.code}</span>
       </div>
       <div className="mt-2 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
@@ -119,17 +142,14 @@ function IndexCard({ q }: { q: IndexQuote }) {
         <span>{up ? '+' : ''}{q.change.toFixed(2)}</span>
         <span className="font-semibold">{up ? '+' : ''}{q.changePercent.toFixed(2)}%</span>
       </div>
-      <div className="mt-3 space-y-0.5 text-[10px] font-mono tabular-nums text-zinc-500">
-        <div className="flex flex-wrap items-center gap-x-2">
-          <span className="whitespace-nowrap"><span className="text-zinc-600">开</span> {q.open.toFixed(2)}</span>
-          <span className="whitespace-nowrap"><span className="text-zinc-600">高</span> {q.high.toFixed(2)}</span>
-          <span className="ml-auto whitespace-nowrap"><span className="text-zinc-600">低</span> {q.low.toFixed(2)}</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-x-2">
-          <span className="whitespace-nowrap"><span className="text-zinc-600">振</span> {amp.toFixed(2)}%</span>
-          <span className="whitespace-nowrap"><span className="text-zinc-600">量</span> {formatVolume(q.volume)}</span>
-          <span className="ml-auto whitespace-nowrap"><span className="text-zinc-600">额</span> {formatYi(q.amount, 0)}</span>
-        </div>
+      {/* 开高低振量额: 3 行 x 2 列对齐网格 */}
+      <div className="mt-3 grid grid-cols-[auto_1fr_auto_1fr] gap-x-2 gap-y-0.5 text-[10px] font-mono tabular-nums text-zinc-500">
+        <span className="text-zinc-600">开</span><span>{q.open.toFixed(2)}</span>
+        <span className="text-zinc-600">高</span><span>{q.high.toFixed(2)}</span>
+        <span className="text-zinc-600">低</span><span>{q.low.toFixed(2)}</span>
+        <span className="text-zinc-600">振</span><span>{amp.toFixed(2)}%</span>
+        <span className="text-zinc-600">量</span><span>{formatVolume(q.volume)}</span>
+        <span className="text-zinc-600">额</span><span>{formatYi(q.amount, 0)}</span>
       </div>
     </div>
   );
@@ -138,17 +158,21 @@ function IndexCard({ q }: { q: IndexQuote }) {
 // 卡片网格: 固定 4 列 (11 张卡 = 整 3 行), 行高均分填满面板
 const denseGridStyle = { gridAutoRows: '1fr' } as const;
 
-function GlobalIndexCard({ q, decimals = 2 }: { q: GlobalIndexQuote; decimals?: number }) {
+function GlobalIndexCard({ q, decimals = 2, session, onOpen }: { q: GlobalIndexQuote; decimals?: number; session?: MarketSessionInfo; onOpen?: (symbol: string) => void }) {
   const up = q.change >= 0;
   const fmt = (v: number) => v.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
   const flash = usePriceFlash(q.price);
   return (
     <div
-      className={`bg-zinc-900/60 border border-zinc-800/80 rounded-xl px-3 py-2.5 hover:border-zinc-700 transition-all duration-300 min-w-0 ${flashClass(flash)}`}
-      title={`${q.name} (${q.code})`}
+      onClick={onOpen ? () => onOpen(`GI.${q.code}`) : undefined}
+      className={`bg-zinc-900/60 border border-zinc-800/80 rounded-xl px-3 py-2.5 hover:border-blue-500/50 transition-all duration-300 min-w-0 ${flashClass(flash)} ${onOpen ? 'cursor-pointer' : ''}`}
+      title={onOpen ? `${q.name} · 点击查看缠论分析` : `${q.name} (${q.code})`}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-semibold text-zinc-200 truncate">{q.name}</span>
+        <span className="flex items-center gap-1.5 min-w-0">
+          <span className="text-xs font-semibold text-zinc-200 truncate">{q.name}</span>
+          <SessionDot s={session} />
+        </span>
         <span className="text-[9px] font-mono text-zinc-600 shrink-0">{q.code}</span>
       </div>
       <div className={`mt-1.5 font-mono font-bold text-base tabular-nums ${up ? 'text-red-500' : 'text-green-500'}`}>
@@ -166,11 +190,15 @@ function GlobalIndexCard({ q, decimals = 2 }: { q: GlobalIndexQuote; decimals?: 
   );
 }
 
-function CryptoCard({ q }: { q: CryptoQuote }) {
+function CryptoCard({ q, onOpen }: { q: CryptoQuote; onOpen?: (symbol: string) => void }) {
   const up = q.changePercent >= 0;
   const flash = usePriceFlash(q.price);
   return (
-    <div className={`bg-zinc-900/60 border border-zinc-800/80 rounded-xl px-3 py-2.5 hover:border-zinc-700 transition-all duration-300 ${flashClass(flash)}`}>
+    <div
+      onClick={onOpen ? () => onOpen(q.symbol) : undefined}
+      className={`bg-zinc-900/60 border border-zinc-800/80 rounded-xl px-3 py-2.5 hover:border-blue-500/50 transition-all duration-300 ${flashClass(flash)} ${onOpen ? 'cursor-pointer' : ''}`}
+      title={onOpen ? `${q.name} · 点击查看缠论分析` : undefined}
+    >
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-semibold text-zinc-200 truncate">{q.name}</span>
         <span className="text-[9px] font-mono text-amber-500/80 shrink-0">{q.base}</span>
@@ -217,6 +245,18 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
   const [hotSectors, setHotSectors] = useState<HotSector[]>([]);
   const [sentiment, setSentiment] = useState<MarketSentiment | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+
+  // 各市场交易时段状态: 每 5 秒重算一次 (分钟级精度足够)
+  const [sessionTick, setSessionTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setSessionTick(v => v + 1), 5000);
+    return () => clearInterval(t);
+  }, []);
+  const sessions = useMemo(() => getMarketSessions(), [sessionTick]);
+  const sessOf = useCallback((code: string): MarketSessionInfo | undefined => {
+    const mid = marketIdForIndexCode(code);
+    return mid ? sessions[mid] : undefined;
+  }, [sessions]);
 
   // 环球市场: 全球主要指数 + 主流加密货币 (加载失败不影响 A 股主数据)
   const [globalIndices, setGlobalIndices] = useState<GlobalIndexQuote[]>([]);
@@ -467,6 +507,18 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
         </div>
 
         <div className="flex items-center gap-2 ml-auto">
+          {/* A股交易状态徽标 */}
+          <span
+            className={`hidden sm:inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-mono font-semibold transition-colors ${
+              sessions.cn.open
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                : 'bg-zinc-900/70 border-zinc-800/80 text-zinc-500'
+            }`}
+            title={`北京时间 ${sessions.cn.localTime}${sessions.cn.open ? ' · 集合竞价/连续竞盘中' : ' · 休市, 显示最近收盘数据'}`}
+          >
+            <SessionDot s={sessions.cn} />
+            A股 {sessions.cn.open ? '交易中' : '休市'} {sessions.cn.localTime}
+          </span>
           {flow && (
             <span className={`hidden sm:inline-flex items-center h-8 px-3 rounded-lg border text-xs font-semibold ${strength.cls}`}>
               {strength.label}
@@ -503,7 +555,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
       {indices.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2.5 md:gap-3">
           {indices.map((q) => (
-            <IndexCard key={q.symbol} q={q} />
+            <IndexCard key={q.symbol} q={q} session={sessions.cn} onOpen={onSelectStock} />
           ))}
         </div>
       )}
@@ -520,18 +572,33 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
               <section className="flex-1 flex flex-col min-h-0">
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5 flex-1" style={denseGridStyle}>
                   {globalIndices.map((q) => (
-                    <GlobalIndexCard key={q.code} q={q} />
+                    <GlobalIndexCard key={q.code} q={q} session={sessOf(q.code)} onOpen={onSelectStock} />
                   ))}
                   {techIndices.map((q) => (
-                    <GlobalIndexCard key={q.code} q={q} />
+                    <GlobalIndexCard key={q.code} q={q} session={sessOf(q.code)} onOpen={onSelectStock} />
                   ))}
                 </div>
               </section>
             )}
 
-            <p className="mt-3 pt-3 border-t border-zinc-800/60 text-[10px] text-zinc-600 font-mono">
-              各市场交易时段不同, 休市时显示最近收盘数据 · 费半以 iShares 半导体 ETF (SOXX) 为参考 · 数据来源: 东方财富
-            </p>
+            <div className="mt-3 pt-3 border-t border-zinc-800/60">
+              {/* 各市场交易时段状态一览 */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-1.5">
+                {(Object.keys(sessions) as MarketId[]).map((id) => (
+                  <span
+                    key={id}
+                    className={`inline-flex items-center gap-1 text-[10px] font-mono ${sessions[id].open ? 'text-emerald-400' : 'text-zinc-600'}`}
+                    title={`${sessions[id].label}${sessions[id].open ? '交易中' : '已休市'} · 当地时间 ${sessions[id].localTime}`}
+                  >
+                    <SessionDot s={sessions[id]} />
+                    {sessions[id].label}
+                  </span>
+                ))}
+              </div>
+              <p className="text-[10px] text-zinc-600 font-mono">
+                各市场交易时段不同, 休市时显示最近收盘数据 · 费半以 iShares 半导体 ETF (SOXX) 为参考 · 数据来源: 东方财富
+              </p>
+            </div>
           </Panel>
 
           {(commodities.length > 0 || cryptoQuotes.length > 0) && (
@@ -539,10 +606,15 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
               <section className="flex-1 flex flex-col min-h-0">
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5 flex-1" style={denseGridStyle}>
                   {commodities.map((q) => (
-                    <GlobalIndexCard key={q.code} q={q} decimals={q.code === 'USDCNH' ? 4 : 2} />
+                    <GlobalIndexCard
+                      key={q.code}
+                      q={q}
+                      decimals={q.code === 'USDCNH' ? 4 : 2}
+                      onOpen={onSelectStock}
+                    />
                   ))}
                   {cryptoQuotes.map((q) => (
-                    <CryptoCard key={q.symbol} q={q} />
+                    <CryptoCard key={q.symbol} q={q} onOpen={onSelectStock} />
                   ))}
                 </div>
               </section>
