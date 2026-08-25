@@ -2,8 +2,9 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   Radar, Play, Square, Plus, X, Loader2, AlertTriangle, Search, ExternalLink,
   ArrowUpRight, ArrowDownRight, RefreshCw, Database, Star,
+  TrendingUp, TrendingDown,
 } from 'lucide-react';
-import { Kline, BSPointType } from '../types/stock';
+import { Kline, BSPointType, StockBasicInfo } from '../types/stock';
 import { mergeKlines, findFractions, calculateStrokes, calculateBSPoints } from '../utils/chanlun';
 import {
   IndexId, INDEX_META, ParsedSymbol, parseSymbol, symbolKey, kindLabel,
@@ -11,6 +12,7 @@ import {
 } from '../utils/indexAnalysisApi';
 import { formatSignedYi } from '../utils/marketApi';
 import { WatchItem, loadWatchlist, upsertWatchlist, removeFromWatchlist } from '../utils/watchlistStorage';
+import { fetchStockBasicInfo } from '../utils/api';
 
 // ---------------------------------------------------------------------------
 // 常量与类型
@@ -231,6 +233,39 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
   });
   const [customInput, setCustomInput] = useState('');
   const [customError, setCustomError] = useState('');
+
+  // 指数代码映射: IndexId -> 用于 fetchStockBasicInfo 的 symbol
+  const INDEX_SYMBOLS: Record<IndexId, string> = {
+    hs300: '000300.SH',
+    zz500: '000905.SH',
+  };
+
+  // 指数基本信息 (名称/价格/涨跌幅)
+  const [indexBasicInfo, setIndexBasicInfo] = useState<Partial<Record<IndexId, StockBasicInfo | null>>>({});
+  const activeIndexIds = useMemo(
+    () => (Object.keys(selectedIndexes) as IndexId[]).filter(id => selectedIndexes[id]),
+    [selectedIndexes],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchAll = async () => {
+      const result: Partial<Record<IndexId, StockBasicInfo | null>> = {};
+      await Promise.all(
+        activeIndexIds.map(async (id) => {
+          try {
+            const info = await fetchStockBasicInfo(INDEX_SYMBOLS[id]);
+            if (!cancelled) result[id] = info;
+          } catch {
+            if (!cancelled) result[id] = null;
+          }
+        }),
+      );
+      if (!cancelled) setIndexBasicInfo(result);
+    };
+    fetchAll();
+    return () => { cancelled = true; };
+  }, [activeIndexIds]);
 
   // 成分股缓存与名称/板块映射
   const membersRef = useRef<Partial<Record<IndexId, string[]>>>({});
@@ -581,6 +616,52 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
           </p>
         </div>
       </div>
+
+      {/* Index Basic Info Cards */}
+      {activeIndexIds.length > 0 && (
+        <div className="flex flex-wrap gap-3">
+          {activeIndexIds.map(id => {
+            const info = indexBasicInfo[id];
+            if (!info) return null;
+            return (
+              <div
+                key={id}
+                className="flex-1 min-w-[200px] bg-gradient-to-r from-zinc-950 via-zinc-900 to-zinc-950 rounded-xl border border-zinc-800/80 p-3"
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex flex-col min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">{INDEX_META[id].label}</span>
+                      <span className="text-[10px] font-mono text-zinc-600">{info.symbol}</span>
+                    </div>
+                    <h3 className="text-lg font-bold text-zinc-100 mt-0.5">{info.name}</h3>
+                  </div>
+                  <div className="flex flex-col items-end shrink-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xl font-bold font-mono ${info.change >= 0 ? 'text-red-500' : 'text-green-500'}`}>
+                        {info.price.toFixed(2)}
+                      </span>
+                      {info.change >= 0 ? (
+                        <TrendingUp className="h-4 w-4 text-red-500" />
+                      ) : (
+                        <TrendingDown className="h-4 w-4 text-green-500" />
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className={`text-xs font-mono font-semibold ${info.change >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+                        {info.change >= 0 ? '+' : ''}{info.change.toFixed(2)}
+                      </span>
+                      <span className={`text-xs font-mono font-semibold ${info.change >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+                        ({info.changePercent.toFixed(2)}%)
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Controls */}
       <div className="flex flex-col lg:flex-row lg:items-center gap-3 flex-wrap">
