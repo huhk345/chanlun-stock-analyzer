@@ -1560,9 +1560,97 @@ export async function generateStrategyCode(
   );
 }
 
+/** 从最近两根日K推导行情信息 (新浪期货/外汇等无统一实时报价接口的数据源) */
+function basicInfoFromKlines(code: string, name: string, klines: Kline[]): StockBasicInfo {
+  const last = klines[klines.length - 1];
+  const prev = klines[klines.length - 2] || last;
+  const change = last.close - prev.close;
+  return {
+    symbol: code,
+    name,
+    price: last.close,
+    change,
+    changePercent: prev.close !== 0 ? (change / prev.close) * 100 : 0,
+    open: last.open,
+    high: last.high,
+    low: last.low,
+    volume: last.volume,
+    amount: last.amount,
+  };
+}
+
+/** 全球指数/商品/汇率报价 -> StockBasicInfo (腾讯系源走实时行情, 其余用日K推导) */
+async function fetchGlobalBasicInfo(code: string): Promise<StockBasicInfo> {
+  const route = GLOBAL_KLINE_ROUTES[code];
+  if (!route) throw new Error(`暂不支持 ${code} 的行情信息`);
+
+  if (route.source === 'tencent' || route.source === 'tencent-us') {
+    try {
+      const resp = await fetch(`https://web.sqt.gtimg.cn/q=${route.symbol}`);
+      if (resp.ok) {
+        const text = new TextDecoder('gbk').decode(await resp.arrayBuffer());
+        const m = text.match(/="(.+)"/);
+        const d = m?.[1]?.split('~');
+        // 字段布局 (A股/港股/美股通用): [1]名称 [3]现价 [4]昨收 [5]今开
+        const price = parseFloat(d?.[3] ?? '');
+        const prevClose = parseFloat(d?.[4] ?? '');
+        if (d && price > 0 && prevClose > 0) {
+          const change = price - prevClose;
+          return {
+            symbol: code,
+            name: d[1] || route.name,
+            price,
+            change,
+            changePercent: (change / prevClose) * 100,
+            open: parseFloat(d[5]) || 0,
+            high: parseFloat(d[33]) || 0,
+            low: parseFloat(d[34]) || 0,
+            volume: (parseFloat(d[36]) || 0) * 100,
+            amount: (parseFloat(d[37]) || 0) * 10000,
+          };
+        }
+      }
+    } catch {
+      // 实时行情失败 -> 降级为日K推导
+    }
+  }
+
+  const { klines } = await fetchGlobalKlines(code);
+  return basicInfoFromKlines(code, route.name, klines);
+}
+
+/** 加密货币报价 -> StockBasicInfo (Binance 24h ticker) */
+async function fetchCryptoBasicInfo(pair: string): Promise<StockBasicInfo> {
+  const resp = await fetch(`https://data-api.binance.vision/api/v3/ticker/24hr?symbol=${pair}`);
+  if (!resp.ok) throw new Error(`Binance 行情接口错误 (${resp.status})`);
+  const t = await resp.json();
+  const price = parseFloat(t.lastPrice) || 0;
+  const change = parseFloat(t.priceChange) || 0;
+  return {
+    symbol: pair,
+    name: pair,
+    price,
+    change,
+    changePercent: parseFloat(t.priceChangePercent) || 0,
+    open: parseFloat(t.openPrice) || 0,
+    high: parseFloat(t.highPrice) || 0,
+    low: parseFloat(t.lowPrice) || 0,
+    volume: parseFloat(t.volume) || 0,
+    amount: parseFloat(t.quoteVolume) || 0,
+  };
+}
+
 // Fetch stock basic information from free API (Tencent Stock)
 export async function fetchStockBasicInfo(symbol: string): Promise<StockBasicInfo> {
   const clean = symbol.trim().toUpperCase();
+
+  // 全球指数/商品/汇率: 'GI.HSI' / 'EM.100.HSI' / 裸代码 'HSI'
+  const globalMatch = /^(?:GI|EM)(?:\.\d+)?\.([A-Z0-9]+)$/.exec(clean);
+  const globalCode = globalMatch ? globalMatch[1] : (GLOBAL_KLINE_ROUTES[clean] ? clean : '');
+  if (globalCode) return fetchGlobalBasicInfo(globalCode);
+
+  // 加密货币: 'BTCUSDT' 等 *USDT 交易对
+  if (/^[A-Z0-9]{2,10}USDT$/.test(clean)) return fetchCryptoBasicInfo(clean);
 
   // Determine if it's a Shanghai or Shenzhen stock
   let tencentSymbol = '';
