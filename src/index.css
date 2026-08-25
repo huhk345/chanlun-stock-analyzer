@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+html {
+  background: #09090b;
+}
+
 /* react-simple-code-editor overrides for dark theme */
 .editor-container textarea {
   color: transparent !important;
