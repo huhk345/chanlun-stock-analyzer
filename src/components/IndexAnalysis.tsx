@@ -703,19 +703,20 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
         {/* Custom adds */}
         <form
           onSubmit={e => { e.preventDefault(); addCustom(); }}
-          className="flex items-center gap-1 h-8 pl-2.5 pr-1 rounded-md bg-zinc-900/70 border border-zinc-800/60 focus-within:border-blue-500/60 transition-colors"
+          className="flex items-center gap-1 h-9 px-1 pl-2.5 rounded-md bg-zinc-900/70 border border-zinc-800/60 focus-within:border-blue-500/60 transition-colors w-full sm:w-auto"
         >
           <Plus className="h-3 w-3 text-zinc-500 shrink-0" />
           <input
             value={customInput}
             onChange={e => { setCustomInput(e.target.value); setCustomError(''); }}
             placeholder="添加指数/ETF/股票"
-            className="w-44 bg-transparent text-[11px] font-mono text-zinc-100 placeholder:text-zinc-600 focus:outline-none"
+            enterKeyHint="done"
+            className="flex-1 sm:flex-none sm:w-44 min-w-0 bg-transparent text-[11px] font-mono text-zinc-100 placeholder:text-zinc-600 focus:outline-none"
           />
           <button
             type="submit"
             disabled={progress.running}
-            className="h-6 px-2 rounded bg-zinc-800 hover:bg-blue-500 active:bg-blue-600 hover:text-white text-zinc-300 text-[10px] font-semibold transition-all cursor-pointer disabled:opacity-40"
+            className="h-7 px-3 rounded bg-zinc-800 hover:bg-blue-500 active:bg-blue-600 hover:text-white text-zinc-300 text-[10px] font-semibold transition-all cursor-pointer disabled:opacity-40 shrink-0"
           >
             加入
           </button>
@@ -904,8 +905,10 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
             )}
           </div>
         ) : (
-          <div className="overflow-auto max-h-[calc(100vh-320px)]">
-            <table className="w-full text-left border-collapse">
+          <>
+          {/* Desktop: full 9-column table */}
+          <div className="hidden md:block overflow-auto max-h-[calc(100vh-320px)]">
+            <table className="w-full min-w-[760px] text-left border-collapse">
               <thead className="sticky top-0 z-10 bg-zinc-950/95 backdrop-blur border-b border-zinc-800">
                 <tr className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">
                   <th className="px-3 py-2.5 font-mono">最新信号</th>
@@ -1011,6 +1014,78 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
               </tbody>
             </table>
           </div>
+          {/* Mobile: stacked cards (one per stock, signals wrap inside) */}
+          <div className="md:hidden overflow-y-auto max-h-[calc(100vh-320px)] divide-y divide-zinc-900">
+            {visibleGroups.map(g => {
+              const head = g[0];
+              const f = flowMap[head.symbolKey];
+              return (
+                <article
+                  key={head.symbolKey}
+                  onClick={() => openInAnalyzer(head)}
+                  className="px-3 py-2.5 active:bg-zinc-900/60 cursor-pointer"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-[11px] font-mono font-semibold text-zinc-100">{head.code}</span>
+                    <span className="text-[11px] text-zinc-400 truncate flex-1 min-w-0">{head.name || '—'}</span>
+                    <span className="text-[11px] font-mono text-zinc-200 tabular-nums shrink-0">{head.lastClose.toFixed(2)}</span>
+                  </div>
+                  <div className="mt-0.5 flex items-center gap-2 text-[10px] font-mono text-zinc-500">
+                    <span>最新 {head.date}</span>
+                    {head.industryPath && (
+                      <span className="truncate">{head.industryPath.split(' > ').pop()}</span>
+                    )}
+                    <span className="ml-auto shrink-0">
+                      {head.volRatio != null && head.volRatio > 0 ? `量比 ${head.volRatio.toFixed(2)}` : ''}
+                    </span>
+                    {f && (
+                      <span className={`font-semibold tabular-nums shrink-0 ${f.mainInflow > 0 ? 'text-red-400' : f.mainInflow < 0 ? 'text-green-400' : 'text-zinc-400'}`}>
+                        主力 {formatSignedYi(f.mainInflow)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                    {g.map(s => (
+                      <span
+                        key={s.id}
+                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-bold whitespace-nowrap ${TYPE_STYLE[s.type]}`}
+                      >
+                        {s.label}
+                        {s.strokeUp
+                          ? <ArrowUpRight className="h-2.5 w-2.5 opacity-60" />
+                          : <ArrowDownRight className="h-2.5 w-2.5 opacity-60" />}
+                        <span className="font-mono font-semibold opacity-80">{s.date.slice(5)}</span>
+                        <span className={`font-mono font-semibold ${pctClass(s.changeSincePct)}`}>
+                          {s.changeSincePct > 0 ? '+' : ''}{s.changeSincePct.toFixed(1)}%
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); toggleWatch(head); }}
+                      className={`flex-1 inline-flex items-center justify-center gap-1 min-h-[36px] px-3 rounded-lg border text-[11px] font-medium transition-colors cursor-pointer ${
+                        watchedKeys.has(head.symbolKey)
+                          ? 'border-amber-500/50 bg-amber-500/10 text-amber-400'
+                          : 'border-zinc-800 bg-zinc-900 text-zinc-400 active:border-amber-500/40'
+                      }`}
+                    >
+                      <Star className={`h-3.5 w-3.5 ${watchedKeys.has(head.symbolKey) ? 'fill-amber-400' : ''}`} />
+                      {watchedKeys.has(head.symbolKey) ? '已自选' : '自选'}
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); openInAnalyzer(head); }}
+                      className="flex-1 inline-flex items-center justify-center gap-1 min-h-[36px] px-3 rounded-lg bg-blue-500/15 border border-blue-500/30 text-blue-300 text-[11px] font-semibold active:bg-blue-500/25 cursor-pointer"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      缠论分析
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+          </>
         )}
       </div>
 
@@ -1029,7 +1104,7 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
           <div
             onClick={e => e.stopPropagation()}
-            className="relative bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl w-[90vw] max-w-md p-5"
+            className="relative bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl w-[90vw] max-w-md p-4 md:p-5 max-h-[88vh] overflow-y-auto"
           >
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">

@@ -42,12 +42,12 @@ export default function AboutView({ isOpen, onClose, dataSource }: AboutViewProp
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4">
-      <div className="w-full max-w-2xl bg-zinc-900 text-zinc-100 rounded-2xl shadow-2xl border border-zinc-800 relative overflow-hidden animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-3 md:p-4 overflow-y-auto">
+      <div className="w-full max-w-2xl bg-zinc-900 text-zinc-100 rounded-2xl shadow-2xl border border-zinc-800 relative overflow-hidden animate-fade-in my-auto">
 
         {/* Header */}
         <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600" />
-        <div className="p-6 border-b border-zinc-800">
+        <div className="p-4 md:p-6 border-b border-zinc-800">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-3">
               <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-blue-400 via-blue-500 to-blue-600 flex items-center justify-center shadow-[0_0_0_1px_rgba(59,130,246,0.3),0_4px_12px_-2px_rgba(59,130,246,0.4)]">
@@ -68,7 +68,7 @@ export default function AboutView({ isOpen, onClose, dataSource }: AboutViewProp
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+        <div className="p-4 md:p-6 space-y-5 md:space-y-6 max-h-[82vh] md:max-h-[70vh] overflow-y-auto">
 
           {/* Status Row: data source + analysis completion */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

@@ -251,7 +251,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
           type="button"
           onClick={() => onViewChange?.('dashboard')}
           title="返回市场总览"
-          className="flex items-center gap-3 shrink-0 pl-4 md:pl-5 pr-3 h-full border-r border-zinc-800/60 cursor-pointer hover:bg-zinc-900/60 transition-colors text-left"
+          className="flex items-center gap-3 shrink-0 pl-2 md:pl-5 pr-2 md:pr-3 h-full border-r border-zinc-800/60 cursor-pointer hover:bg-zinc-900/60 transition-colors text-left"
         >
           <div className="relative w-9 h-9">
             <img src="/icon.png" alt="缠论量化工作台" className="w-full h-full" />
@@ -272,8 +272,10 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
         {/* Vertical Divider */}
         <div className="hidden md:block h-7 w-px bg-gradient-to-b from-transparent via-zinc-800 to-transparent" />
 
-        {/* View Switcher: 市场总览 / 个股分析 */}
-        {onViewChange && (
+        {/* View Switcher: 市场总览 / 个股分析
+            Mobile: hidden while the scrolled stock-price strip is visible so the
+            single 56px row never overflows on ~360px viewports (scroll up to switch). */}
+        {onViewChange && !(isMobile && isScrolled && stockBasicInfo) && (
           <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-zinc-900/70 border border-zinc-800/60 shrink-0 ml-1 md:ml-3">
             <button
               type="button"
@@ -570,15 +572,26 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
       {/* Mobile Search Panel */}
       {showSearch && onSearch && (
         <div className="md:hidden w-full border-t border-zinc-800/80 bg-zinc-950/95 px-2 py-2 space-y-2">
-          <form onSubmit={handleSearchSubmit}>
+          <form onSubmit={handleSearchSubmit} className="relative">
             <input
-              type="text"
+              type="search"
+              enterKeyHint="search"
+              inputMode="search"
+              autoFocus
               value={ticker}
               onChange={(e) => setTicker(e.target.value)}
               placeholder="股票代码: 600519, 000001..."
               disabled={isLoading}
-              className="w-full h-9 pl-3 pr-10 text-[13px] bg-zinc-900 text-zinc-100 border border-zinc-800 rounded-md focus:outline-none focus:border-blue-500/60 focus:shadow-[0_0_0_3px_rgba(59,130,246,0.08)] font-mono"
+              className="w-full h-10 pl-3 pr-11 text-[13px] bg-zinc-900 text-zinc-100 border border-zinc-800 rounded-md focus:outline-none focus:border-blue-500/60 focus:shadow-[0_0_0_3px_rgba(59,130,246,0.08)] font-mono"
             />
+            <button
+              type="submit"
+              disabled={isLoading}
+              aria-label="搜索"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-2 rounded-md bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-white transition-all disabled:opacity-50 cursor-pointer"
+            >
+              <Search className="h-3.5 w-3.5" strokeWidth={2.5} />
+            </button>
           </form>
 
           {searchHistory.length > 0 && (
@@ -636,8 +649,8 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
 
       {/* Auth Modal Dialog */}
       {isLoginModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4">
-          <div className="w-full max-w-md bg-zinc-900 text-zinc-100 rounded-2xl shadow-2xl border border-zinc-800 p-6 relative overflow-hidden animate-fade-in" id="login-modal-box">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4 overflow-y-auto">
+          <div className="w-full max-w-md bg-zinc-900 text-zinc-100 rounded-2xl shadow-2xl border border-zinc-800 p-4 md:p-6 relative overflow-hidden animate-fade-in my-auto" id="login-modal-box">
             
             <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600" />
 

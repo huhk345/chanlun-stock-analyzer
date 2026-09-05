@@ -514,7 +514,7 @@ export default function GeminiAdvisor({
               </button>
 
             {modelDropdownOpen && (
-              <div className="absolute z-50 right-0 w-72 mt-1.5 bg-zinc-950 border border-zinc-800 rounded-xl shadow-2xl shadow-black/60 overflow-hidden">
+              <div className="absolute z-50 right-0 w-72 max-w-[calc(100vw-2rem)] mt-1.5 bg-zinc-950 border border-zinc-800 rounded-xl shadow-2xl shadow-black/60 overflow-hidden">
                 <div className="p-2 border-b border-zinc-800 flex items-center gap-2">
                   <Search className="h-3.5 w-3.5 text-zinc-500" />
                   <input
@@ -602,19 +602,19 @@ export default function GeminiAdvisor({
 
       {/* Suggested Questions (when chat is empty) */}
       {chatMessages.length === 0 && !chatLoading && (
-        <div className="flex-shrink-0 p-2 md:p-4 border-b border-zinc-800/50 bg-zinc-900/20">
-          <div className="text-[10px] font-mono uppercase tracking-widest text-zinc-500 mb-3 flex items-center gap-1.5">
+        <div className="flex-shrink-0 p-2 md:p-4 border-b border-zinc-800/50 bg-zinc-900/20 max-h-[36vh] overflow-y-auto md:max-h-none">
+          <div className="text-[10px] font-mono uppercase tracking-widest text-zinc-500 mb-2 md:mb-3 flex items-center gap-1.5">
             <Wand2 className="h-3 w-3 text-blue-400" />
             推荐提问
           </div>
-          <div className="grid grid-cols-1 gap-2">
+          <div className="grid grid-cols-1 gap-1.5 md:gap-2">
             {SUGGESTED_QUESTIONS.slice(0, 6).map((q, i) => (
               <button
                 key={i}
                 type="button"
                 onClick={() => handleSuggestedQuestion(q.text)}
                 disabled={klines.length === 0 || chatLoading}
-                className="text-left p-2.5 rounded-lg bg-zinc-950/50 hover:bg-zinc-900 border border-zinc-800/50 hover:border-blue-500/30 transition-all cursor-pointer group disabled:opacity-50 disabled:cursor-not-allowed"
+                className="text-left p-2 md:p-2.5 rounded-lg bg-zinc-950/50 hover:bg-zinc-900 border border-zinc-800/50 hover:border-blue-500/30 transition-all cursor-pointer group disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <div className="flex items-start gap-2">
                   <span className="text-sm shrink-0">{q.icon}</span>

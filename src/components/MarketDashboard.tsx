@@ -197,7 +197,7 @@ function MarketPickDialog({ title, subtitle, groups, selected, onToggle, onToggl
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
       <div
         onClick={e => e.stopPropagation()}
-        className="relative bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl w-[92vw] max-w-xl p-5 max-h-[82vh] flex flex-col"
+        className="relative bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl w-[92vw] max-w-xl p-4 md:p-5 max-h-[82vh] flex flex-col"
       >
         <div className="flex items-center justify-between mb-1">
           <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
@@ -333,7 +333,7 @@ function IndexCard({ q, session, onOpen }: { q: IndexQuote; session?: MarketSess
   return (
     <div
       onClick={onOpen ? () => onOpen(`${q.code}.${q.symbol.toLowerCase().startsWith('sh') ? 'SS' : 'SZ'}`) : undefined}
-      className={`bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-3.5 hover:border-blue-500/50 transition-all duration-300 ${flashClass(flash)} ${onOpen ? 'cursor-pointer' : ''}`}
+      className={`bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-2.5 md:p-3.5 hover:border-blue-500/50 transition-all duration-300 ${flashClass(flash)} ${onOpen ? 'cursor-pointer' : ''}`}
       title={onOpen ? `${q.name} · 点击查看缠论分析` : undefined}
     >
       <div className="flex items-center justify-between gap-2">
@@ -355,8 +355,8 @@ function IndexCard({ q, session, onOpen }: { q: IndexQuote; session?: MarketSess
         <span>{up ? '+' : ''}{q.change.toFixed(2)}</span>
         <span className="font-semibold">{up ? '+' : ''}{q.changePercent.toFixed(2)}%</span>
       </div>
-      {/* 开高低振量额: 3 行 x 2 列对齐网格 */}
-      <div className="mt-3 grid grid-cols-[auto_1fr_auto_1fr] gap-x-2 gap-y-0.5 text-[10px] font-mono tabular-nums text-zinc-500">
+      {/* 开高低振量额: 3 行 x 2 列对齐网格 (mobile: tighter type) */}
+      <div className="mt-3 grid grid-cols-[auto_1fr_auto_1fr] gap-x-2 gap-y-0.5 text-[9px] md:text-[10px] font-mono tabular-nums text-zinc-500">
         <span className="text-zinc-600">开</span><span>{q.open.toFixed(2)}</span>
         <span className="text-zinc-600">高</span><span>{q.high.toFixed(2)}</span>
         <span className="text-zinc-600">低</span><span>{q.low.toFixed(2)}</span>
@@ -1114,11 +1114,11 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
                       const days = Math.floor((Date.now() - it.addedAt) / 86400000);
                       const displayName = q?.name || it.name || '—';
                       return (
-                        <div key={it.symbolKey} className="flex items-center gap-1 group">
+                        <div key={it.symbolKey} className="flex items-center gap-0.5 md:gap-1 group">
                           <button
                             type="button"
                             onClick={() => onSelectStock(it.symbolKey.replace('.SH', '.SS'))}
-                            className="flex-1 min-w-0 flex items-center gap-2.5 px-2 py-1 rounded-md hover:bg-blue-500/10 border border-transparent hover:border-blue-500/20 transition-colors cursor-pointer text-left"
+                            className="flex-1 min-w-0 flex items-center gap-1.5 md:gap-2.5 px-1.5 md:px-2 py-1.5 md:py-1 rounded-md hover:bg-blue-500/10 border border-transparent hover:border-blue-500/20 transition-colors cursor-pointer text-left"
                             title={`查看 ${displayName} (${it.code}) 缠论分析 · ${it.baseDate} 以 ${it.basePrice.toFixed(2)} 加入`}
                           >
                             <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-bold shrink-0 ${TYPE_STYLE[it.signalType]}`}>
@@ -1133,13 +1133,13 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
                                 <p className="text-[10px] text-zinc-500 truncate mt-0.5" title={it.reason}>{it.reason}</p>
                               )}
                             </div>
-                            <div className="ml-auto flex items-center gap-2.5 font-mono text-xs tabular-nums shrink-0">
+                            <div className="ml-auto flex items-center gap-1.5 md:gap-2.5 font-mono text-xs tabular-nums shrink-0">
                               <span className="hidden sm:flex flex-col items-end leading-tight">
                                 <span className="text-[9px] text-zinc-600">{it.baseDate} 加入</span>
                                 <span className="text-zinc-400">{it.basePrice.toFixed(2)}</span>
                               </span>
-                              <span className="w-14 text-right text-zinc-200">{price > 0 ? price.toFixed(2) : '--'}</span>
-                              <span className={`w-16 text-right font-semibold ${chg === null ? 'text-zinc-600' : upClass(chg)}`}>
+                              <span className="w-12 md:w-14 text-right text-zinc-200">{price > 0 ? price.toFixed(2) : '--'}</span>
+                              <span className={`w-14 md:w-16 text-right font-semibold ${chg === null ? 'text-zinc-600' : upClass(chg)}`}>
                                 {chg === null ? '--' : `${chg > 0 ? '+' : ''}${chg.toFixed(2)}%`}
                               </span>
                               <span className="hidden md:inline w-9 text-right text-zinc-500 text-[10px]">
@@ -1171,7 +1171,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
                   subtitle={`股指期货 IF/IH/IC/IM 前20会员 · ${instPositions.date}`}
                 >
                   <div className="overflow-x-auto -mx-1 px-1">
-                    <table className="w-full text-xs font-mono tabular-nums border-collapse">
+                    <table className="w-full min-w-[620px] text-xs font-mono tabular-nums border-collapse">
                       <thead>
                         <tr className="text-zinc-500 text-right">
                           <th className="py-1 pr-2 font-normal text-left">机构席位</th>
@@ -1324,14 +1324,14 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
                                   <span className="text-[10px] font-mono text-zinc-600 w-4 shrink-0">{idx + 1}</span>
                                   <span className="text-xs text-zinc-200 truncate">{item.name}</span>
                                 </div>
-                                <div className="relative flex items-center gap-2.5 font-mono text-xs tabular-nums shrink-0">
+                                <div className="relative flex items-center gap-1.5 md:gap-2.5 font-mono text-xs tabular-nums shrink-0">
                                   <span className={`w-12 text-right ${upClass(item.changePercent)}`}>
                                     {item.changePercent >= 0 ? '+' : ''}{item.changePercent.toFixed(2)}%
                                   </span>
-                                  <span className={`w-[68px] text-right font-semibold ${upClass(item.mainInflow)}`}>
+                                  <span className={`w-16 md:w-[68px] text-right font-semibold ${upClass(item.mainInflow)}`}>
                                     {formatSignedYi(item.mainInflow)}
                                   </span>
-                                  <span className={`w-11 text-right ${upClass(item.mainPercent)}`}>
+                                  <span className={`hidden min-[400px]:inline w-11 text-right ${upClass(item.mainPercent)}`}>
                                     {item.mainPercent >= 0 ? '+' : ''}{item.mainPercent.toFixed(1)}%
                                   </span>
                                 </div>
@@ -1459,12 +1459,12 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
                             <div className="text-[9px] font-mono text-zinc-600">{item.code}</div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2.5 font-mono text-xs tabular-nums shrink-0">
-                          <span className="w-14 text-right text-zinc-300">{item.price.toFixed(2)}</span>
+                        <div className="flex items-center gap-1.5 md:gap-2.5 font-mono text-xs tabular-nums shrink-0">
+                          <span className="w-12 md:w-14 text-right text-zinc-300">{item.price.toFixed(2)}</span>
                           <span className={`w-12 text-right ${upClass(item.changePercent)}`}>
                             {item.changePercent >= 0 ? '+' : ''}{item.changePercent.toFixed(2)}%
                           </span>
-                          <span className={`w-[68px] text-right font-semibold ${upClass(item.mainInflow)}`}>
+                          <span className={`w-16 md:w-[68px] text-right font-semibold ${upClass(item.mainInflow)}`}>
                             {formatSignedYi(item.mainInflow)}
                           </span>
                           <span className={`hidden xl:inline w-11 text-right ${upClass(item.mainPercent)}`}>

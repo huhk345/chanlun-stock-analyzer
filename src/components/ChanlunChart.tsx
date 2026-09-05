@@ -906,19 +906,19 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
       {/* Stock Basic Info Header */}
       {stockBasicInfo && (
         <div className="mobile-flat bg-gradient-to-r from-zinc-950 via-zinc-900 to-zinc-950 md:rounded-xl md:border md:border-zinc-800/80 md:p-4 p-0">
-          <div className="flex flex-row xl:flex-row items-start xl:items-center justify-between gap-2 md:gap-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 md:gap-4">
             {/* Left: Stock Name & Symbol */}
             <div className="flex items-center gap-4 min-w-0">
               <div className="flex flex-col min-w-0">
                 <div className="flex flex-col gap-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <h2 className="text-xl font-bold text-zinc-100 truncate">{stockBasicInfo.name}</h2>
+                    <h2 className="text-lg md:text-xl font-bold text-zinc-100 truncate">{stockBasicInfo.name}</h2>
                     {reductionPlans && reductionPlans.length > 0 && (
                       <div className="group/badge relative shrink-0">
                         <span className="flex items-center justify-center h-5 w-5 rounded-full bg-orange-500/20 border border-orange-500/40 text-orange-400 cursor-help">
                           <AlertTriangle className="h-3 w-3" />
                         </span>
-                        <div className="absolute left-1/2 -translate-x-1/2 top-full mt-2 w-72 opacity-0 invisible group-hover/badge:opacity-100 group-hover/badge:visible transition-all duration-200 z-50 pointer-events-none">
+                        <div className="absolute left-0 md:left-1/2 md:-translate-x-1/2 top-full mt-2 w-64 max-w-[calc(100vw-2rem)] opacity-0 invisible group-hover/badge:opacity-100 group-hover/badge:visible transition-all duration-200 z-50 pointer-events-none">
                           <div className="bg-zinc-900 border border-orange-900/40 rounded-xl shadow-xl overflow-hidden">
                             <div className="px-3 py-2 border-b border-orange-900/20 bg-gradient-to-r from-orange-950/30 to-orange-950/10 flex items-center gap-2">
                               <TrendingDown className="h-3.5 w-3.5 text-orange-400" />
@@ -953,11 +953,11 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
             </div>
             
             {/* Right: Price & Stats */}
-            <div className="flex flex-wrap items-center gap-6">
+            <div className="flex flex-wrap items-center gap-3 md:gap-6">
               {/* Price */}
-              <div className="flex flex-col items-end">
+              <div className="flex flex-col items-start sm:items-end">
                 <div className="flex items-center gap-2">
-                  <span className={`text-2xl font-bold font-mono ${stockBasicInfo.change >= 0 ? 'text-red-500' : 'text-green-500'}`}>
+                  <span className={`text-xl md:text-2xl font-bold font-mono ${stockBasicInfo.change >= 0 ? 'text-red-500' : 'text-green-500'}`}>
                     {stockBasicInfo.price.toFixed(2)}
                   </span>
                   {stockBasicInfo.change >= 0 ? (
@@ -1308,7 +1308,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
         <div className="flex flex-col xl:flex-row items-stretch xl:items-center justify-end gap-4">
 
           {/* Visibility Toggles */}
-          <div className="flex flex-wrap items-center gap-4 px-2 md:px-0">
+          <div className="flex flex-wrap items-center gap-2 md:gap-4 px-2 md:px-0">
             <div className="flex flex-wrap items-center gap-1 mobile-flat bg-zinc-800/15 md:rounded-xl px-1.5 md:px-2.5 py-1 md:py-1.5 md:border md:border-zinc-700/20">
               <span className="text-[9px] font-bold text-zinc-500 tracking-wider mr-0.5 bg-zinc-800/60 px-1.5 py-0.5 rounded-md leading-none">缠</span>
               <button
@@ -1602,15 +1602,15 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
                 ))}
               </div>
               {(dataPeriod || klines.length > 0) && (
-                <span className="text-[10px] font-mono text-zinc-500 [text-shadow:0_1px_3px_rgba(0,0,0,0.9)]">
-                  {timeframe === 'weekly' ? '周线' : '日线'} · {klines.length} 根{dataPeriod ? ` · ${dataPeriod}` : ''}
+                <span className="text-[10px] font-mono text-zinc-500 [text-shadow:0_1px_3px_rgba(0,0,0,0.9)] truncate max-w-[38vw] sm:max-w-none">
+                  {timeframe === 'weekly' ? '周线' : '日线'} · {klines.length} 根<span className="hidden sm:inline">{dataPeriod ? ` · ${dataPeriod}` : ''}</span>
                 </span>
               )}
             </div>
           )}
           {/* Indicator values overlay - top left, below the timeframe float */}
           {(showMA5 || showMA20 || showBOLL || showMACD || Object.values(userIndicatorVisibility).some(v => v)) && (
-            <div className="absolute top-8 left-1 z-10 flex flex-row gap-1 pointer-events-none">
+            <div className="absolute top-8 left-1 right-1 z-10 flex flex-row flex-wrap gap-1 pointer-events-none">
               {(() => {
                 const idx = hoveredData
                   ? klines.findIndex(k => k.date === hoveredData.date)

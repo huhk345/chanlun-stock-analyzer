@@ -785,7 +785,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
                 </div>
               </div>
               <div className="overflow-x-auto md:rounded-xl md:border md:border-zinc-800 bg-zinc-950">
-                  <table className="w-full text-left text-xs text-zinc-300">
+                  <table className="w-full min-w-[560px] text-left text-xs text-zinc-300">
                     <thead className="bg-zinc-900 border-b border-zinc-800 text-zinc-500 font-mono font-semibold">
                       <tr>
                         <th className="px-4 py-2.5">日期</th>

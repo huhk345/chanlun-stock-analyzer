@@ -80,4 +80,23 @@ html {
   .mobile-justify-center {
     justify-content: center !important;
   }
+
+  /* Prevent iOS Safari auto-zoom on focus (<16px inputs trigger zoom).
+     Fixed heights (h-7/h-8/h-9) still fit 16px text. */
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+  /* Dense numeric steppers keep 16px but allow tighter line box */
+  input[type='number'] {
+    line-height: 1.25 !important;
+  }
+}
+
+/* Reduce tap highlight flash on touch devices */
+@media (hover: none) {
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
 }

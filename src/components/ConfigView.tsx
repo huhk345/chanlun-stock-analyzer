@@ -63,12 +63,12 @@ export default function ConfigView({ isOpen, onClose }: ConfigViewProps) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4">
-      <div className="w-full max-w-2xl bg-zinc-900 text-zinc-100 rounded-2xl shadow-2xl border border-zinc-800 relative overflow-hidden animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-3 md:p-4 overflow-y-auto">
+      <div className="w-full max-w-2xl bg-zinc-900 text-zinc-100 rounded-2xl shadow-2xl border border-zinc-800 relative overflow-hidden animate-fade-in my-auto">
         
         {/* Header */}
         <div className="absolute top-0 left-0 w-full h-1.5 bg-blue-500" />
-        <div className="p-6 border-b border-zinc-800">
+        <div className="p-4 md:p-6 border-b border-zinc-800">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-3">
               <Settings className="h-6 w-6 text-blue-400" />
@@ -85,7 +85,7 @@ export default function ConfigView({ isOpen, onClose }: ConfigViewProps) {
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+        <div className="p-4 md:p-6 space-y-5 md:space-y-6 max-h-[82vh] md:max-h-[70vh] overflow-y-auto">
           
           {/* TickFlow API Key */}
           <div className="space-y-3">
@@ -264,7 +264,7 @@ export default function ConfigView({ isOpen, onClose }: ConfigViewProps) {
         </div>
 
         {/* Footer */}
-        <div className="p-6 border-t border-zinc-800 flex items-center justify-end gap-3">
+        <div className="p-4 md:p-6 border-t border-zinc-800 flex items-center justify-end gap-3">
           <button
             onClick={onClose}
             className="px-4 py-2.5 text-sm text-zinc-400 hover:text-zinc-200 transition-colors font-medium"

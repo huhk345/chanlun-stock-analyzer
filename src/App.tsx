@@ -529,9 +529,11 @@ export default function App() {
               />
             </div>
 
-            {/* AI Advisor - flows inline below the chart on mobile */}
+            {/* AI Advisor - flows inline below the chart on mobile.
+                Bounded height so the chat thread scrolls internally instead of
+                pushing the backtest panel endlessly down the page. */}
             {isChatVisible && isMobile && (
-              <div className="border-t border-zinc-800/60">
+              <div className="border-t border-zinc-800/60 h-[75vh] max-h-[700px] min-h-[480px]">
                 <GeminiAdvisor
                   symbol={symbol}
                   klines={klines}
@@ -622,7 +624,8 @@ export default function App() {
         <button
           type="button"
           onClick={() => setIsChatVisible(true)}
-          className="fixed right-3 bottom-3 z-40 flex items-center justify-center w-12 h-12 bg-blue-500 hover:bg-blue-400 active:bg-blue-600 rounded-full text-white shadow-lg shadow-blue-500/30 transition-all cursor-pointer"
+          className="fixed right-4 z-40 flex items-center justify-center w-12 h-12 bg-blue-500 hover:bg-blue-400 active:bg-blue-600 rounded-full text-white shadow-lg shadow-blue-500/30 transition-all cursor-pointer"
+          style={{ bottom: 'max(1rem, env(safe-area-inset-bottom))' }}
           title="显示 AI 对话"
         >
           <BrainCircuit className="h-5 w-5" />
