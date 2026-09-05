@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { createChart, createSeriesMarkers, CandlestickSeries, LineSeries, HistogramSeries, IChartApi, ISeriesApi, ISeriesMarkersPluginApi, CandlestickData, LineData, HistogramData, Time, ColorType, CrosshairMode } from 'lightweight-charts';
 import { AlertCircle, TrendingUp, TrendingDown, Briefcase, User, ChevronRight, AlertTriangle, ExternalLink, FileText, Plus } from 'lucide-react';
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade, BSPoint } from '../types/stock';
+import type { KlineTimeframe } from '../utils/api';
 import { calculateSMA, calculateBollingerBands, calculateMACD } from '../utils/indicators';
 import { userIndicators } from '../indicators/user';
 import { loadStoredIndicators } from '../utils/indicatorLoader';
@@ -30,13 +31,17 @@ interface ChanlunChartProps {
   actualController?: string;
   reductionPlans?: ReductionPlan[];
   backtestTrades?: BacktestTrade[];
+  timeframe?: KlineTimeframe;
+  dataPeriod?: string;
+  isLoading?: boolean;
+  onTimeframeChange?: (tf: KlineTimeframe) => void;
 }
 
 function dateToTime(dateStr: string): Time {
   return dateStr as Time;
 }
 
-export default function ChanlunChart({ klines, fractions, strokes, segments, hubs, bsPoints, symbol, stockBasicInfo, industry, actualController, reductionPlans, backtestTrades }: ChanlunChartProps) {
+export default function ChanlunChart({ klines, fractions, strokes, segments, hubs, bsPoints, symbol, stockBasicInfo, industry, actualController, reductionPlans, backtestTrades, timeframe = 'daily', dataPeriod, isLoading = false, onTimeframeChange }: ChanlunChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -177,7 +182,9 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
       timeScale: {
         borderColor: '#1e293b',
         timeVisible: false,
-        rightOffset: 5,
+        // Keep the trailing blank margin minimal so the latest candle sits
+        // near the right edge instead of leaving an empty right pad.
+        rightOffset: 2,
         barSpacing: 8,
         minBarSpacing: 2,
       },
@@ -386,19 +393,24 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
     };
   }, []); // Only create chart once
 
-  // Update data when klines change
+  // Update data when klines change (symbol search / 日线-周线切换).
+  // Position by logical index (not date strings) so the reset always lands on
+  // the newest bars even when the dataset's dates change completely.
+  // Default: show last 80 candles filling the viewport.
   useEffect(() => {
     if (!candleSeriesRef.current || klines.length === 0) return;
 
     candleSeriesRef.current.setData(candleData);
     volumeSeriesRef.current?.setData(volumeData);
 
-    // Default: show last 80 candles
-    if (klines.length > 80) {
-      chartRef.current?.timeScale().setVisibleRange({
-        from: dateToTime(klines[Math.max(0, klines.length - 80)].date),
-        to: dateToTime(klines[klines.length - 1].date),
+    const n = klines.length;
+    if (n > 80) {
+      chartRef.current?.timeScale().setVisibleLogicalRange({
+        from: n - 80,
+        to: n,
       });
+    } else {
+      chartRef.current?.timeScale().fitContent();
     }
   }, [candleData, volumeData, klines]);
 
@@ -1297,7 +1309,6 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
 
           {/* Visibility Toggles */}
           <div className="flex flex-wrap items-center gap-4 px-2 md:px-0">
-
             <div className="flex flex-wrap items-center gap-1 mobile-flat bg-zinc-800/15 md:rounded-xl px-1.5 md:px-2.5 py-1 md:py-1.5 md:border md:border-zinc-700/20">
               <span className="text-[9px] font-bold text-zinc-500 tracking-wider mr-0.5 bg-zinc-800/60 px-1.5 py-0.5 rounded-md leading-none">缠</span>
               <button
@@ -1559,9 +1570,47 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
           ref={chartContainerRef}
           className="w-full h-72 sm:h-96 md:sm:h-[480px] bg-zinc-950/80 md:rounded-b-xl md:border md:border-zinc-800 relative overflow-hidden select-none"
         >
-          {/* Indicator values overlay - top left */}
+          {/* Loading state: only the lightweight-charts canvas area.
+              Shown while switching 日线/周线 (old bars stay mounted beneath). */}
+          {isLoading && (
+            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2.5 bg-zinc-950/65 backdrop-blur-[1.5px]">
+              <div className="h-7 w-7 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+              <p className="text-xs font-medium text-zinc-300">
+                正在切换至{timeframe === 'weekly' ? '周线' : '日线'}…
+              </p>
+            </div>
+          )}
+          {/* Floating timeframe switch: 日线 / 周线 + period info, left-top of the chart */}
+          {onTimeframeChange && (
+            <div className="absolute top-1 left-1 z-20 flex items-center gap-1.5">
+              <div className="flex items-center gap-0.5 bg-zinc-950/70 border border-zinc-700/40 rounded-full p-0.5">
+                {(['daily', 'weekly'] as KlineTimeframe[]).map((tf) => (
+                  <button
+                    key={tf}
+                    type="button"
+                    disabled={isLoading}
+                    onClick={() => tf !== timeframe && onTimeframeChange(tf)}
+                    className={`px-2 py-px rounded-full text-[10px] font-medium font-sans transition-all cursor-pointer disabled:opacity-50 disabled:cursor-wait ${
+                      timeframe === tf
+                        ? 'bg-blue-500/90 text-white shadow-sm shadow-blue-500/20'
+                        : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+                    }`}
+                    title={tf === 'daily' ? '日线级别缠论分析' : '周线级别缠论分析 (中长线趋势)'}
+                  >
+                    {tf === 'daily' ? '日线' : '周线'}
+                  </button>
+                ))}
+              </div>
+              {(dataPeriod || klines.length > 0) && (
+                <span className="text-[10px] font-mono text-zinc-500 [text-shadow:0_1px_3px_rgba(0,0,0,0.9)]">
+                  {timeframe === 'weekly' ? '周线' : '日线'} · {klines.length} 根{dataPeriod ? ` · ${dataPeriod}` : ''}
+                </span>
+              )}
+            </div>
+          )}
+          {/* Indicator values overlay - top left, below the timeframe float */}
           {(showMA5 || showMA20 || showBOLL || showMACD || Object.values(userIndicatorVisibility).some(v => v)) && (
-            <div className="absolute top-1 left-1 z-10 flex flex-row gap-1 pointer-events-none">
+            <div className="absolute top-8 left-1 z-10 flex flex-row gap-1 pointer-events-none">
               {(() => {
                 const idx = hoveredData
                   ? klines.findIndex(k => k.date === hoveredData.date)

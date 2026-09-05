@@ -246,8 +246,13 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
     <nav className="sticky top-0 z-50 text-zinc-100 bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 border-b border-zinc-800/80 shadow-[0_1px_0_0_rgba(59,130,246,0.08),0_4px_24px_-8px_rgba(0,0,0,0.6)] backdrop-blur-xl">
       <div className="w-full h-14 flex items-center">
 
-        {/* Left: Brand */}
-        <div className="flex items-center gap-3 shrink-0 pl-4 md:pl-5 pr-3 h-full border-r border-zinc-800/60">
+        {/* Left: Brand — click to jump to 总览 (dashboard) */}
+        <button
+          type="button"
+          onClick={() => onViewChange?.('dashboard')}
+          title="返回市场总览"
+          className="flex items-center gap-3 shrink-0 pl-4 md:pl-5 pr-3 h-full border-r border-zinc-800/60 cursor-pointer hover:bg-zinc-900/60 transition-colors text-left"
+        >
           <div className="relative w-9 h-9">
             <img src="/icon.png" alt="缠论量化工作台" className="w-full h-full" />
             <div className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-blue-300 ring-2 ring-zinc-950 animate-pulse" />
@@ -262,7 +267,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
               <span className="text-[9px] font-mono text-blue-500/80 tracking-wider">v0.0.1</span>
             </div>
           </div>
-        </div>
+        </button>
 
         {/* Vertical Divider */}
         <div className="hidden md:block h-7 w-px bg-gradient-to-b from-transparent via-zinc-800 to-transparent" />

@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import domtoimage from 'dom-to-image-more';
 import { Kline, Stroke, Segment, Hub, Fraction } from '../types/stock';
-import { chatWithAIStream, ChatMessage } from '../utils/api';
+import { chatWithAIStream, ChatMessage, KlineTimeframe } from '../utils/api';
 import {
   clearCachedModels,
   fetchOpenRouterFreeModels,
@@ -39,6 +39,7 @@ interface GeminiAdvisorProps {
   segments: Segment[];
   hubs: Hub[];
   fractions?: Fraction[];
+  timeframe?: KlineTimeframe;
   onClose?: () => void;
 }
 
@@ -85,6 +86,7 @@ export default function GeminiAdvisor({
   segments,
   hubs,
   fractions = [],
+  timeframe = 'daily',
   onClose,
 }: GeminiAdvisorProps) {
   // Model catalog + selection
@@ -160,6 +162,15 @@ export default function GeminiAdvisor({
     chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
   }, [chatMessages, chatLoading, streamingContent]);
 
+  // 标的切换后旧对话上下文已失效, 自动清空避免误导.
+  // 日线 / 周线切换仅刷新图表, 对话予以保留 (新问题自动基于当前周期上下文作答,
+  // 头部徽标实时显示当前周期与K线数).
+  useEffect(() => {
+    setChatMessages([]);
+    setChatError('');
+    setStreamingContent('');
+  }, [symbol]);
+
   const handleSelectModel = (modelId: string) => {
     setSelectedModel(modelId);
     setStoredSelectedModel(modelId);
@@ -210,6 +221,7 @@ export default function GeminiAdvisor({
         fractions,
         model: selectedModel,
         recentWindow,
+        timeframe,
         messages: nextHistory,
       }, (chunk) => {
         setStreamingContent((prev) => prev + chunk);
@@ -288,6 +300,7 @@ export default function GeminiAdvisor({
         fractions,
         model: selectedModel,
         recentWindow,
+        timeframe,
         messages: trimmed,
       }, (chunk) => {
         setStreamingContent((prev) => prev + chunk);
@@ -565,10 +578,11 @@ export default function GeminiAdvisor({
         {/* Context Summary - Compact */}
         <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[9px] font-mono text-zinc-500">
           <span className="text-zinc-600">上下文:</span>
+          <span className={`px-1.5 py-0.5 rounded border ${timeframe === 'weekly' ? 'bg-blue-500/10 border-blue-500/30 text-blue-300' : 'bg-zinc-950/50 border-zinc-800/50'}`}>{timeframe === 'weekly' ? '周线' : '日线'}</span>
           <span className="px-1.5 py-0.5 rounded bg-zinc-950/50 border border-zinc-800/50">K线 {contextSummary.klines}</span>
           <span className="px-1.5 py-0.5 rounded bg-zinc-950/50 border border-zinc-800/50">笔 {contextSummary.strokes}</span>
           <span className="px-1.5 py-0.5 rounded bg-zinc-950/50 border border-zinc-800/50">中枢 {contextSummary.hubs}</span>
-          <span className="px-1.5 py-0.5 rounded bg-zinc-950/50 border border-zinc-800/50">近{recentWindow}日</span>
+          <span className="px-1.5 py-0.5 rounded bg-zinc-950/50 border border-zinc-800/50">{timeframe === 'weekly' ? `近${recentWindow}周` : `近${recentWindow}日`}</span>
         </div>
       </div>
 

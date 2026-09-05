@@ -133,15 +133,141 @@ export interface GlobalIndexQuote {
   changePercent: number; // 涨跌幅 %
 }
 
-// 全球主要指数: 恒生 / 日经225 / 道琼斯 / 标普500 / 纳斯达克 / 中国金龙 / 富时100 / 德国DAX
-const GLOBAL_INDEX_SECIDS = '100.HSI,100.N225,100.DJIA,100.SPX,100.NDX,251.HXC,100.FTSE,100.GDAXI';
-// 全球科技相关指数: 恒生科技 / 费城半导体ETF(iShares) / 台湾加权 / 韩国KOSPI
-const TECH_INDEX_SECIDS = '124.HSTECH,105.SOXX,100.TWII,100.KS11';
-// 大宗商品与汇率: COMEX黄金 / NYMEX原油(WTI) / 布伦特原油 / 美元指数 / 美元兑离岸人民币
-const COMMODITY_SECIDS = '101.GC00Y,102.CL00Y,112.B00Y,100.UDI,133.USDCNH';
+// 全球主要指数 (34): 亚太 / 北美 / 拉美 / 欧洲 (东财 push2delay ulist 实测可用)
+const GLOBAL_INDEX_SECIDS = '100.HSI,100.HSCEI,100.N225,100.TWII,100.KS11,100.SENSEX,100.STI,100.KLSE,100.JKSE,100.SET,100.PSI,100.VNINDEX,100.AORD,100.DJIA,100.SPX,100.NDX,251.HXC,100.TSX,100.MXX,100.BVSP,100.FTSE,100.GDAXI,100.FCHI,100.SX5E,100.SSMI,100.AEX,100.MIB,100.IBEX,100.HEX,100.ATX,100.RTS,100.OMXC20,100.ISEQ,100.PSI20';
+// 科技与美股 ETF (12): 恒生科技 / 半导体 / 宽基 / 科技 / 创新 / 长债 (实测可用: 105=纳斯达克上市, 107=NYSE Arca/AMEX上市)
+const TECH_INDEX_SECIDS = '124.HSTECH,105.SOXX,105.SMH,105.QQQ,107.SPY,107.DIA,107.IWM,107.XLK,107.VGT,107.ARKK,107.KWEB,105.TLT';
+// 大宗商品与汇率 (17): 贵金属 / 能源 / 农产品 / 美元指数 / 离岸人民币 (实测可用)
+const COMMODITY_SECIDS = '101.GC00Y,101.SI00Y,101.HG00Y,102.CL00Y,112.B00Y,102.NG00Y,102.HO00Y,102.RB00Y,103.ZS00Y,103.ZC00Y,103.ZW00Y,103.ZL00Y,103.ZM00Y,108.CT00Y,108.SB00Y,100.UDI,133.USDCNH';
+// 美股个股 (32): 科技七巨头 / 芯片 / 软件消费 / 金融医药 / 中概ADR (105=纳斯达克, 106=纽交所, 实测可用)
+const US_STOCK_SECIDS = '105.AAPL,105.MSFT,105.NVDA,105.AMZN,105.META,105.GOOGL,105.TSLA,105.AVGO,105.AMD,105.QCOM,105.ARM,105.NFLX,105.ADBE,105.COST,105.PLTR,105.COIN,105.MSTR,105.MU,105.PDD,105.JD,106.V,106.MA,106.JPM,106.LLY,106.UNH,106.XOM,106.DIS,106.CRM,106.ORCL,106.BABA,106.TSM,106.NIO';
+
+// ---------------------------------------------------------------------------
+// 用户自选面板: 环球市场 / 大宗商品与加密货币的可选标的目录 (选择存 localStorage)
+// ---------------------------------------------------------------------------
+
+export type MarketQuoteGroup = 'global' | 'tech' | 'us' | 'commodity';
+
+export interface MarketPickItem {
+  code: string;   // e.g. 'HSI' (卡片 key 与跳转用)
+  secid: string;  // e.g. '100.HSI' (行情接口用)
+  label: string;  // 选择器展示名
+  group: MarketQuoteGroup;
+}
+
+const GLOBAL_PICK_ITEMS: [string, string][] = [
+  // 大中华
+  ['HSI', '恒生指数'], ['HSCEI', '恒生国企'], ['TWII', '台湾加权'],
+  // 东北亚
+  ['N225', '日经225'], ['KS11', '韩国KOSPI'],
+  // 南亚/东南亚/大洋洲
+  ['SENSEX', '印度SENSEX'], ['STI', '新加坡海峡'], ['KLSE', '马来西亚KLCI'],
+  ['JKSE', '印尼雅加达'], ['SET', '泰国SET'], ['PSI', '菲律宾马尼拉'],
+  ['VNINDEX', '越南胡志明'], ['AORD', '澳大利亚普通股'],
+  // 北美
+  ['DJIA', '道琼斯'], ['SPX', '标普500'], ['NDX', '纳斯达克'],
+  ['HXC', '中国金龙'], ['TSX', '加拿大TSX'],
+  // 拉美
+  ['MXX', '墨西哥BOLSA'], ['BVSP', '巴西BOVESPA'],
+  // 欧洲
+  ['FTSE', '富时100'], ['GDAXI', '德国DAX'], ['FCHI', '法国CAC40'],
+  ['SX5E', '欧洲斯托克50'], ['SSMI', '瑞士SMI'], ['AEX', '荷兰AEX'],
+  ['MIB', '意大利MIB'], ['IBEX', '西班牙IBEX35'], ['HEX', '芬兰赫尔辛基'],
+  ['ATX', '奥地利ATX'], ['RTS', '俄罗斯RTS'], ['OMXC20', '丹麦OMX20'],
+  ['ISEQ', '爱尔兰综合'], ['PSI20', '葡萄牙PSI20'],
+];
+const TECH_PICK_ITEMS: [string, string][] = [
+  ['HSTECH', '恒生科技'], ['SOXX', '费城半导体'], ['SMH', '半导体VanEck'],
+  ['QQQ', '纳指100ETF'], ['SPY', '标普500ETF'], ['DIA', '道指ETF'],
+  ['IWM', '罗素2000ETF'], ['XLK', '科技精选ETF'], ['VGT', '信息科技ETF'],
+  ['ARKK', '创新ETF'], ['KWEB', '中概互联网ETF'], ['TLT', '美债20年+ETF'],
+];
+const COMMODITY_PICK_ITEMS: [string, string][] = [
+  // 贵金属/工业金属
+  ['GC00Y', 'COMEX黄金'], ['SI00Y', 'COMEX白银'], ['HG00Y', 'COMEX铜'],
+  // 能源
+  ['CL00Y', 'WTI原油'], ['B00Y', '布伦特原油'], ['NG00Y', '天然气'],
+  ['HO00Y', '燃油'], ['RB00Y', '汽油'],
+  // 农产品 (CBOT/ICE)
+  ['ZS00Y', '大豆'], ['ZC00Y', '玉米'], ['ZW00Y', '小麦'],
+  ['ZL00Y', '豆油'], ['ZM00Y', '豆粕'], ['CT00Y', '棉花'], ['SB00Y', '白糖'],
+  // 汇率
+  ['UDI', '美元指数'], ['USDCNH', '美元兑离岸人民币'],
+];
+const US_PICK_ITEMS: [string, string][] = [
+  // 科技七巨头
+  ['AAPL', '苹果'], ['MSFT', '微软'], ['NVDA', '英伟达'], ['AMZN', '亚马逊'],
+  ['META', 'Meta'], ['GOOGL', '谷歌'], ['TSLA', '特斯拉'],
+  // 芯片
+  ['AVGO', '博通'], ['AMD', '超威半导体'], ['QCOM', '高通'], ['ARM', 'Arm'],
+  ['MU', '美光科技'],
+  // 软件/消费/加密概念
+  ['NFLX', '奈飞'], ['ADBE', '奥多比'], ['COST', '开市客'], ['PLTR', 'Palantir'],
+  ['COIN', 'Coinbase'], ['MSTR', 'Strategy'], ['PDD', '拼多多'], ['JD', '京东'],
+  // 金融/医药/消费 (纽交所)
+  ['V', '维萨'], ['MA', '万事达'], ['JPM', '摩根大通'], ['LLY', '礼来'],
+  ['UNH', '联合健康'], ['XOM', '埃克森美孚'], ['DIS', '迪士尼'],
+  ['CRM', '赛富时'], ['ORCL', '甲骨文'],
+  // 中概/亚太 ADR
+  ['BABA', '阿里巴巴'], ['TSM', '台积电'], ['NIO', '蔚来'],
+];
+
+function buildPickItems(pairs: [string, string][], secids: string, group: MarketQuoteGroup): MarketPickItem[] {
+  const secidByCode = new Map<string, string>();
+  for (const s of secids.split(',')) {
+    const dot = s.indexOf('.');
+    if (dot > 0) secidByCode.set(s.slice(dot + 1), s);
+  }
+  return pairs.map(([code, label]) => ({ code, label, group, secid: secidByCode.get(code) || '' }))
+    .filter((it) => it.secid !== '');
+}
+
+/** 全目录 (顺序即默认展示顺序, 与线上硬编码列表一致) */
+export const MARKET_QUOTE_CATALOG: MarketPickItem[] = [
+  ...buildPickItems(GLOBAL_PICK_ITEMS, GLOBAL_INDEX_SECIDS, 'global'),
+  ...buildPickItems(TECH_PICK_ITEMS, TECH_INDEX_SECIDS, 'tech'),
+  ...buildPickItems(US_PICK_ITEMS, US_STOCK_SECIDS, 'us'),
+  ...buildPickItems(COMMODITY_PICK_ITEMS, COMMODITY_SECIDS, 'commodity'),
+];
+
+/** 默认选中: 环球市场面板 (精简头条, 避免首屏过载; 自选对话框可访问全目录) */
+export const DEFAULT_WORLD_CODES: string[] = [
+  'HSI', 'N225', 'DJIA', 'SPX', 'NDX', 'HXC', 'FTSE', 'GDAXI',
+  'HSTECH', 'SOXX', 'TWII', 'KS11',
+];
+
+/** 默认选中: 大宗商品 (精简头条) */
+export const DEFAULT_COMM_IDS: string[] = ['GC00Y', 'CL00Y', 'B00Y', 'UDI', 'USDCNH'];
+
+/** 默认选中: 主流加密货币 (精简头条) */
+export const DEFAULT_CRYPTO_SYMBOLS: string[] = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'BCHUSDT'];
+
+/** 全目录代码: 环球市场面板 (全球指数 + 科技/ETF + 美股个股, 目录顺序) */
+export const WORLD_CATALOG_CODES: string[] = MARKET_QUOTE_CATALOG
+  .filter((it) => it.group !== 'commodity')
+  .map((it) => it.code);
+
+/** 自选 codes -> 东财 secids 请求串 (保持目录顺序) */
+export function marketSecidsFor(codes: string[]): string {
+  const wanted = new Set(codes);
+  return MARKET_QUOTE_CATALOG.filter((it) => wanted.has(it.code)).map((it) => it.secid).join(',');
+}
+
+/** 按自选顺序排列报价结果 (未选中的丢弃) */
+export function sortQuotesByCodes<T extends { code: string }>(quotes: T[], codes: string[]): T[] {
+  const rank = new Map(codes.map((c, i) => [c, i]));
+  return quotes
+    .filter((q) => rank.has(q.code))
+    .sort((a, b) => (rank.get(a.code) ?? 0) - (rank.get(b.code) ?? 0));
+}
+
+/** code -> 分组 (面板拆分全球指数 / 科技指数用) */
+export function marketGroupOf(code: string): MarketQuoteGroup | undefined {
+  return MARKET_QUOTE_CATALOG.find((it) => it.code === code)?.group;
+}
 
 // 通用: 按东财 secid 批量获取报价 (字段 f2价格 f3涨跌% f4涨跌额 f12代码 f14名称 f18昨收)
-async function fetchQuotesBySecids(secids: string, errMsg: string): Promise<GlobalIndexQuote[]> {
+export async function fetchQuotesBySecids(secids: string, errMsg: string): Promise<GlobalIndexQuote[]> {
   const url = `${EM_DELAY_BASE}/api/qt/ulist.np/get?fltt=2&secids=${secids}&fields=f2,f3,f4,f12,f14,f18`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`${errMsg} (${resp.status})`);
@@ -305,20 +431,92 @@ export interface CryptoQuote {
   quoteVolume: number;   // 24h 成交额 (USDT)
 }
 
-const CRYPTO_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'BCHUSDT'];
+export const CRYPTO_SYMBOLS = [
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT',
+  'ADAUSDT', 'AVAXUSDT', 'LINKUSDT', 'TRXUSDT', 'DOTUSDT', 'POLUSDT',
+  'LTCUSDT', 'BCHUSDT', 'NEARUSDT', 'UNIUSDT', 'APTUSDT', 'ARBUSDT',
+  'OPUSDT', 'INJUSDT', 'SUIUSDT', 'SEIUSDT', 'PEPEUSDT', 'SHIBUSDT',
+  'ATOMUSDT', 'FILUSDT', 'ETCUSDT', 'XLMUSDT', 'HBARUSDT', 'VETUSDT',
+  'ICPUSDT', 'FETUSDT', 'RENDERUSDT', 'TAOUSDT', 'WIFUSDT', 'BONKUSDT',
+  'JUPUSDT', 'ONDOUSDT', 'AAVEUSDT',
+];
 const CRYPTO_NAMES: Record<string, string> = {
   BTCUSDT: '比特币 (BTC)',
   ETHUSDT: '以太坊 (ETH)',
   SOLUSDT: 'SOL',
   BNBUSDT: 'BNB',
   XRPUSDT: '瑞波币 (XRP)',
+  DOGEUSDT: '狗狗币 (DOGE)',
+  ADAUSDT: '艾达币 (ADA)',
+  AVAXUSDT: '雪崩 (AVAX)',
+  LINKUSDT: 'Chainlink (LINK)',
+  TRXUSDT: '波场 (TRX)',
+  DOTUSDT: '波卡 (DOT)',
+  POLUSDT: 'Polygon (POL)',
+  LTCUSDT: '莱特币 (LTC)',
   BCHUSDT: '比特币现金 (BCH)',
+  NEARUSDT: 'NEAR',
+  UNIUSDT: 'Uniswap (UNI)',
+  APTUSDT: 'Aptos (APT)',
+  ARBUSDT: 'Arbitrum (ARB)',
+  OPUSDT: 'Optimism (OP)',
+  INJUSDT: 'Injective (INJ)',
+  SUIUSDT: 'Sui (SUI)',
+  SEIUSDT: 'Sei (SEI)',
+  PEPEUSDT: 'Pepe (PEPE)',
+  SHIBUSDT: '柴犬币 (SHIB)',
+  ATOMUSDT: 'Cosmos (ATOM)',
+  FILUSDT: 'Filecoin (FIL)',
+  ETCUSDT: '以太坊经典 (ETC)',
+  XLMUSDT: '恒星币 (XLM)',
+  HBARUSDT: 'Hedera (HBAR)',
+  VETUSDT: '唯链 (VET)',
+  ICPUSDT: 'ICP',
+  FETUSDT: 'Fetch.ai (FET)',
+  RENDERUSDT: 'Render (RENDER)',
+  TAOUSDT: 'Bittensor (TAO)',
+  WIFUSDT: 'dogwifhat (WIF)',
+  BONKUSDT: 'Bonk (BONK)',
+  JUPUSDT: 'Jupiter (JUP)',
+  ONDOUSDT: 'Ondo (ONDO)',
+  AAVEUSDT: 'Aave (AAVE)',
 };
 
+export interface CryptoPickItem {
+  symbol: string; // e.g. 'BTCUSDT'
+  label: string;  // e.g. '比特币 (BTC)'
+}
+
+/** 加密货币可选目录 (顺序即默认展示顺序) */
+export const CRYPTO_CATALOG: CryptoPickItem[] = CRYPTO_SYMBOLS.map((s) => ({
+  symbol: s,
+  label: CRYPTO_NAMES[s] || s,
+}));
+
+/** 是否为已知加密货币标的 (自选 id 归属判断用) */
+export function isCryptoSymbol(id: string): boolean {
+  return Object.prototype.hasOwnProperty.call(CRYPTO_NAMES, id);
+}
+
+/** 全目录代码: 大宗商品与加密货币面板 (商品汇率 + 全部加密货币, 目录顺序) */
+export const COMM_CATALOG_CODES: string[] = [
+  ...MARKET_QUOTE_CATALOG.filter((it) => it.group === 'commodity').map((it) => it.code),
+  ...CRYPTO_SYMBOLS,
+];
+
+/** 自选 symbols 过滤: 仅保留已知标的 (保持目录顺序); 不传则返回全部 */
+function resolveCryptoList(symbols?: string[]): string[] {
+  if (!symbols) return CRYPTO_SYMBOLS;
+  const wanted = new Set(symbols.map((s) => s.trim().toUpperCase()));
+  return CRYPTO_SYMBOLS.filter((s) => wanted.has(s));
+}
+
 // 主流加密货币行情 (Binance 公共行情接口, 24h ticker, USD 计价)
-export async function fetchCryptoQuotes(): Promise<CryptoQuote[]> {
-  const symbols = encodeURIComponent(JSON.stringify(CRYPTO_SYMBOLS));
-  const resp = await fetch(`https://data-api.binance.vision/api/v3/ticker/24hr?symbols=${symbols}`);
+export async function fetchCryptoQuotes(symbols?: string[]): Promise<CryptoQuote[]> {
+  const list = resolveCryptoList(symbols);
+  if (list.length === 0) return [];
+  const param = encodeURIComponent(JSON.stringify(list));
+  const resp = await fetch(`https://data-api.binance.vision/api/v3/ticker/24hr?symbols=${param}`);
   if (!resp.ok) throw new Error(`加密货币行情接口错误 (${resp.status})`);
 
   const arr = await resp.json();
@@ -338,17 +536,22 @@ export async function fetchCryptoQuotes(): Promise<CryptoQuote[]> {
       quoteVolume: parseFloat(it.quoteVolume) || 0,
     });
   }
-  // 按预设顺序输出
-  return CRYPTO_SYMBOLS.map((s) => map.get(s)).filter((q): q is CryptoQuote => !!q);
+  // 按目录顺序输出 (自选子集保持相对顺序)
+  return list.map((s) => map.get(s)).filter((q): q is CryptoQuote => !!q);
 }
 
 // 加密货币实时行情: Binance WebSocket @ticker 流 (每秒推送 24h 滚动统计)
 // 返回取消订阅函数; 断线自动重连; onStatus 用于上报连接状态 (live=true 表示实时推送中)
+// symbols 为自选子集 (不传则订阅全部); 推送恒为完整快照, 不会收缩
 export function subscribeCryptoQuotes(
   onUpdate: (quotes: CryptoQuote[]) => void,
   onStatus?: (live: boolean) => void,
+  symbols?: string[],
 ): () => void {
-  const streams = CRYPTO_SYMBOLS.map((s) => `${s.toLowerCase()}@ticker`).join('/');
+  const list = resolveCryptoList(symbols);
+  if (list.length === 0) return () => {};
+  const wanted = new Set(list);
+  const streams = list.map((s) => `${s.toLowerCase()}@ticker`).join('/');
   const latest = new Map<string, CryptoQuote>();
   let ws: WebSocket | null = null;
   let closed = false;
@@ -376,8 +579,8 @@ export function subscribeCryptoQuotes(
         const d = msg?.data;
         if (!d || d.e !== '24hrTicker') return;
         setLive(true);
-        const symbol = String(d.s || '');
-        if (!CRYPTO_NAMES[symbol]) return;
+        const symbol = String(d.s || '').toUpperCase();
+        if (!wanted.has(symbol) || !CRYPTO_NAMES[symbol]) return;
         latest.set(symbol, {
           symbol,
           base: symbol.replace('USDT', ''),
@@ -388,8 +591,12 @@ export function subscribeCryptoQuotes(
           low: parseFloat(d.l) || 0,
           quoteVolume: parseFloat(d.q) || 0,
         });
-        // 按预设顺序输出
-        onUpdate(CRYPTO_SYMBOLS.map((s) => latest.get(s)).filter((q): q is CryptoQuote => !!q));
+        // 仅推送完整快照: 每条 WS 消息只带一只币种, 未集齐就推送会导致
+        // 消费方卡片先消失后逐个出现 (连接建立 / 重连时必现闪烁)。
+        // latest 在重连间保持, 因此重连后每次推送仍是完整集合。
+        if (latest.size < list.length) return;
+        // 按目录顺序输出
+        onUpdate(list.map((s) => latest.get(s)).filter((q): q is CryptoQuote => !!q));
       } catch { /* 忽略单条消息解析错误 */ }
     };
     ws.onclose = () => {
@@ -508,16 +715,29 @@ export function getMarketSessions(): Record<MarketId, MarketSessionInfo> {
   return out;
 }
 
-/** 环球指数东财代码 -> 所属市场 (无对应市场的返回 null) */
+/** 环球指数东财代码 -> 所属市场 (无对应市场的返回 null; ETF 代理归属美股时段) */
 export function marketIdForIndexCode(code: string): MarketId | null {
   const map: Record<string, MarketId> = {
-    HSI: 'hk', HSTECH: 'hk',
+    HSI: 'hk', HSCEI: 'hk', HSTECH: 'hk',
     N225: 'jp',
     TWII: 'tw',
     KS11: 'kr',
-    DJIA: 'us', SPX: 'us', NDX: 'us', HXC: 'us', SOXX: 'us',
+    SENSEX: 'hk', STI: 'hk', KLSE: 'hk', JKSE: 'hk', SET: 'hk',
+    PSI: 'hk', VNINDEX: 'hk', AORD: 'hk',
+    DJIA: 'us', SPX: 'us', NDX: 'us', HXC: 'us',
+    SOXX: 'us', SMH: 'us', QQQ: 'us', SPY: 'us', DIA: 'us', IWM: 'us',
+    XLK: 'us', VGT: 'us', ARKK: 'us', KWEB: 'us', TLT: 'us',
+    AAPL: 'us', MSFT: 'us', NVDA: 'us', AMZN: 'us', META: 'us', GOOGL: 'us', TSLA: 'us',
+    AVGO: 'us', AMD: 'us', QCOM: 'us', ARM: 'us', MU: 'us',
+    NFLX: 'us', ADBE: 'us', COST: 'us', PLTR: 'us', COIN: 'us', MSTR: 'us',
+    PDD: 'us', JD: 'us', V: 'us', MA: 'us', JPM: 'us', LLY: 'us',
+    UNH: 'us', XOM: 'us', DIS: 'us', CRM: 'us', ORCL: 'us',
+    BABA: 'us', TSM: 'us', NIO: 'us',
+    TSX: 'us', MXX: 'us', BVSP: 'us',
     FTSE: 'uk',
-    GDAXI: 'de',
+    GDAXI: 'de', FCHI: 'de', SX5E: 'de', SSMI: 'de', AEX: 'de',
+    MIB: 'de', IBEX: 'de', HEX: 'de', ATX: 'de',
+    RTS: 'de', OMXC20: 'de', ISEQ: 'uk', PSI20: 'de',
   };
   return map[code] ?? null;
 }

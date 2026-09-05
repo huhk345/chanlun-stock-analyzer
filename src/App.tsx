@@ -19,7 +19,7 @@ import {
   calculateHubs,
   calculateBSPoints
 } from './utils/chanlun';
-import { fetchStockData, fetchStockBasicInfo, resolveSymbol } from './utils/api';
+import { fetchStockData, fetchStockBasicInfo, resolveSymbol, KlineTimeframe } from './utils/api';
 
 interface ReductionPlan {
   title: string;
@@ -45,6 +45,62 @@ const NAVBAR_HEIGHT = 56;
 
 type ViewMode = 'dashboard' | 'indexes' | 'analyzer';
 
+// Parse the current location into app routing state.
+// Mirrors the initial-view logic: presence of ?code= implies the analyzer view.
+function parseAppUrl(): { view: ViewMode; code: string; timeframe: KlineTimeframe } {
+  const params = new URLSearchParams(window.location.search);
+  const rawView = params.get('view');
+  const code = params.get('code') || '000001.ss';
+  const timeframe: KlineTimeframe = params.get('tf') === 'weekly' ? 'weekly' : 'daily';
+  let view: ViewMode = 'dashboard';
+  if (rawView === 'analyzer' || params.get('code')) {
+    view = 'analyzer';
+  } else if (rawView === 'indexes') {
+    view = 'indexes';
+  }
+  return { view, code, timeframe };
+}
+
+// Write routing state to the URL. Push creates a history entry (back-button
+// support); replace only canonicalizes the current entry without adding one.
+// Identical URLs are skipped to avoid duplicate history entries.
+function syncAppUrl(
+  view: ViewMode,
+  symbol: string,
+  timeframe: KlineTimeframe,
+  mode: 'push' | 'replace',
+) {
+  const url = new URL(window.location.href);
+  if (view === 'dashboard') {
+    url.searchParams.set('view', 'dashboard');
+    url.searchParams.delete('code');
+  } else if (view === 'indexes') {
+    url.searchParams.set('view', 'indexes');
+    url.searchParams.delete('code');
+  } else {
+    url.searchParams.set('view', 'analyzer');
+    if (symbol) url.searchParams.set('code', symbol);
+  }
+  if (timeframe === 'weekly') url.searchParams.set('tf', 'weekly');
+  else url.searchParams.delete('tf');
+  const next = url.toString();
+  if (next === window.location.href) return;
+  if (mode === 'push') window.history.pushState({}, '', next);
+  else window.history.replaceState({}, '', next);
+}
+
+// Pure ChanLun pipeline: raw klines -> fractions / strokes / segments / hubs / BS points.
+// Shared by full stock loads and chart-only timeframe switches.
+function computeChanlunParts(rawKlines: Kline[]) {
+  const merged = mergeKlines(rawKlines);
+  const fractions = findFractions(merged, rawKlines);
+  const computedStrokes = calculateStrokes(fractions);
+  const computedSegments = calculateSegments(computedStrokes);
+  const computedHubs = calculateHubs(computedStrokes);
+  const computedBSPoints = calculateBSPoints(rawKlines, computedStrokes);
+  return { fractions, computedStrokes, computedSegments, computedHubs, computedBSPoints };
+}
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState<SupabaseUser | null>(null);
   const [isConfigOpen, setIsConfigOpen] = useState(false);
@@ -53,13 +109,8 @@ export default function App() {
 
   // View routing: dashboard is the index page; analyzer is the stock workspace.
   // Entering analyzer via ?view=analyzer or a shared ?code= link.
-  const initialParams = new URLSearchParams(window.location.search);
-  const initialView: ViewMode =
-    initialParams.get('view') === 'analyzer' || initialParams.get('code')
-      ? 'analyzer'
-      : initialParams.get('view') === 'indexes'
-        ? 'indexes'
-        : 'dashboard';
+  const initialRoute = parseAppUrl();
+  const initialView: ViewMode = initialRoute.view;
   const [view, setView] = useState<ViewMode>(initialView);
 
   // Prevent double API calls in StrictMode
@@ -91,11 +142,22 @@ export default function App() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Stock queries parameters
-  const initialCode = new URLSearchParams(window.location.search).get('code') || '000001.ss';
+  // Stock queries parameters.
+  // Default always 日线: fresh loads ignore ?tf= (in-session toggle still works).
+  const initialCode = initialRoute.code;
+  const initialTimeframe: KlineTimeframe = 'daily';
   const [symbol, setSymbol] = useState(initialCode);
+  const [timeframe, setTimeframe] = useState<KlineTimeframe>(initialTimeframe);
   const [isLoading, setIsLoading] = useState(false);
   const [errorText, setErrorText] = useState('');
+  const timeframeRef = useRef<KlineTimeframe>(initialTimeframe);
+  timeframeRef.current = timeframe;
+  // Refs for the popstate handler (registered once) to read latest state
+  // without re-subscribing on every render.
+  const viewRef = useRef<ViewMode>(initialView);
+  viewRef.current = view;
+  const symbolRef = useRef<string>(initialCode);
+  symbolRef.current = symbol;
 
   // Processed ChanLun arrays
   const [klines, setKlines] = useState<Kline[]>([]);
@@ -105,16 +167,18 @@ export default function App() {
   const [hubs, setHubs] = useState<Hub[]>([]);
   const [bsPoints, setBsPoints] = useState<BSPoint[]>([]);
   const [dataSource, setDataSource] = useState('');
+  const [dataPeriod, setDataPeriod] = useState('');
   const [stockBasicInfo, setStockBasicInfo] = useState<StockBasicInfo | null>(null);
   const [stockMeta, setStockMeta] = useState<StockMeta | null>(null);
   const [backtestTrades, setBacktestTrades] = useState<BacktestTrade[]>([]);
 
-  const fetchAndProcessStock = async (querySymbol: string) => {
+  const fetchAndProcessStock = async (querySymbol: string, forcedTimeframe?: KlineTimeframe) => {
+    const tf = forcedTimeframe ?? timeframeRef.current;
     setIsLoading(true);
     setErrorText('');
 
     try {
-      const data = await fetchStockData(querySymbol);
+      const data = await fetchStockData(querySymbol, tf);
       const rawKlines: Kline[] = data.klines || [];
       
       if (rawKlines.length < 5) {
@@ -128,12 +192,8 @@ export default function App() {
       });
 
       // Step-by-step ChanLun execution on fetched candlesticks
-      const merged = mergeKlines(rawKlines);
-      const fractions = findFractions(merged, rawKlines);
-      const computedStrokes = calculateStrokes(fractions);
-      const computedSegments = calculateSegments(computedStrokes);
-      const computedHubs = calculateHubs(computedStrokes);
-      const computedBSPoints = calculateBSPoints(rawKlines, computedStrokes);
+      const { fractions, computedStrokes, computedSegments, computedHubs, computedBSPoints } =
+        computeChanlunParts(rawKlines);
 
       // Wait for basic info and sync React state
       const basicInfo = await basicInfoPromise;
@@ -175,13 +235,13 @@ export default function App() {
       setBsPoints(computedBSPoints);
       setBacktestTrades([]);
       setDataSource(data.source || 'TickFlow API');
+      setDataPeriod(data.period || '');
       setStockBasicInfo(basicInfo);
 
-      // Update URL with stock code for bookmark/refresh support
-      const url = new URL(window.location.href);
-      url.searchParams.set('view', 'analyzer');
-      url.searchParams.set('code', querySymbol);
-      window.history.replaceState({}, '', url.toString());
+      // Update URL with stock code + timeframe for bookmark/refresh support.
+      // Replace only: the history entry was already pushed by the navigation
+      // handler (or restored via popstate), so this just canonicalizes it.
+      syncAppUrl('analyzer', querySymbol, tf, 'replace');
 
     } catch (err: any) {
       console.error(err);
@@ -191,26 +251,81 @@ export default function App() {
     }
   };
 
-  // Search from navbar / dashboard always lands on the analyzer view
-  const handleSearch = (querySymbol: string) => {
+  // Latest fetch/klines via refs so the popstate listener (registered once)
+  // always calls the current implementation and sees current data.
+  const fetchRef = useRef<typeof fetchAndProcessStock | null>(null);
+  fetchRef.current = fetchAndProcessStock;
+  const klinesRef = useRef<Kline[]>(klines);
+  klinesRef.current = klines;
+
+  // Search from navbar / dashboard / scan always lands on the analyzer view.
+  // Push a history entry so the browser back button returns to the previous view/stock.
+  // Optional `tf` (from the 买卖点扫描周期切换) jumps straight into that timeframe
+  // so weekly scan results open a weekly chart for every index/stock/ETF.
+  const handleSearch = (querySymbol: string, tf?: KlineTimeframe) => {
+    if (tf && tf !== timeframeRef.current) {
+      setTimeframe(tf);
+      timeframeRef.current = tf;
+    }
+    const activeTf = tf ?? timeframeRef.current;
+    syncAppUrl('analyzer', querySymbol, activeTf, 'push');
     setView('analyzer');
-    fetchAndProcessStock(querySymbol);
+    fetchAndProcessStock(querySymbol, activeTf);
+  };
+
+  // 日线 / 周线切换: 仅重拉图表 (K线 + 缠论重算), 其他信息保持不动.
+  // 不碰: 基本面报价、行业/减持元数据、AI 对话 (GeminiAdvisor 仅在换股时清空)、
+  // 回测报告 (BacktestManager 本地状态保留); 只有叠加在K线上的回测标记随图表刷新。
+  const fetchChartTimeframe = async (querySymbol: string, next: KlineTimeframe) => {
+    setIsLoading(true);
+    setErrorText('');
+
+    try {
+      const data = await fetchStockData(querySymbol, next);
+      const rawKlines: Kline[] = data.klines || [];
+
+      if (rawKlines.length < 5) {
+        throw new Error('Retrieved stock history has insufficient data bars for ChanLun processing.');
+      }
+
+      const { fractions, computedStrokes, computedSegments, computedHubs, computedBSPoints } =
+        computeChanlunParts(rawKlines);
+
+      setSymbol(data.symbol);
+      setKlines(rawKlines);
+      setFractions(fractions);
+      setStrokes(computedStrokes);
+      setSegments(computedSegments);
+      setHubs(computedHubs);
+      setBsPoints(computedBSPoints);
+      setBacktestTrades([]);
+      setDataSource(data.source || '');
+      setDataPeriod(data.period || '');
+
+      syncAppUrl('analyzer', querySymbol, next, 'replace');
+    } catch (err: any) {
+      console.error(err);
+      setErrorText(err.message || 'Failed to query and process mechanical stock charts. Please check parameters.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 日线 / 周线切换: 保持当前 symbol, 仅刷新图表并进入 loading 态
+  const handleTimeframeChange = (next: KlineTimeframe) => {
+    if (next === timeframe || isLoading) return;
+    setTimeframe(next);
+    timeframeRef.current = next;
+    syncAppUrl(viewRef.current, symbolRef.current, next, 'push');
+    if (view === 'analyzer' && symbol) {
+      fetchChartTimeframe(symbol, next);
+    }
   };
 
   const handleViewChange = (nextView: ViewMode) => {
+    if (nextView === viewRef.current && nextView !== 'analyzer') return;
     setView(nextView);
-    const url = new URL(window.location.href);
-    if (nextView === 'dashboard') {
-      url.searchParams.set('view', 'dashboard');
-      url.searchParams.delete('code');
-    } else if (nextView === 'indexes') {
-      url.searchParams.set('view', 'indexes');
-      url.searchParams.delete('code');
-    } else {
-      url.searchParams.set('view', 'analyzer');
-      if (symbol) url.searchParams.set('code', symbol);
-    }
-    window.history.replaceState({}, '', url.toString());
+    syncAppUrl(nextView, symbolRef.current, timeframeRef.current, 'push');
 
     // First entry into the analyzer loads the current symbol
     if (nextView === 'analyzer' && klines.length === 0 && !isLoading) {
@@ -218,14 +333,56 @@ export default function App() {
     }
   };
 
-  // Run on mount: only the analyzer view needs the default chart immediately
+  // Run on mount: only the analyzer view needs the default chart immediately.
+  // Default always 日线: drop any ?tf= from the URL so it matches the daily state.
   useEffect(() => {
     if (hasInitialized.current) return;
     hasInitialized.current = true;
+    const bootUrl = new URL(window.location.href);
+    if (bootUrl.searchParams.has('tf')) {
+      bootUrl.searchParams.delete('tf');
+      window.history.replaceState({}, '', bootUrl.toString());
+    }
     if (initialView === 'analyzer') {
       const urlCode = new URLSearchParams(window.location.search).get('code') || '000001.ss';
-      fetchAndProcessStock(urlCode);
+      fetchAndProcessStock(urlCode, timeframeRef.current);
     }
+  }, []);
+
+  // Browser back/forward support: restore view + symbol + timeframe from the
+  // URL and refetch the analyzer chart when the restored stock/period differs.
+  useEffect(() => {
+    const normalize = (code: string) => {
+      try {
+        return resolveSymbol(code).resolved;
+      } catch {
+        return code.trim().toUpperCase();
+      }
+    };
+    const onPopState = () => {
+      const route = parseAppUrl();
+      const prevView = viewRef.current;
+      const prevSymbol = symbolRef.current;
+      const prevTf = timeframeRef.current;
+      const viewChanged = route.view !== prevView;
+      const symbolChanged = normalize(route.code) !== normalize(prevSymbol);
+      const tfChanged = route.timeframe !== prevTf;
+
+      if (viewChanged) setView(route.view);
+      if (tfChanged) setTimeframe(route.timeframe);
+      viewRef.current = route.view;
+      timeframeRef.current = route.timeframe;
+
+      if (route.view === 'analyzer') {
+        const needFetch =
+          viewChanged || symbolChanged || tfChanged || klinesRef.current.length === 0;
+        if (needFetch) {
+          fetchRef.current?.(route.code, route.timeframe);
+        }
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
   // Persist rail width whenever it settles.
@@ -322,8 +479,10 @@ export default function App() {
         style={{ paddingRight: isMobile ? `10px` : `calc(${railOffset}px + 1rem)` }}
       >
 
-        {/* Global Loading / Error messages block */}
-        {isLoading && (
+        {/* Global Loading / Error messages block.
+            Initial load (no data yet): full-page spinner.
+            Timeframe switch (data exists): keep chart mounted, overlay loading mode instead. */}
+        {isLoading && klines.length === 0 && (
           <div className="p-6 md:p-12 text-center flex flex-col items-center justify-center">
             <div className="h-8 w-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin mb-4" />
             <h4 className="text-sm font-semibold text-zinc-200">编译技术市场画布</h4>
@@ -341,11 +500,14 @@ export default function App() {
           </div>
         )}
 
-        {/* Content Panels - Stacked, full width under the rail */}
-        {!isLoading && klines.length > 0 && (
+        {/* Content Panels - Stacked, full width under the rail.
+            Keep mounted during timeframe refetch so only the chart canvas
+            shows loading instead of unmounting. */}
+        {klines.length > 0 && (
           <div className="flex flex-col gap-0 md:gap-6 h-full min-w-0">
 
-            {/* Main Chart */}
+            {/* Main Chart (stays mounted during 日线/周线 refetch;
+                the lightweight-charts canvas itself shows loading state) */}
             <div className="flex-1 min-h-0 min-w-0">
               <ChanlunChart
                 klines={klines}
@@ -360,6 +522,10 @@ export default function App() {
                 actualController={stockMeta?.actual_controller}
                 reductionPlans={stockMeta?.reduction_plans}
                 backtestTrades={backtestTrades}
+                timeframe={timeframe}
+                dataPeriod={dataPeriod}
+                isLoading={isLoading}
+                onTimeframeChange={handleTimeframeChange}
               />
             </div>
 
@@ -373,6 +539,7 @@ export default function App() {
                   segments={segments}
                   hubs={hubs}
                   fractions={fractions}
+                  timeframe={timeframe}
                   onClose={() => setIsChatVisible(false)}
                 />
               </div>
@@ -428,6 +595,7 @@ export default function App() {
               segments={segments}
               hubs={hubs}
               fractions={fractions}
+              timeframe={timeframe}
               onClose={() => setIsChatVisible(false)}
             />
           </div>

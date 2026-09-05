@@ -209,19 +209,24 @@ function getApiKey(): string {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+export type ScanTimeframe = 'daily' | 'weekly';
+
 /**
- * 拉取单只标的近 1 年日 K 线 (前复权), 带 429/网络重试。
+ * 拉取单只标的 K 线 (前复权), 带 429/网络重试。
+ * - daily: 近 1 年日 K (period=1d, count=400 自然日 ≈ 270+ 个交易日)
+ * - weekly: 周 K (period=1w, count=400 周 ≈ 7-8 年, 保证缠论笔/线段/中枢有足够历史)
  * signal 用于扫描取消时中断等待。
  */
 export async function fetchYearKlines(
   symbol: string,
   maxRetries = 3,
   signal?: AbortSignal,
+  timeframe: ScanTimeframe = 'daily',
 ): Promise<Kline[]> {
   const apiKey = getApiKey();
   const baseUrl = apiKey ? 'https://api.tickflow.org' : 'https://free-api.tickflow.org';
-  // count 为自然日口径: 400 天 ≈ 270+ 个交易日 > 1 年
-  const url = `${baseUrl}/v1/klines?symbol=${symbol}&period=1d&count=400&adjust=forward`;
+  const period = timeframe === 'weekly' ? '1w' : '1d';
+  const url = `${baseUrl}/v1/klines?symbol=${symbol}&period=${period}&count=400&adjust=forward`;
 
   const headers: Record<string, string> = {};
   if (apiKey) headers['x-api-key'] = apiKey;

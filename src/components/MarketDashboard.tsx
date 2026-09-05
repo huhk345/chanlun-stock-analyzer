@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { RefreshCw, Activity, Waves, TrendingUp, LayoutGrid, ListOrdered, ChevronRight, AlertTriangle, Flame, Star, X, Trophy, Globe, Coins, Scale } from 'lucide-react';
+import { RefreshCw, Activity, Waves, TrendingUp, LayoutGrid, ListOrdered, ChevronRight, AlertTriangle, Flame, Star, X, Trophy, Globe, Coins, Scale, SlidersHorizontal, Check } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from 'recharts';
 import {
   IndexQuote,
@@ -21,11 +21,20 @@ import {
   fetchStockFlowTop,
   fetchHotSectors,
   fetchMarketSentiment,
-  fetchGlobalIndexQuotes,
-  fetchTechIndexQuotes,
-  fetchCommodityQuotes,
   fetchCryptoQuotes,
+  fetchQuotesBySecids,
   subscribeCryptoQuotes,
+  MARKET_QUOTE_CATALOG,
+  DEFAULT_WORLD_CODES,
+  DEFAULT_COMM_IDS,
+  DEFAULT_CRYPTO_SYMBOLS,
+  WORLD_CATALOG_CODES,
+  COMM_CATALOG_CODES,
+  CRYPTO_CATALOG,
+  marketSecidsFor,
+  sortQuotesByCodes,
+  marketGroupOf,
+  isCryptoSymbol,
   fetchInstitutionPositions,
   isCnMarketOpen,
   anyGlobalMarketOpen,
@@ -76,6 +85,210 @@ function SessionDot({ s }: { s?: MarketSessionInfo }) {
       }`}
       title={`${s.label}${s.open ? '交易中' : '已休市'} · 当地时间 ${s.localTime}`}
     />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 用户自选面板: 环球市场 / 大宗商品与加密货币的显示标的可自定义, 存 localStorage
+// ---------------------------------------------------------------------------
+
+const WORLD_SEL_KEY = 'chanlun_panel_world';
+const COMM_SEL_KEY = 'chanlun_panel_comm';
+
+// 自选对话框展示全目录 (所有可获取行情的指数/ETF/商品/加密货币);
+// 默认展示保持精简头条, 避免首屏过载
+const WORLD_VALID_IDS: string[] = WORLD_CATALOG_CODES;
+const COMM_VALID_IDS: string[] = COMM_CATALOG_CODES;
+const DEFAULT_COMM_ALL: string[] = [...DEFAULT_COMM_IDS, ...DEFAULT_CRYPTO_SYMBOLS];
+
+/** 读取自选 id 列表: 缺失/损坏回退默认; 空数组视为用户清空, 予以尊重 */
+export function loadIdSelection(key: string, valid: string[], fallback: string[]): string[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return fallback;
+    const set = new Set(valid);
+    const ids = arr.filter((x: unknown): x is string => typeof x === 'string' && set.has(x));
+    if (arr.length > 0 && ids.length === 0) return fallback;
+    return ids;
+  } catch {
+    return fallback;
+  }
+}
+
+export function persistIdSelection(key: string, ids: string[]) {
+  try {
+    localStorage.setItem(key, JSON.stringify(ids));
+  } catch { /* ignore */ }
+}
+
+/** 按目录顺序整理自选 (布局稳定, 不随点击顺序漂移) */
+export function orderIdsByCatalog(ids: string[], valid: string[]): string[] {
+  const set = new Set(ids);
+  return valid.filter((id) => set.has(id));
+}
+
+// 自选对话框条目: 左侧名称 + 右侧代码
+export interface MarketPickEntry { id: string; name: string; sub: string }
+export interface MarketPickGroup { label: string; items: MarketPickEntry[] }
+
+// 自选对话框分组: code -> 选择器条目 (保持目录顺序)
+function marketPickEntries(codes: string[]): MarketPickEntry[] {
+  const byCode = new Map(MARKET_QUOTE_CATALOG.map((i) => [i.code, i]));
+  return codes
+    .map((c) => byCode.get(c))
+    .filter((i): i is NonNullable<typeof i> => !!i)
+    .map((i) => ({ id: i.code, name: i.label, sub: i.code }));
+}
+
+function cryptoPickEntries(symbols: string[]): MarketPickEntry[] {
+  return CRYPTO_CATALOG.filter((c) => symbols.includes(c.symbol)).map((c) => ({
+    id: c.symbol,
+    name: c.label,
+    sub: c.symbol.replace(/USDT$/, ''),
+  }));
+}
+
+/** 环球市场自选分组: 亚太 / 美洲 / 欧洲 / 科技与ETF / 美股个股 */
+function buildWorldPickGroups(): MarketPickGroup[] {
+  return [
+    { label: '亚太指数', items: marketPickEntries(['HSI', 'HSCEI', 'N225', 'TWII', 'KS11', 'SENSEX', 'STI', 'KLSE', 'JKSE', 'SET', 'PSI', 'VNINDEX', 'AORD']) },
+    { label: '美洲指数', items: marketPickEntries(['DJIA', 'SPX', 'NDX', 'HXC', 'TSX', 'MXX', 'BVSP']) },
+    { label: '欧洲指数', items: marketPickEntries(['FTSE', 'GDAXI', 'FCHI', 'SX5E', 'SSMI', 'AEX', 'MIB', 'IBEX', 'HEX', 'ATX', 'RTS', 'OMXC20', 'ISEQ', 'PSI20']) },
+    { label: '科技与ETF', items: marketPickEntries(['HSTECH', 'SOXX', 'SMH', 'QQQ', 'SPY', 'DIA', 'IWM', 'XLK', 'VGT', 'ARKK', 'KWEB', 'TLT']) },
+    { label: '美股 · 科技巨头', items: marketPickEntries(['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA']) },
+    { label: '美股 · 芯片', items: marketPickEntries(['AVGO', 'AMD', 'QCOM', 'ARM', 'MU']) },
+    { label: '美股 · 软件消费', items: marketPickEntries(['NFLX', 'ADBE', 'COST', 'PLTR', 'COIN', 'MSTR', 'PDD', 'JD']) },
+    { label: '美股 · 金融医药', items: marketPickEntries(['V', 'MA', 'JPM', 'LLY', 'UNH', 'XOM', 'DIS', 'CRM', 'ORCL']) },
+    { label: '美股 · 中概ADR', items: marketPickEntries(['BABA', 'TSM', 'NIO']) },
+  ].filter((g) => g.items.length > 0);
+}
+
+/** 商品与加密货币自选分组: 金属 / 能源 / 农产品 / 汇率 / 主流币 / 更多币种 */
+function buildCommPickGroups(): MarketPickGroup[] {
+  const mainstream = new Set(DEFAULT_CRYPTO_SYMBOLS);
+  const allCrypto = CRYPTO_CATALOG.map((c) => c.symbol);
+  return [
+    { label: '贵金属与金属', items: marketPickEntries(['GC00Y', 'SI00Y', 'HG00Y']) },
+    { label: '能源', items: marketPickEntries(['CL00Y', 'B00Y', 'NG00Y', 'HO00Y', 'RB00Y']) },
+    { label: '农产品', items: marketPickEntries(['ZS00Y', 'ZC00Y', 'ZW00Y', 'ZL00Y', 'ZM00Y', 'CT00Y', 'SB00Y']) },
+    { label: '汇率', items: marketPickEntries(['UDI', 'USDCNH']) },
+    { label: '主流加密货币', items: cryptoPickEntries(allCrypto.filter((s) => mainstream.has(s))) },
+    { label: '更多加密货币', items: cryptoPickEntries(allCrypto.filter((s) => !mainstream.has(s))) },
+  ].filter((g) => g.items.length > 0);
+}
+
+function MarketPickDialog({ title, subtitle, groups, selected, onToggle, onToggleGroup, onSelectAll, onClear, onReset, onClose }: {
+  title: string;
+  subtitle?: string;
+  groups: MarketPickGroup[];
+  selected: string[];
+  onToggle: (id: string) => void;
+  onToggleGroup: (ids: string[], select: boolean) => void;
+  onSelectAll: () => void;
+  onClear: () => void;
+  onReset: () => void;
+  onClose: () => void;
+}) {
+  const selectedSet = new Set(selected);
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+      <div
+        onClick={e => e.stopPropagation()}
+        className="relative bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl w-[92vw] max-w-xl p-5 max-h-[82vh] flex flex-col"
+      >
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+            <SlidersHorizontal className="h-4 w-4 text-blue-400" />
+            {title}
+          </h3>
+          <button
+            onClick={onClose}
+            className="p-1.5 hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer"
+          >
+            <X className="h-4 w-4 text-zinc-500" />
+          </button>
+        </div>
+        {subtitle && <p className="text-[11px] text-zinc-500 mb-3">{subtitle}</p>}
+        <div className="overflow-y-auto pr-0.5 -mx-1 px-1">
+          {groups.map(g => {
+            const picked = g.items.filter(it => selectedSet.has(it.id)).length;
+            const allOn = picked === g.items.length && g.items.length > 0;
+            return (
+              <div key={g.label} className="mb-3 last:mb-0">
+                <div className="flex items-center justify-between gap-2 px-1 mb-1">
+                  <div className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">
+                    {g.label} · {picked}/{g.items.length}
+                  </div>
+                  <button
+                    onClick={() => onToggleGroup(g.items.map(it => it.id), !allOn)}
+                    className="text-[10px] text-zinc-500 hover:text-blue-400 transition-colors cursor-pointer shrink-0"
+                  >
+                    {allOn ? '取消本组' : '全选本组'}
+                  </button>
+                </div>
+                <div className="divide-y divide-zinc-800/60 rounded-xl border border-zinc-800/80 bg-zinc-950/60 overflow-hidden">
+                  {g.items.map(it => {
+                    const active = selectedSet.has(it.id);
+                    return (
+                      <button
+                        key={it.id}
+                        onClick={() => onToggle(it.id)}
+                        className={`flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors cursor-pointer ${
+                          active ? 'bg-blue-500/[0.07] hover:bg-blue-500/[0.12]' : 'hover:bg-zinc-800/60'
+                        }`}
+                      >
+                        <span
+                          className={`flex h-4 w-4 items-center justify-center rounded border shrink-0 transition-colors ${
+                            active ? 'border-blue-500 bg-blue-500' : 'border-zinc-700 bg-transparent'
+                          }`}
+                        >
+                          {active && <Check className="h-3 w-3 text-white" strokeWidth={3} />}
+                        </span>
+                        <span className={`text-xs truncate ${active ? 'text-zinc-100' : 'text-zinc-400'}`}>
+                          {it.name}
+                        </span>
+                        <span className="ml-auto text-[10px] font-mono text-zinc-600 shrink-0 pl-2">
+                          {it.sub}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="flex gap-2 mt-4 pt-4 border-t border-zinc-800/80">
+          <button
+            onClick={onSelectAll}
+            className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium rounded-lg transition-all cursor-pointer"
+          >
+            全选
+          </button>
+          <button
+            onClick={onClear}
+            className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium rounded-lg transition-all cursor-pointer"
+          >
+            清空
+          </button>
+          <button
+            onClick={onReset}
+            className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium rounded-lg transition-all cursor-pointer"
+          >
+            恢复默认
+          </button>
+          <button
+            onClick={onClose}
+            className="flex-1 px-4 py-2 bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-white text-xs font-bold rounded-lg transition-all cursor-pointer"
+          >
+            完成
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -155,17 +368,14 @@ function IndexCard({ q, session, onOpen }: { q: IndexQuote; session?: MarketSess
   );
 }
 
-// 卡片网格: 固定 4 列 (11 张卡 = 整 3 行), 行高均分填满面板
-const denseGridStyle = { gridAutoRows: '1fr' } as const;
-
-function GlobalIndexCard({ q, decimals = 2, session, onOpen }: { q: GlobalIndexQuote; decimals?: number; session?: MarketSessionInfo; onOpen?: (symbol: string) => void }) {
+function GlobalIndexCard({ q, decimals = 2, prefix = '', session, onOpen }: { q: GlobalIndexQuote; decimals?: number; prefix?: string; session?: MarketSessionInfo; onOpen?: (symbol: string) => void }) {
   const up = q.change >= 0;
-  const fmt = (v: number) => v.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  const fmt = (v: number) => prefix + v.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
   const flash = usePriceFlash(q.price);
   return (
     <div
       onClick={onOpen ? () => onOpen(`GI.${q.code}`) : undefined}
-      className={`bg-zinc-900/60 border border-zinc-800/80 rounded-xl px-3 py-2.5 hover:border-blue-500/50 transition-all duration-300 min-w-0 ${flashClass(flash)} ${onOpen ? 'cursor-pointer' : ''}`}
+      className={`bg-zinc-900/60 border border-zinc-800/80 rounded-xl px-3 py-2 hover:border-blue-500/50 transition-all duration-300 min-w-0 h-[90px] flex flex-col justify-center overflow-hidden ${flashClass(flash)} ${onOpen ? 'cursor-pointer' : ''}`}
       title={onOpen ? `${q.name} · 点击查看缠论分析` : `${q.name} (${q.code})`}
     >
       <div className="flex items-center justify-between gap-2">
@@ -180,7 +390,7 @@ function GlobalIndexCard({ q, decimals = 2, session, onOpen }: { q: GlobalIndexQ
       </div>
       <div className="mt-0.5 flex items-center justify-between gap-2 font-mono text-xs tabular-nums">
         <span className={up ? 'text-red-400' : 'text-green-400'}>
-          {up ? '+' : ''}{q.change.toFixed(decimals)}
+          {up ? '+' : ''}{prefix}{q.change.toFixed(decimals)}
         </span>
         <span className={`font-semibold ${up ? 'text-red-400' : 'text-green-400'}`}>
           {up ? '+' : ''}{q.changePercent.toFixed(2)}%
@@ -196,7 +406,7 @@ function CryptoCard({ q, onOpen }: { q: CryptoQuote; onOpen?: (symbol: string) =
   return (
     <div
       onClick={onOpen ? () => onOpen(q.symbol) : undefined}
-      className={`bg-zinc-900/60 border border-zinc-800/80 rounded-xl px-3 py-2.5 hover:border-blue-500/50 transition-all duration-300 ${flashClass(flash)} ${onOpen ? 'cursor-pointer' : ''}`}
+      className={`bg-zinc-900/60 border border-zinc-800/80 rounded-xl px-3 py-2 hover:border-blue-500/50 transition-all duration-300 min-w-0 h-[90px] flex flex-col justify-center overflow-hidden ${flashClass(flash)} ${onOpen ? 'cursor-pointer' : ''}`}
       title={onOpen ? `${q.name} · 点击查看缠论分析` : undefined}
     >
       <div className="flex items-center justify-between gap-2">
@@ -262,8 +472,82 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
   const [globalIndices, setGlobalIndices] = useState<GlobalIndexQuote[]>([]);
   const [cryptoQuotes, setCryptoQuotes] = useState<CryptoQuote[]>([]);
   const [techIndices, setTechIndices] = useState<GlobalIndexQuote[]>([]);
+  const [usStocks, setUsStocks] = useState<GlobalIndexQuote[]>([]);
   const [commodities, setCommodities] = useState<GlobalIndexQuote[]>([]);
   const [instPositions, setInstPositions] = useState<InstitutionPositionSummary | null>(null);
+
+  // 用户自选面板: 显示标的可自定义, 持久化于 localStorage
+  const [worldSel, setWorldSel] = useState<string[]>(() => loadIdSelection(WORLD_SEL_KEY, WORLD_VALID_IDS, DEFAULT_WORLD_CODES));
+  const [commSel, setCommSel] = useState<string[]>(() => loadIdSelection(COMM_SEL_KEY, COMM_VALID_IDS, DEFAULT_COMM_ALL));
+  const worldSelRef = useRef<string[]>(worldSel);
+  worldSelRef.current = worldSel;
+  const commSelRef = useRef<string[]>(commSel);
+  commSelRef.current = commSel;
+  const [worldDialogOpen, setWorldDialogOpen] = useState(false);
+  const [commDialogOpen, setCommDialogOpen] = useState(false);
+
+  // 按自选拉取环球市场行情 (失败保留上次数据)
+  const refreshWorld = useCallback(async (codes?: string[]) => {
+    const sel = codes ?? worldSelRef.current;
+    if (sel.length === 0) {
+      setGlobalIndices([]);
+      setTechIndices([]);
+      setUsStocks([]);
+      return;
+    }
+    try {
+      const quotes = sortQuotesByCodes(await fetchQuotesBySecids(marketSecidsFor(sel), '环球市场'), sel);
+      setGlobalIndices(quotes.filter((q) => marketGroupOf(q.code) === 'global'));
+      setTechIndices(quotes.filter((q) => marketGroupOf(q.code) === 'tech'));
+      setUsStocks(quotes.filter((q) => marketGroupOf(q.code) === 'us'));
+    } catch {
+      // 保留上次数据
+    }
+  }, []);
+
+  // 按自选拉取大宗商品与汇率行情 (失败保留上次数据)
+  const refreshComm = useCallback(async (ids?: string[]) => {
+    const sel = (ids ?? commSelRef.current).filter((id) => !isCryptoSymbol(id));
+    if (sel.length === 0) {
+      setCommodities([]);
+      return;
+    }
+    try {
+      setCommodities(sortQuotesByCodes(await fetchQuotesBySecids(marketSecidsFor(sel), '商品汇率'), sel));
+    } catch {
+      // 保留上次数据
+    }
+  }, []);
+
+  // 按自选拉取加密货币快照 (WS 实时流之外的兜底/全量刷新用)
+  const refreshCryptoRest = useCallback(async (ids?: string[]) => {
+    const sel = CRYPTO_CATALOG.map((c) => c.symbol)
+      .filter((s) => (ids ?? commSelRef.current).includes(s));
+    if (sel.length === 0) {
+      setCryptoQuotes([]);
+      return;
+    }
+    try {
+      setCryptoQuotes(await fetchCryptoQuotes(sel));
+    } catch {
+      // 保留上次数据
+    }
+  }, []);
+
+  const applyWorldSel = useCallback((next: string[]) => {
+    const ordered = orderIdsByCatalog(next, WORLD_VALID_IDS);
+    setWorldSel(ordered);
+    persistIdSelection(WORLD_SEL_KEY, ordered);
+    refreshWorld(ordered);
+  }, [refreshWorld]);
+
+  const applyCommSel = useCallback((next: string[]) => {
+    const ordered = orderIdsByCatalog(next, COMM_VALID_IDS);
+    setCommSel(ordered);
+    persistIdSelection(COMM_SEL_KEY, ordered);
+    refreshComm(ordered);
+    // 加密货币部分由下方订阅 effect 跟随 commSel 自动重建 (含即时 REST 快照)
+  }, [refreshComm]);
 
   // 自选股跟踪: 来自「缠论买卖点扫描」的自选, 跟踪自加入以来的涨跌
   const [watchlist, setWatchlist] = useState<WatchItem[]>([]);
@@ -307,7 +591,8 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
     setFatalError('');
 
     try {
-      const [idxRes, bfRes, histRes, secInRes, secOutRes, stockRes, sentRes, hotSecRes, globalRes, cryptoRes, techRes, commRes, instRes] = await Promise.allSettled([
+      // 环球市场 / 商品 / 加密货币走自选刷新 (内部已处理失败保留与空自选清空)
+      const [idxRes, bfRes, histRes, secInRes, secOutRes, stockRes, sentRes, hotSecRes, instRes] = await Promise.allSettled([
         fetchIndexQuotes(),
         fetchMarketBreadthAndFlow(),
         fetchMarketFlowHistory(30),
@@ -316,21 +601,14 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
         fetchStockFlowTop(1, 10),
         fetchMarketSentiment(),
         fetchHotSectors(10),
-        fetchGlobalIndexQuotes(),
-        fetchCryptoQuotes(),
-        fetchTechIndexQuotes(),
-        fetchCommodityQuotes(),
         fetchInstitutionPositions(),
       ]);
+      await Promise.allSettled([refreshWorld(), refreshComm(), refreshCryptoRest()]);
 
       if (idxRes.status === 'fulfilled') setIndices(idxRes.value);
       else setFatalError(idxRes.reason?.message || '指数行情加载失败');
 
       // 环球市场: 失败时保留上次数据, 不作为致命错误
-      if (globalRes.status === 'fulfilled') setGlobalIndices(globalRes.value);
-      if (cryptoRes.status === 'fulfilled') setCryptoQuotes(cryptoRes.value);
-      if (techRes.status === 'fulfilled') setTechIndices(techRes.value);
-      if (commRes.status === 'fulfilled') setCommodities(commRes.value);
       if (instRes.status === 'fulfilled') setInstPositions(instRes.value);
 
       if (bfRes.status === 'fulfilled') {
@@ -351,35 +629,35 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [refreshWorld, refreshComm, refreshCryptoRest]);
 
   useEffect(() => {
     load();
   }, [load]);
 
   // 指数实时刷新: 交易时段内高频轻量轮询 (对齐东财网页约 3 秒节奏), 页面隐藏时暂停
+  // 自选标的经 ref 读取, 改自选即时生效无需重建定时器
   useEffect(() => {
     // A 股指数: 每 3 秒
     const cnTimer = setInterval(() => {
       if (document.hidden || !isCnMarketOpen()) return;
       fetchIndexQuotes().then(setIndices).catch(() => {});
     }, 3000);
-    // 全球指数 + 科技指数: 每 5 秒
+    // 全球指数 + 科技指数 (自选): 每 5 秒
     const globalTimer = setInterval(() => {
       if (document.hidden || !anyGlobalMarketOpen()) return;
-      fetchGlobalIndexQuotes().then(setGlobalIndices).catch(() => {});
-      fetchTechIndexQuotes().then(setTechIndices).catch(() => {});
+      refreshWorld();
     }, 5000);
-    // 黄金/原油/美元指数/离岸人民币 近乎全天交易, 工作日每 10 秒
+    // 大宗商品与汇率 (自选): 近乎全天交易, 工作日每 10 秒
     const commTimer = setInterval(() => {
       if (document.hidden) return;
       const day = new Date().getDay();
       if (day >= 1 && day <= 5) {
-        fetchCommodityQuotes().then(setCommodities).catch(() => {});
+        refreshComm();
       }
     }, 10000);
     return () => { clearInterval(cnTimer); clearInterval(globalTimer); clearInterval(commTimer); };
-  }, []);
+  }, [refreshWorld, refreshComm]);
 
   // A 股交易时段内每 60 秒全量刷新 (资金流/情绪等较重接口)
   useEffect(() => {
@@ -392,17 +670,27 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
   }, [load, refreshWatchQuotes, watchlist]);
 
   // 加密货币 7x24 实时行情: WebSocket 每秒推送; 连接失败时回退为每 5 秒轮询
+  // 跟随自选变化重建订阅 (自选为空时清空并停用)
+  const cryptoSelKey = useMemo(
+    () => CRYPTO_CATALOG.map((c) => c.symbol).filter((s) => commSel.includes(s)).join(','),
+    [commSel],
+  );
   useEffect(() => {
+    if (cryptoSelKey === '') {
+      setCryptoQuotes([]);
+      return;
+    }
+    const symbols = cryptoSelKey.split(',');
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     const startPolling = () => {
       if (pollTimer) return;
-      fetchCryptoQuotes().then(setCryptoQuotes).catch(() => {});
+      fetchCryptoQuotes(symbols).then(setCryptoQuotes).catch(() => {});
       pollTimer = setInterval(() => {
-        fetchCryptoQuotes().then(setCryptoQuotes).catch(() => {});
+        fetchCryptoQuotes(symbols).then(setCryptoQuotes).catch(() => {});
       }, 5000);
     };
     // 立即拉取一次, 避免等待首条推送
-    fetchCryptoQuotes().then(setCryptoQuotes).catch(() => {});
+    fetchCryptoQuotes(symbols).then(setCryptoQuotes).catch(() => {});
     const unsub = subscribeCryptoQuotes(
       (quotes) => {
         if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } // WS 正常则停用轮询
@@ -411,6 +699,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
       (live) => {
         if (!live) startPolling(); // WS 断开立即切换轮询, 不等 8 秒
       },
+      symbols,
     );
     const fallbackTimer = setTimeout(startPolling, 8000); // 8 秒未收到推送则启用轮询
     return () => {
@@ -418,7 +707,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
       clearTimeout(fallbackTimer);
       if (pollTimer) clearInterval(pollTimer);
     };
-  }, []);
+  }, [cryptoSelKey]);
 
   // ---- 派生数据 ----
   const shIndex = indices.find((i) => i.symbol === 'sh000001');
@@ -560,81 +849,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
         </div>
       )}
 
-      {/* ---- 环球市场 (左) + 商品汇率与加密货币 (右): 等高双栏 ---- */}
-      {(globalIndices.length > 0 || cryptoQuotes.length > 0 || techIndices.length > 0 || commodities.length > 0) && (
-        <div className="grid lg:grid-cols-2 gap-4 md:gap-6">
-          <Panel
-            icon={Globe}
-            title="环球市场"
-            subtitle="全球指数 · 科技指数"
-          >
-            {(globalIndices.length > 0 || techIndices.length > 0) && (
-              <section className="flex-1 flex flex-col min-h-0">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5 flex-1" style={denseGridStyle}>
-                  {globalIndices.map((q) => (
-                    <GlobalIndexCard key={q.code} q={q} session={sessOf(q.code)} onOpen={onSelectStock} />
-                  ))}
-                  {techIndices.map((q) => (
-                    <GlobalIndexCard key={q.code} q={q} session={sessOf(q.code)} onOpen={onSelectStock} />
-                  ))}
-                </div>
-              </section>
-            )}
-
-            <div className="mt-3 pt-3 border-t border-zinc-800/60">
-              {/* 各市场交易时段状态一览 */}
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-1.5">
-                {(Object.keys(sessions) as MarketId[]).map((id) => (
-                  <span
-                    key={id}
-                    className={`inline-flex items-center gap-1 text-[10px] font-mono ${sessions[id].open ? 'text-emerald-400' : 'text-zinc-600'}`}
-                    title={`${sessions[id].label}${sessions[id].open ? '交易中' : '已休市'} · 当地时间 ${sessions[id].localTime}`}
-                  >
-                    <SessionDot s={sessions[id]} />
-                    {sessions[id].label}
-                  </span>
-                ))}
-              </div>
-              <p className="text-[10px] text-zinc-600 font-mono">
-                各市场交易时段不同, 休市时显示最近收盘数据 · 费半以 iShares 半导体 ETF (SOXX) 为参考 · 数据来源: 东方财富
-              </p>
-            </div>
-          </Panel>
-
-          {(commodities.length > 0 || cryptoQuotes.length > 0) && (
-            <Panel icon={Coins} title="大宗商品与加密货币" subtitle="黄金 · 原油 · 美元指数 · 离岸人民币 · 加密货币">
-              <section className="flex-1 flex flex-col min-h-0">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5 flex-1" style={denseGridStyle}>
-                  {commodities.map((q) => (
-                    <GlobalIndexCard
-                      key={q.code}
-                      q={q}
-                      decimals={q.code === 'USDCNH' ? 4 : 2}
-                      onOpen={onSelectStock}
-                    />
-                  ))}
-                  {cryptoQuotes.map((q) => (
-                    <CryptoCard key={q.symbol} q={q} onOpen={onSelectStock} />
-                  ))}
-                </div>
-              </section>
-
-              <p className="mt-3 pt-3 border-t border-zinc-800/60 text-[10px] text-zinc-600 font-mono">
-                黄金为 COMEX 主力 · 原油为 NYMEX/ICE 连续合约 · 汇率为美元兑离岸人民币 · 数据来源: 东方财富 / Binance
-              </p>
-            </Panel>
-          )}
-        </div>
-      )}
-
-      {flowUnavailable && !fatalError && (
-        <div className="px-4 py-3 bg-amber-950/20 border border-amber-900/30 text-amber-400 rounded-xl flex items-center gap-3 text-xs">
-          <AlertTriangle className="h-4 w-4 shrink-0" />
-          <span>资金流向数据暂不可用 (行情接口可能受限), 稍后可点击刷新重试。</span>
-        </div>
-      )}
-
-      {/* ---- 整体动向: 整行横条 ---- */}
+      {/* ---- 整体动向: 第二行整行横条 ---- */}
       {breadth && (
         <Panel icon={Activity} title="整体动向" subtitle="沪深两市涨跌家数与成交">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
@@ -705,6 +920,157 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
             )}
           </div>
         </Panel>
+      )}
+
+      {/* ---- 环球市场 (左) + 商品汇率与加密货币 (右): 独立高度双栏, 标的可自选 ---- */}
+      {(globalIndices.length > 0 || cryptoQuotes.length > 0 || techIndices.length > 0 || commodities.length > 0 || worldSel.length > 0 || commSel.length > 0) && (
+        <div className="grid lg:grid-cols-2 gap-4 md:gap-6 items-start">
+          <Panel
+            icon={Globe}
+            title="环球市场"
+            subtitle="全球指数 · 科技ETF · 美股个股"
+            right={(
+              <button
+                type="button"
+                onClick={() => setWorldDialogOpen(true)}
+                className="flex items-center gap-1 h-6 px-2 rounded-md bg-zinc-900/70 border border-zinc-800 text-[10px] text-zinc-400 hover:text-blue-400 hover:border-blue-500/40 transition-colors cursor-pointer"
+                title="自定义显示标的 (保存于浏览器本地)"
+              >
+                <SlidersHorizontal className="h-3 w-3" />
+                自选
+              </button>
+            )}
+          >
+            {(globalIndices.length > 0 || techIndices.length > 0 || usStocks.length > 0) ? (
+              <section className="min-w-0">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5 auto-rows-[90px]">
+                  {globalIndices.map((q) => (
+                    <GlobalIndexCard key={q.code} q={q} session={sessOf(q.code)} onOpen={onSelectStock} />
+                  ))}
+                  {techIndices.map((q) => (
+                    <GlobalIndexCard key={q.code} q={q} session={sessOf(q.code)} onOpen={onSelectStock} />
+                  ))}
+                  {usStocks.map((q) => (
+                    <GlobalIndexCard key={q.code} q={q} prefix="$" session={sessOf(q.code)} onOpen={onSelectStock} />
+                  ))}
+                </div>
+              </section>
+            ) : (
+              <p className="text-[11px] text-zinc-500 py-6 text-center">
+                {worldSel.length === 0 ? '未选择任何标的, 点击右上角「自选」添加关注指数' : '暂无行情数据, 请稍后刷新重试'}
+              </p>
+            )}
+
+            <div className="mt-3 pt-3 border-t border-zinc-800/60">
+              {/* 各市场交易时段状态一览 */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-1.5">
+                {(Object.keys(sessions) as MarketId[]).map((id) => (
+                  <span
+                    key={id}
+                    className={`inline-flex items-center gap-1 text-[10px] font-mono ${sessions[id].open ? 'text-emerald-400' : 'text-zinc-600'}`}
+                    title={`${sessions[id].label}${sessions[id].open ? '交易中' : '已休市'} · 当地时间 ${sessions[id].localTime}`}
+                  >
+                    <SessionDot s={sessions[id]} />
+                    {sessions[id].label}
+                  </span>
+                ))}
+              </div>
+              <p className="text-[10px] text-zinc-600 font-mono">
+                各市场交易时段不同, 休市时显示最近收盘数据 · 费半以 iShares 半导体 ETF (SOXX) 为参考 · 数据来源: 东方财富
+              </p>
+            </div>
+          </Panel>
+
+          {(commodities.length > 0 || cryptoQuotes.length > 0 || commSel.length > 0) && (
+            <Panel
+              icon={Coins}
+              title="大宗商品与加密货币"
+              subtitle="贵金属 · 能源 · 农产品 · 汇率 · 加密货币"
+              right={(
+                <button
+                  type="button"
+                  onClick={() => setCommDialogOpen(true)}
+                  className="flex items-center gap-1 h-6 px-2 rounded-md bg-zinc-900/70 border border-zinc-800 text-[10px] text-zinc-400 hover:text-blue-400 hover:border-blue-500/40 transition-colors cursor-pointer"
+                  title="自定义显示标的 (保存于浏览器本地)"
+                >
+                  <SlidersHorizontal className="h-3 w-3" />
+                  自选
+                </button>
+              )}
+            >
+              {(commodities.length > 0 || cryptoQuotes.length > 0) ? (
+              <section className="min-w-0">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5 auto-rows-[90px]">
+                  {commodities.map((q) => (
+                    <GlobalIndexCard
+                      key={q.code}
+                      q={q}
+                      decimals={q.code === 'USDCNH' ? 4 : 2}
+                      onOpen={onSelectStock}
+                    />
+                  ))}
+                  {cryptoQuotes.map((q) => (
+                    <CryptoCard key={q.symbol} q={q} onOpen={onSelectStock} />
+                  ))}
+                </div>
+              </section>
+              ) : (
+                <p className="text-[11px] text-zinc-500 py-6 text-center">
+                  {commSel.length === 0 ? '未选择任何标的, 点击右上角「自选」添加' : '暂无行情数据, 请稍后刷新重试'}
+                </p>
+              )}
+
+              <p className="mt-3 pt-3 border-t border-zinc-800/60 text-[10px] text-zinc-600 font-mono">
+                黄金为 COMEX 主力 · 原油/天然气为 NYMEX/ICE 连续合约 · 农产品为 CBOT/ICE 连续合约 · 汇率为美元兑离岸人民币 · 数据来源: 东方财富 / Binance
+              </p>
+            </Panel>
+          )}
+        </div>
+      )}
+
+      {/* 自选标的对话框: 全目录 (所有可获取行情的标的, 按区域/资产分组) */}
+      {worldDialogOpen && (
+        <MarketPickDialog
+          title="自选 · 环球市场"
+          subtitle={`全球指数与科技ETF全目录 (${WORLD_VALID_IDS.length} 个) · 选择要显示的指数, 修改即时生效并保存于浏览器本地`}
+          groups={buildWorldPickGroups()}
+          selected={worldSel}
+          onToggle={(id) => applyWorldSel(worldSel.includes(id) ? worldSel.filter((x) => x !== id) : [...worldSel, id])}
+          onToggleGroup={(ids, select) => {
+            const set = new Set(worldSel);
+            ids.forEach((id) => { if (select) set.add(id); else set.delete(id); });
+            applyWorldSel([...set]);
+          }}
+          onSelectAll={() => applyWorldSel(WORLD_VALID_IDS)}
+          onClear={() => applyWorldSel([])}
+          onReset={() => applyWorldSel(DEFAULT_WORLD_CODES)}
+          onClose={() => setWorldDialogOpen(false)}
+        />
+      )}
+      {commDialogOpen && (
+        <MarketPickDialog
+          title="自选 · 大宗商品与加密货币"
+          subtitle={`商品/汇率/加密货币全目录 (${COMM_VALID_IDS.length} 个) · 选择要显示的标的, 修改即时生效并保存于浏览器本地`}
+          groups={buildCommPickGroups()}
+          selected={commSel}
+          onToggle={(id) => applyCommSel(commSel.includes(id) ? commSel.filter((x) => x !== id) : [...commSel, id])}
+          onToggleGroup={(ids, select) => {
+            const set = new Set(commSel);
+            ids.forEach((id) => { if (select) set.add(id); else set.delete(id); });
+            applyCommSel([...set]);
+          }}
+          onSelectAll={() => applyCommSel(COMM_VALID_IDS)}
+          onClear={() => applyCommSel([])}
+          onReset={() => applyCommSel(DEFAULT_COMM_ALL)}
+          onClose={() => setCommDialogOpen(false)}
+        />
+      )}
+
+      {flowUnavailable && !fatalError && (
+        <div className="px-4 py-3 bg-amber-950/20 border border-amber-900/30 text-amber-400 rounded-xl flex items-center gap-3 text-xs">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>资金流向数据暂不可用 (行情接口可能受限), 稍后可点击刷新重试。</span>
+        </div>
       )}
 
       {/* ---- 错落双列: 左右两列独立堆叠, 右列整体下沉形成错落 ---- */}
@@ -814,6 +1180,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
                           <th className="py-1 px-1 font-normal text-green-500/80">空单</th>
                           <th className="py-1 px-1 font-normal">空增减</th>
                           <th className="py-1 px-1 font-normal">净多单</th>
+                          <th className="py-1 px-1 font-normal">今日净增</th>
                           <th className="py-1 pl-1 font-normal">近7日净增</th>
                         </tr>
                       </thead>
@@ -826,6 +1193,7 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
                             <td className="py-[3px] px-1 text-green-400">{r.short.toLocaleString('en-US')}</td>
                             <td className={`py-[3px] px-1 ${r.shortChange > 0 ? 'text-green-400' : r.shortChange < 0 ? 'text-red-400' : 'text-zinc-400'}`}>{r.shortChange > 0 ? '+' : ''}{r.shortChange.toLocaleString('en-US')}</td>
                             <td className={`py-[3px] px-1 font-semibold ${upClass(r.netLong)}`}>{r.netLong > 0 ? '+' : ''}{r.netLong.toLocaleString('en-US')}</td>
+                            <td className={`py-[3px] px-1 font-semibold ${upClass(r.longChange - r.shortChange)}`}>{r.longChange - r.shortChange > 0 ? '+' : ''}{(r.longChange - r.shortChange).toLocaleString('en-US')}</td>
                             <td className={`py-[3px] pl-1 font-semibold ${upClass(r.net7d)}`}>{r.net7d > 0 ? '+' : ''}{r.net7d.toLocaleString('en-US')}</td>
                           </tr>
                         ))}
@@ -838,13 +1206,21 @@ export default function MarketDashboard({ onSelectStock }: MarketDashboardProps)
                           <td className={`py-1 px-1 font-bold ${upClass(instPositions.totalLong - instPositions.totalShort)}`}>
                             {instPositions.totalLong - instPositions.totalShort > 0 ? '+' : ''}{(instPositions.totalLong - instPositions.totalShort).toLocaleString('en-US')}
                           </td>
+                          {(() => {
+                            const net1d = instPositions.list.slice(0, 20).reduce((s, r) => s + r.longChange - r.shortChange, 0);
+                            return (
+                              <td className={`py-1 px-1 font-bold ${upClass(net1d)}`}>
+                                {net1d > 0 ? '+' : ''}{net1d.toLocaleString('en-US')}
+                              </td>
+                            );
+                          })()}
                           <td className="py-1 pl-1" />
                         </tr>
                       </tbody>
                     </table>
                   </div>
                   <p className="mt-2 text-[10px] text-zinc-600 font-mono">
-                    多/空单为会员持买仓量/持卖仓量 (IF/IH/IC/IM 主力品种合计) · 净多单 = 多单 - 空单 · 近7日净增 = 7个交易日累计(多增 - 空增) · 数据来源: 中金所/东方财富Choice · 席位数据含全部客户, 仅供参考
+                    多/空单为会员持买仓量/持卖仓量 (IF/IH/IC/IM 主力品种合计) · 净多单 = 多单 - 空单 · 今日净增 = 多增 - 空增 · 近7日净增 = 7个交易日累计(多增 - 空增) · 数据来源: 中金所/东方财富Choice · 席位数据含全部客户, 仅供参考
                   </p>
                 </Panel>
               )}

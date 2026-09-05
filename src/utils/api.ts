@@ -23,38 +23,103 @@ function getApiKey(key: string): string {
 const getTickFlowApiKey = () => getApiKey('tickflow') || import.meta.env.VITE_TICKFLOW_API_KEY || '';
 const getTickFlowBaseUrl = () => getTickFlowApiKey() ? 'https://api.tickflow.org' : 'https://free-api.tickflow.org';
 
-// Helper: Resolve stock symbols for TickFlow API (Chinese stocks only)
-export function resolveSymbol(symbol: string): { resolved: string; displayName: string; isChinaStock: boolean } {
+// Supported markets for the analyzer. TickFlow serves A-shares (cn);
+// US / HK single stocks are served by Tencent ifzq (CORS-friendly).
+export type StockMarket = 'cn' | 'us' | 'hk';
+
+// Helper: Resolve user input into a canonical symbol + market.
+// Supported formats (case-insensitive):
+//   - A股: 6-digit code ('600519'), '600519.SH' / '.SS' / '.SZ'
+//   - 美股: bare ticker ('AAPL', 'NVDA', 'BRK.B'), 'AAPL.US' / '.OQ' (NASDAQ) / '.N' (NYSE) / '.AM' (AMEX)
+//   - 港股: '00700.HK', 'HK00700', bare 4-5 digit code ('00700')
+export function resolveSymbol(symbol: string): {
+  resolved: string;
+  displayName: string;
+  isChinaStock: boolean;
+  market: StockMarket | 'other';
+  /** Tencent ifzq code for us/hk markets (e.g. 'usAAPL', 'hk00700'); '' otherwise. */
+  txSymbol: string;
+} {
   const clean = symbol.trim().toUpperCase();
+  const cn = (resolved: string, displayName: string) => ({
+    resolved, displayName, isChinaStock: true as const, market: 'cn' as const, txSymbol: '',
+  });
   if (/^\d{6}$/.test(clean)) {
     // 6-digit pure numbers represent Chinese stocks
     const isSS = /^(60|68|90|11|13|51|58|60)/.test(clean);
     const suffix = isSS ? 'SH' : 'SZ';
-    return {
-      resolved: `${clean}.${suffix}`,
-      displayName: `${clean}.${suffix}`,
-      isChinaStock: true
-    };
+    return cn(`${clean}.${suffix}`, `${clean}.${suffix}`);
   }
   // Handle symbols with .SS or .SZ suffix
   if (clean.endsWith('.SS')) {
-    return {
-      resolved: clean.replace('.SS', '.SH'),
-      displayName: clean,
-      isChinaStock: true
-    };
+    return cn(clean.replace('.SS', '.SH'), clean);
   }
   if (clean.endsWith('.SZ')) {
+    return cn(clean, clean);
+  }
+  // HK: '00700.HK' / '0700.HK'
+  const hkSuffixed = /^(\d{4,5})\.HK$/.exec(clean);
+  if (hkSuffixed) {
+    const code = hkSuffixed[1].padStart(5, '0');
     return {
-      resolved: clean,
-      displayName: clean,
-      isChinaStock: true
+      resolved: `${code}.HK`,
+      displayName: `${code}.HK`,
+      isChinaStock: false,
+      market: 'hk',
+      txSymbol: `hk${code}`,
+    };
+  }
+  // HK: 'HK00700' / 'hk0700'
+  const hkPrefixed = /^HK(\d{4,5})$/.exec(clean);
+  if (hkPrefixed) {
+    const code = hkPrefixed[1].padStart(5, '0');
+    return {
+      resolved: `${code}.HK`,
+      displayName: `${code}.HK`,
+      isChinaStock: false,
+      market: 'hk',
+      txSymbol: `hk${code}`,
+    };
+  }
+  // HK: bare 4-5 digit code ('00700')
+  if (/^\d{4,5}$/.test(clean)) {
+    const code = clean.padStart(5, '0');
+    return {
+      resolved: `${code}.HK`,
+      displayName: `${code}.HK`,
+      isChinaStock: false,
+      market: 'hk',
+      txSymbol: `hk${code}`,
+    };
+  }
+  // US: 'AAPL.US' / 'NVDA.OQ' / 'TSLA.N' / 'SPY.AM'
+  const usSuffixed = /^([A-Z]{1,5}(?:\.[A-Z])?)\.(US|OQ|N|AM)$/.exec(clean);
+  if (usSuffixed) {
+    const ticker = usSuffixed[1];
+    return {
+      resolved: `${ticker}.US`,
+      displayName: `${ticker}.US`,
+      isChinaStock: false,
+      market: 'us',
+      txSymbol: `us${ticker}`,
+    };
+  }
+  // US: bare ticker ('AAPL', 'NVDA', 'BRK.B')
+  if (/^[A-Z]{1,5}(?:\.[A-Z])?$/.test(clean)) {
+    return {
+      resolved: `${clean}.US`,
+      displayName: `${clean}.US`,
+      isChinaStock: false,
+      market: 'us',
+      txSymbol: `us${clean}`,
     };
   }
   return {
     resolved: clean,
     displayName: clean,
-    isChinaStock: false
+    isChinaStock: false,
+    market: 'other',
+    txSymbol: '',
   };
 }
 
@@ -78,10 +143,11 @@ interface GlobalKlineRoute {
 }
 
 // 市场总览卡片 code -> K线数据源路由
-// 注: FTSE/KS11/TWII/UDI 暂无浏览器可直接访问的指数K线源, 使用高相关 ETF 代理
+// 注: 多数境外指数无浏览器可直接访问的指数K线源, 使用高相关国家/区域 ETF 代理 (名称中标注代理)
 const GLOBAL_KLINE_ROUTES: Record<string, GlobalKlineRoute> = {
   // 港股指数 (腾讯)
   HSI: { source: 'tencent', symbol: 'hkHSI', name: '恒生指数', label: '腾讯行情' },
+  HSCEI: { source: 'tencent', symbol: 'hkHSCEI', name: '恒生国企指数', label: '腾讯行情' },
   HSTECH: { source: 'tencent', symbol: 'hkHSTECH', name: '恒生科技指数', label: '腾讯行情' },
   // 美股指数 (腾讯)
   DJIA: { source: 'tencent-us', symbol: 'usDJI', name: '道琼斯工业指数', label: '腾讯行情' },
@@ -89,22 +155,101 @@ const GLOBAL_KLINE_ROUTES: Record<string, GlobalKlineRoute> = {
   NDX: { source: 'tencent-us', symbol: 'usIXIC', name: '纳斯达克综合指数', label: '腾讯行情' },
   HXC: { source: 'tencent-us', symbol: 'usHXC', name: '纳斯达克中国金龙指数', label: '腾讯行情' },
   SOXX: { source: 'tencent-us', symbol: 'usSOXX.OQ', name: '费城半导体ETF(SOXX)', label: '腾讯行情' },
+  SMH: { source: 'tencent-us', symbol: 'usSMH.OQ', name: '半导体ETF-VanEck(SMH)', label: '腾讯行情' },
+  QQQ: { source: 'tencent-us', symbol: 'usQQQ.OQ', name: '纳指100ETF(QQQ)', label: '腾讯行情' },
+  SPY: { source: 'tencent-us', symbol: 'usSPY.AM', name: '标普500ETF(SPY)', label: '腾讯行情' },
+  DIA: { source: 'tencent-us', symbol: 'usDIA.AM', name: '道指ETF(DIA)', label: '腾讯行情' },
+  IWM: { source: 'tencent-us', symbol: 'usIWM.AM', name: '罗素2000ETF(IWM)', label: '腾讯行情' },
+  XLK: { source: 'tencent-us', symbol: 'usXLK.AM', name: '科技精选ETF(XLK)', label: '腾讯行情' },
+  VGT: { source: 'tencent-us', symbol: 'usVGT.AM', name: '信息科技ETF(VGT)', label: '腾讯行情' },
+  ARKK: { source: 'tencent-us', symbol: 'usARKK.AM', name: '创新ETF(ARKK)', label: '腾讯行情' },
+  KWEB: { source: 'tencent-us', symbol: 'usKWEB.OQ', name: '中概互联网ETF(KWEB)', label: '腾讯行情' },
+  TLT: { source: 'tencent-us', symbol: 'usTLT.OQ', name: '美债20年+ETF(TLT)', label: '腾讯行情' },
+  // 美股个股 (腾讯美股K线: 纳斯达克 .OQ / 纽交所 .N)
+  AAPL: { source: 'tencent-us', symbol: 'usAAPL.OQ', name: '苹果', label: '腾讯行情' },
+  MSFT: { source: 'tencent-us', symbol: 'usMSFT.OQ', name: '微软', label: '腾讯行情' },
+  NVDA: { source: 'tencent-us', symbol: 'usNVDA.OQ', name: '英伟达', label: '腾讯行情' },
+  AMZN: { source: 'tencent-us', symbol: 'usAMZN.OQ', name: '亚马逊', label: '腾讯行情' },
+  META: { source: 'tencent-us', symbol: 'usMETA.OQ', name: 'Meta', label: '腾讯行情' },
+  GOOGL: { source: 'tencent-us', symbol: 'usGOOGL.OQ', name: '谷歌', label: '腾讯行情' },
+  TSLA: { source: 'tencent-us', symbol: 'usTSLA.OQ', name: '特斯拉', label: '腾讯行情' },
+  AVGO: { source: 'tencent-us', symbol: 'usAVGO.OQ', name: '博通', label: '腾讯行情' },
+  AMD: { source: 'tencent-us', symbol: 'usAMD.OQ', name: '超威半导体', label: '腾讯行情' },
+  QCOM: { source: 'tencent-us', symbol: 'usQCOM.OQ', name: '高通', label: '腾讯行情' },
+  ARM: { source: 'tencent-us', symbol: 'usARM.OQ', name: 'Arm', label: '腾讯行情' },
+  MU: { source: 'tencent-us', symbol: 'usMU.OQ', name: '美光科技', label: '腾讯行情' },
+  NFLX: { source: 'tencent-us', symbol: 'usNFLX.OQ', name: '奈飞', label: '腾讯行情' },
+  ADBE: { source: 'tencent-us', symbol: 'usADBE.OQ', name: '奥多比', label: '腾讯行情' },
+  COST: { source: 'tencent-us', symbol: 'usCOST.OQ', name: '开市客', label: '腾讯行情' },
+  PLTR: { source: 'tencent-us', symbol: 'usPLTR.OQ', name: 'Palantir', label: '腾讯行情' },
+  COIN: { source: 'tencent-us', symbol: 'usCOIN.OQ', name: 'Coinbase', label: '腾讯行情' },
+  MSTR: { source: 'tencent-us', symbol: 'usMSTR.OQ', name: 'Strategy', label: '腾讯行情' },
+  PDD: { source: 'tencent-us', symbol: 'usPDD.OQ', name: '拼多多', label: '腾讯行情' },
+  JD: { source: 'tencent-us', symbol: 'usJD.OQ', name: '京东', label: '腾讯行情' },
+  V: { source: 'tencent-us', symbol: 'usV.N', name: '维萨', label: '腾讯行情' },
+  MA: { source: 'tencent-us', symbol: 'usMA.N', name: '万事达', label: '腾讯行情' },
+  JPM: { source: 'tencent-us', symbol: 'usJPM.N', name: '摩根大通', label: '腾讯行情' },
+  LLY: { source: 'tencent-us', symbol: 'usLLY.N', name: '礼来', label: '腾讯行情' },
+  UNH: { source: 'tencent-us', symbol: 'usUNH.N', name: '联合健康', label: '腾讯行情' },
+  XOM: { source: 'tencent-us', symbol: 'usXOM.N', name: '埃克森美孚', label: '腾讯行情' },
+  DIS: { source: 'tencent-us', symbol: 'usDIS.N', name: '迪士尼', label: '腾讯行情' },
+  CRM: { source: 'tencent-us', symbol: 'usCRM.N', name: '赛富时', label: '腾讯行情' },
+  ORCL: { source: 'tencent-us', symbol: 'usORCL.N', name: '甲骨文', label: '腾讯行情' },
+  BABA: { source: 'tencent-us', symbol: 'usBABA.N', name: '阿里巴巴', label: '腾讯行情' },
+  TSM: { source: 'tencent-us', symbol: 'usTSM.N', name: '台积电', label: '腾讯行情' },
+  NIO: { source: 'tencent-us', symbol: 'usNIO.N', name: '蔚来', label: '腾讯行情' },
   // 日经225 (新浪环球期货连续合约)
   N225: { source: 'sina-futures', symbol: 'NK', name: '日经225(期货连续)', label: '新浪财经' },
-  // 欧洲指数: 指数本体无浏览器可访问K线源, 使用 ETF 代理
+  // 亚太指数: 国家 ETF 代理
+  TWII: { source: 'tencent-us', symbol: 'usEWT.AM', name: '台湾加权(台湾ETF代理)', label: '腾讯行情' },
+  KS11: { source: 'tencent-us', symbol: 'usEWY.AM', name: '韩国KOSPI(韩国ETF代理)', label: '腾讯行情' },
+  SENSEX: { source: 'tencent-us', symbol: 'usINDA.AM', name: '印度SENSEX(印度ETF代理)', label: '腾讯行情' },
+  STI: { source: 'tencent-us', symbol: 'usEWS.AM', name: '新加坡海峡(新加坡ETF代理)', label: '腾讯行情' },
+  KLSE: { source: 'tencent-us', symbol: 'usEWM.AM', name: '马来西亚KLCI(马来西亚ETF代理)', label: '腾讯行情' },
+  JKSE: { source: 'tencent-us', symbol: 'usEIDO.AM', name: '印尼雅加达(印尼ETF代理)', label: '腾讯行情' },
+  SET: { source: 'tencent-us', symbol: 'usTHD.AM', name: '泰国SET(泰国ETF代理)', label: '腾讯行情' },
+  PSI: { source: 'tencent-us', symbol: 'usEPHE.AM', name: '菲律宾马尼拉(菲律宾ETF代理)', label: '腾讯行情' },
+  VNINDEX: { source: 'tencent-us', symbol: 'usVNM.AM', name: '越南胡志明(越南ETF代理)', label: '腾讯行情' },
+  AORD: { source: 'tencent-us', symbol: 'usEWA.AM', name: '澳大利亚普通股(澳洲ETF代理)', label: '腾讯行情' },
+  // 美洲指数: 国家 ETF 代理
+  TSX: { source: 'tencent-us', symbol: 'usEWC.AM', name: '加拿大TSX(加拿大ETF代理)', label: '腾讯行情' },
+  MXX: { source: 'tencent-us', symbol: 'usEWW.AM', name: '墨西哥BOLSA(墨西哥ETF代理)', label: '腾讯行情' },
+  BVSP: { source: 'tencent-us', symbol: 'usEWZ.AM', name: '巴西BOVESPA(巴西ETF代理)', label: '腾讯行情' },
+  // 欧洲指数: 国家/区域 ETF 代理
   FTSE: { source: 'tencent-us', symbol: 'usEWU.AM', name: '富时100(英国ETF代理)', label: '腾讯行情' },
   GDAXI: { source: 'tencent', symbol: 'sh513030', name: '德国DAX(德国ETF)', label: '腾讯行情' },
-  // 亚太指数: ETF 代理
-  KS11: { source: 'tencent-us', symbol: 'usEWY.AM', name: '韩国KOSPI(韩国ETF代理)', label: '腾讯行情' },
-  TWII: { source: 'tencent-us', symbol: 'usEWT.AM', name: '台湾加权(台湾ETF代理)', label: '腾讯行情' },
+  FCHI: { source: 'tencent-us', symbol: 'usEWQ.AM', name: '法国CAC40(法国ETF代理)', label: '腾讯行情' },
+  SX5E: { source: 'tencent-us', symbol: 'usFEZ.AM', name: '欧洲斯托克50(欧元区ETF代理)', label: '腾讯行情' },
+  SSMI: { source: 'tencent-us', symbol: 'usEWL.AM', name: '瑞士SMI(瑞士ETF代理)', label: '腾讯行情' },
+  AEX: { source: 'tencent-us', symbol: 'usEWN.AM', name: '荷兰AEX(荷兰ETF代理)', label: '腾讯行情' },
+  MIB: { source: 'tencent-us', symbol: 'usEWI.AM', name: '意大利MIB(意大利ETF代理)', label: '腾讯行情' },
+  IBEX: { source: 'tencent-us', symbol: 'usEWP.AM', name: '西班牙IBEX35(西班牙ETF代理)', label: '腾讯行情' },
+  HEX: { source: 'tencent-us', symbol: 'usEFNL.AM', name: '芬兰赫尔辛基(芬兰ETF代理)', label: '腾讯行情' },
+  ATX: { source: 'tencent-us', symbol: 'usEZU.AM', name: '奥地利ATX(欧元区ETF代理)', label: '腾讯行情' },
+  RTS: { source: 'tencent-us', symbol: 'usEZU.AM', name: '俄罗斯RTS(欧元区ETF代理)', label: '腾讯行情' },
+  OMXC20: { source: 'tencent-us', symbol: 'usEDEN.AM', name: '丹麦OMX20(丹麦ETF代理)', label: '腾讯行情' },
+  ISEQ: { source: 'tencent-us', symbol: 'usEIRL.AM', name: '爱尔兰综合(爱尔兰ETF代理)', label: '腾讯行情' },
+  PSI20: { source: 'tencent-us', symbol: 'usEZU.AM', name: '葡萄牙PSI20(欧元区ETF代理)', label: '腾讯行情' },
   // 美元指数: UUP 为跟踪美元指数期货的 ETF
   UDI: { source: 'tencent-us', symbol: 'usUUP.AM', name: '美元指数(UUP代理)', label: '腾讯行情' },
   // 汇率 (新浪外汇)
   USDCNH: { source: 'sina-forex', symbol: 'fx_susdcnh', name: '美元兑离岸人民币', label: '新浪财经' },
-  // 大宗商品 (新浪环球期货连续合约)
+  // 大宗商品 (新浪环球期货连续合约; 农产品为 CBOT/ICE 主力符号)
   GC00Y: { source: 'sina-futures', symbol: 'GC', name: 'COMEX黄金期货', label: '新浪财经' },
+  SI00Y: { source: 'sina-futures', symbol: 'SI', name: 'COMEX白银期货', label: '新浪财经' },
+  HG00Y: { source: 'sina-futures', symbol: 'HG', name: 'COMEX铜期货', label: '新浪财经' },
   CL00Y: { source: 'sina-futures', symbol: 'CL', name: 'NYMEX原油期货(WTI)', label: '新浪财经' },
   B00Y: { source: 'sina-futures', symbol: 'OIL', name: '布伦特原油期货', label: '新浪财经' },
+  NG00Y: { source: 'sina-futures', symbol: 'NG', name: 'NYMEX天然气期货', label: '新浪财经' },
+  HO00Y: { source: 'sina-futures', symbol: 'HO', name: 'NYMEX燃油期货', label: '新浪财经' },
+  RB00Y: { source: 'sina-futures', symbol: 'RB', name: 'NYMEX汽油期货', label: '新浪财经' },
+  ZS00Y: { source: 'sina-futures', symbol: 'S', name: 'CBOT大豆期货', label: '新浪财经' },
+  ZC00Y: { source: 'sina-futures', symbol: 'C', name: 'CBOT玉米期货', label: '新浪财经' },
+  ZW00Y: { source: 'sina-futures', symbol: 'W', name: 'CBOT小麦期货', label: '新浪财经' },
+  ZL00Y: { source: 'sina-futures', symbol: 'BO', name: 'CBOT豆油期货', label: '新浪财经' },
+  ZM00Y: { source: 'sina-futures', symbol: 'SM', name: 'CBOT豆粕期货', label: '新浪财经' },
+  CT00Y: { source: 'sina-futures', symbol: 'CT', name: 'ICE棉花期货', label: '新浪财经' },
+  SB00Y: { source: 'sina-futures', symbol: 'SB', name: 'ICE白糖期货', label: '新浪财经' },
 };
 
 // 修正个别数据源 high/low 与 open/close 交叉的脏数据
@@ -159,15 +304,62 @@ function loadSinaJsonp(urlTemplate: string): Promise<any> {
   });
 }
 
-/** 腾讯日 K (fqkline / usfqkline): 行格式 [日期, 开, 收, 高, 低, 量, ..., 额] */
-async function fetchTencentDailyKlines(endpoint: string, txSymbol: string): Promise<Kline[]> {
-  const url = `${TX_KLINE_BASE}/${endpoint}/get?param=${encodeURIComponent(`${txSymbol},day,,,${GLOBAL_KLINE_BARS},qfq`)}`;
+export type KlineTimeframe = 'daily' | 'weekly';
+
+export const TIMEFRAME_LABEL: Record<KlineTimeframe, string> = {
+  daily: '日线',
+  weekly: '周线',
+};
+
+/**
+ * 将日 K 聚合成周 K (按自然周 周一~周日分组, 日期取周内最后一个交易日)。
+ * 用于腾讯/新浪等无稳定周线接口的数据源回退。
+ */
+export function aggregateDailyToWeekly(daily: Kline[]): Kline[] {
+  if (daily.length === 0) return [];
+  const sorted = [...daily].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  const groups = new Map<string, Kline[]>();
+  for (const k of sorted) {
+    const d = new Date(`${k.date}T00:00:00Z`);
+    if (Number.isNaN(d.getTime())) continue;
+    // ISO 周: 周一为周首 (JS getUTCDay: 0=周日)
+    const dow = (d.getUTCDay() + 6) % 7; // 0=周一
+    const monday = new Date(d);
+    monday.setUTCDate(d.getUTCDate() - dow);
+    const key = monday.toISOString().slice(0, 10);
+    const arr = groups.get(key);
+    if (arr) arr.push(k);
+    else groups.set(key, [k]);
+  }
+  const weekly: Kline[] = [];
+  for (const [, arr] of [...groups.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    if (arr.length === 0) continue;
+    const first = arr[0];
+    const last = arr[arr.length - 1];
+    weekly.push({
+      date: last.date,
+      open: first.open,
+      high: Math.max(...arr.map((x) => x.high)),
+      low: Math.min(...arr.map((x) => x.low)),
+      close: last.close,
+      volume: arr.reduce((s, x) => s + (x.volume || 0), 0),
+      amount: arr.reduce((s, x) => s + (x.amount || 0), 0),
+    });
+  }
+  return sanitizeKlines(weekly);
+}
+
+/** 腾讯 K 线 (fqkline / usfqkline): 行格式 [日期, 开, 收, 高, 低, 量, ..., 额] */
+async function fetchTencentKlines(endpoint: string, txSymbol: string, timeframe: KlineTimeframe = 'daily'): Promise<Kline[]> {
+  const granularity = timeframe === 'weekly' ? 'week' : 'day';
+  const url = `${TX_KLINE_BASE}/${endpoint}/get?param=${encodeURIComponent(`${txSymbol},${granularity},,,${GLOBAL_KLINE_BARS},qfq`)}`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`腾讯K线接口错误 (${resp.status})`);
 
   const json = await resp.json();
   const node = json?.data?.[txSymbol];
-  const rows: unknown[] = node?.qfqday || node?.day || [];
+  const rows: unknown[] =
+    node?.[timeframe === 'weekly' ? 'qfqweek' : 'qfqday'] || node?.[granularity] || node?.qfqday || node?.day || [];
   if (!Array.isArray(rows) || rows.length === 0) {
     throw new Error(`腾讯未返回 ${txSymbol} 的K线数据`);
   }
@@ -177,14 +369,19 @@ async function fetchTencentDailyKlines(endpoint: string, txSymbol: string): Prom
     if (!Array.isArray(row) || row.length < 6) continue;
     const date = String(row[0]);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    const open = parseFloat(String(row[1])) || 0;
+    const close = parseFloat(String(row[2])) || 0;
+    const volume = parseFloat(String(row[5])) || 0;
+    const amountField = parseFloat(String(row[8]));
     klines.push({
       date,
-      open: parseFloat(String(row[1])) || 0,
-      close: parseFloat(String(row[2])) || 0,
+      open,
+      close,
       high: parseFloat(String(row[3])) || 0,
       low: parseFloat(String(row[4])) || 0,
-      volume: parseFloat(String(row[5])) || 0,
-      amount: parseFloat(String(row[8])) || 0,
+      volume,
+      // 部分港股/指数行缺失成交额字段: 用 收盘价×成交量 估算, 保证_hover_与指标可用
+      amount: amountField > 0 ? amountField : close * volume,
     });
   }
   return sanitizeKlines(klines);
@@ -243,7 +440,7 @@ async function fetchSinaForexDailyKlines(symbol: string): Promise<Kline[]> {
 }
 
 /** 全球指数/商品/汇率 K线统一入口: 'GI.HSI' -> 按 GLOBAL_KLINE_ROUTES 路由 */
-async function fetchGlobalKlines(code: string): Promise<{ name: string; klines: Kline[]; source: string }> {
+async function fetchGlobalKlines(code: string, timeframe: KlineTimeframe = 'daily'): Promise<{ name: string; klines: Kline[]; source: string }> {
   const route = GLOBAL_KLINE_ROUTES[code];
   if (!route) {
     throw new Error(`暂不支持 ${code} 的K线数据 (未知代码)`);
@@ -252,10 +449,10 @@ async function fetchGlobalKlines(code: string): Promise<{ name: string; klines: 
   let klines: Kline[];
   switch (route.source) {
     case 'tencent':
-      klines = await fetchTencentDailyKlines('fqkline', route.symbol);
+      klines = await fetchTencentKlines('fqkline', route.symbol, timeframe);
       break;
     case 'tencent-us':
-      klines = await fetchTencentDailyKlines('usfqkline', route.symbol);
+      klines = await fetchTencentKlines('usfqkline', route.symbol, timeframe);
       break;
     case 'sina-futures':
       klines = await fetchSinaFuturesDailyKlines(route.symbol);
@@ -267,15 +464,67 @@ async function fetchGlobalKlines(code: string): Promise<{ name: string; klines: 
       throw new Error(`未知数据源 ${route.source}`);
   }
 
+  // 新浪期货/外汇仅提供日 K: 周线模式下本地聚合成周 K
+  if (timeframe === 'weekly' && (route.source === 'sina-futures' || route.source === 'sina-forex')) {
+    klines = aggregateDailyToWeekly(klines);
+  }
+
   if (klines.length < 30) {
     throw new Error(`${route.name} 历史数据不足 (${klines.length} 根, 需要至少 30 根)`);
   }
   return { name: route.name, klines: klines.slice(-GLOBAL_KLINE_BARS), source: route.label };
 }
 
-/** Binance 日 K (约 1000 天), pair 形如 'BTCUSDT' */
-async function fetchBinanceDailyKlines(pair: string): Promise<Kline[]> {
-  const url = `https://data-api.binance.vision/api/v3/klines?symbol=${pair}&interval=1d&limit=1000`;
+const getTwelveDataApiKey = () => getApiKey('twelvedata') || import.meta.env.VITE_TWELVEDATA_API_KEY || '';
+
+/**
+ * 美股 K 线 via TwelveData time_series (免费 Key, 原生 CORS)。
+ * Key 在 ⚙️ 配置页填入 (https://twelvedata.com/pricing, 注册即得, 终身免费额度)。
+ * 日线取 ~5 年 (1300 根), 周线原生 1week (500 周 ≈ 10 年)。
+ */
+async function fetchTwelveDataKlines(ticker: string, timeframe: KlineTimeframe = 'daily'): Promise<Kline[]> {
+  const apiKey = getTwelveDataApiKey();
+  if (!apiKey) {
+    throw new Error(
+      '美股K线需要配置 TwelveData 免费 Key (https://twelvedata.com/pricing, 注册即得)。请点击右上角 ⚙️ 配置填入后重试; 港股 / A股 / 指数 / 加密货币无需 Key 即可查询。'
+    );
+  }
+  const interval = timeframe === 'weekly' ? '1week' : '1day';
+  const outputsize = timeframe === 'weekly' ? 500 : 1300;
+  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(ticker)}&interval=${interval}&outputsize=${outputsize}&order=ASC&apikey=${encodeURIComponent(apiKey)}`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`TwelveData K线接口错误 (${resp.status})`);
+  const json = await resp.json();
+  if (json?.status === 'error' || !Array.isArray(json?.values)) {
+    throw new Error(`TwelveData: ${json?.message || `未返回 ${ticker} 的K线数据`}`);
+  }
+  const klines: Kline[] = [];
+  for (const r of json.values) {
+    const date = String(r?.datetime || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    const close = parseFloat(r.close) || 0;
+    const volume = parseFloat(r.volume) || 0;
+    klines.push({
+      date,
+      open: parseFloat(r.open) || 0,
+      high: parseFloat(r.high) || 0,
+      low: parseFloat(r.low) || 0,
+      close,
+      volume,
+      // TwelveData 无成交额字段: 收盘价 × 成交量估算
+      amount: close * volume,
+    });
+  }
+  if (klines.length < 30) {
+    throw new Error(`${ticker} 历史数据不足 (${klines.length} 根, 需要至少 30 根)`);
+  }
+  return sanitizeKlines(klines);
+}
+
+/** Binance K 线 (约 1000 根), pair 形如 'BTCUSDT' */
+async function fetchBinanceKlines(pair: string, timeframe: KlineTimeframe = 'daily'): Promise<Kline[]> {
+  const interval = timeframe === 'weekly' ? '1w' : '1d';
+  const url = `https://data-api.binance.vision/api/v3/klines?symbol=${pair}&interval=${interval}&limit=1000`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`Binance K线接口错误 (${resp.status})`);
 
@@ -304,12 +553,13 @@ async function fetchBinanceDailyKlines(pair: string): Promise<Kline[]> {
 }
 
 // Fetch stock K-line data directly from TickFlow API
-export async function fetchStockData(symbol: string): Promise<{
+export async function fetchStockData(symbol: string, timeframe: KlineTimeframe = 'daily'): Promise<{
   symbol: string;
   name: string;
   klines: Kline[];
   source: string;
   period: string;
+  timeframe: KlineTimeframe;
 }> {
   // 全球指数/商品/汇率: 'GI.HSI' (新) 或 'EM.100.HSI' (旧东财 secid 格式)
   // -> 按 GLOBAL_KLINE_ROUTES 路由到腾讯/新浪/Binance 等多源K线
@@ -317,33 +567,86 @@ export async function fetchStockData(symbol: string): Promise<{
   const globalMatch = /^(?:GI|EM)(?:\.\d+)?\.([A-Z0-9]+)$/.exec(cleanReq);
   if (globalMatch) {
     const code = globalMatch[1];
-    const { name, klines, source } = await fetchGlobalKlines(code);
+    const { name, klines, source } = await fetchGlobalKlines(code, timeframe);
     return {
       symbol: code,
       name,
       klines,
       source,
-      period: `日线 (近 ${klines.length} 根)`,
+      period: `${TIMEFRAME_LABEL[timeframe]} (近 ${klines.length} 根)`,
+      timeframe,
     };
   }
 
   // 加密货币: 'BTCUSDT' 等 *USDT 交易对 -> Binance
   if (/^[A-Z0-9]{2,10}USDT$/.test(cleanReq)) {
-    const klines = await fetchBinanceDailyKlines(cleanReq);
-    return { symbol: cleanReq, name: cleanReq, klines, source: 'Binance', period: '日线 (近1000天)' };
+    const klines = await fetchBinanceKlines(cleanReq, timeframe);
+    return {
+      symbol: cleanReq,
+      name: cleanReq,
+      klines,
+      source: 'Binance',
+      period: timeframe === 'weekly' ? '周线 (近1000周)' : '日线 (近1000天)',
+      timeframe,
+    };
   }
 
-  const { resolved, displayName, isChinaStock } = resolveSymbol(symbol);
+  // 裸代码的全球指数/商品/汇率 (如 'HSI', 'SPX'): 与 GI. 前缀同等路由
+  const bareGlobal = GLOBAL_KLINE_ROUTES[cleanReq];
+  if (bareGlobal) {
+    const { name, klines, source } = await fetchGlobalKlines(cleanReq, timeframe);
+    return {
+      symbol: cleanReq,
+      name,
+      klines,
+      source,
+      period: `${TIMEFRAME_LABEL[timeframe]} (近 ${klines.length} 根)`,
+      timeframe,
+    };
+  }
 
-  if (!isChinaStock) {
+  const { resolved, displayName, market, txSymbol } = resolveSymbol(symbol);
+
+  // 港股个股 -> 腾讯 ifzq fqkline (支持日线与周线, 免 Key)
+  if (market === 'hk') {
+    const klines = await fetchTencentKlines('fqkline', txSymbol, timeframe);
+    if (klines.length < 30) {
+      throw new Error(`${displayName} 历史数据不足 (${klines.length} 根, 需要至少 30 根)`);
+    }
+    return {
+      symbol: resolved,
+      name: resolved,
+      klines: klines.slice(-GLOBAL_KLINE_BARS),
+      source: '腾讯行情',
+      period: `${TIMEFRAME_LABEL[timeframe]} (近 ${Math.min(klines.length, GLOBAL_KLINE_BARS)} 根)`,
+      timeframe,
+    };
+  }
+
+  // 美股个股 -> TwelveData time_series (原生周线, 需免费 Key;
+  // 腾讯 usfqkline 仅返回首末 2 根哑数据, 不可用)
+  if (market === 'us') {
+    const ticker = txSymbol.replace(/^us/i, '');
+    const klines = await fetchTwelveDataKlines(ticker, timeframe);
+    return {
+      symbol: resolved,
+      name: resolved,
+      klines,
+      source: 'TwelveData',
+      period: timeframe === 'weekly' ? `周线 (近 ${klines.length} 周)` : `日线 (近 ${klines.length} 根)`,
+      timeframe,
+    };
+  }
+
+  if (market !== 'cn') {
     throw new Error(
-      'This application only supports Chinese A-share stocks. Please use a 6-digit stock code (e.g., 000001.ss, 600000) or a symbol with .SS/.SZ suffix.'
+      `无法识别的代码 "${symbol.trim()}"。支持: A股6位代码 (如 600519 / 000001.ss), 美股 (如 AAPL / AAPL.US), 港股 (如 00700 / 00700.HK), 指数 (如 GI.HSI), 加密货币 (如 BTCUSDT)。`
     );
   }
 
-  // Always fetch 5 years of daily K-line data
-  const period = '1d';
-  const count = 365 * 5; // 5 years
+  // 日线: 5 年日 K; 周线: TickFlow 原生 1w (约 1000 周, 覆盖上市以来多数历史)
+  const period = timeframe === 'weekly' ? '1w' : '1d';
+  const count = timeframe === 'weekly' ? 1000 : 365 * 5; // 5 years daily / ~19 years weekly
   const TICKFLOW_API_KEY = getTickFlowApiKey();
   const TICKFLOW_BASE_URL = getTickFlowBaseUrl();
   const isFreeAPI = !TICKFLOW_API_KEY;
@@ -351,7 +654,7 @@ export async function fetchStockData(symbol: string): Promise<{
   // TickFlow API URL with query parameters
   const tickflowUrl = `${TICKFLOW_BASE_URL}/v1/klines?symbol=${resolved}&period=${period}&count=${count}&adjust=forward`;
 
-  console.log(`[TickFlow] ${isFreeAPI ? '免费API' : '完整服务'} - Fetching 5 years data for ${displayName} (前复权)`);
+  console.log(`[TickFlow] ${isFreeAPI ? '免费API' : '完整服务'} - Fetching ${period} data for ${displayName} (前复权)`);
   console.log(`[TickFlow] URL: ${tickflowUrl}`);
 
   const headers: Record<string, string> = {};
@@ -383,7 +686,7 @@ export async function fetchStockData(symbol: string): Promise<{
     console.log(`[TickFlow] Response status: ${response.status} (attempt ${attempt + 1}/${MAX_RETRIES + 1})`);
 
     if (response.ok) {
-      return await handleTickflowResponse(response, displayName);
+      return await handleTickflowResponse(response, displayName, timeframe);
     }
 
     const errorText = await response.text();
@@ -408,12 +711,13 @@ export async function fetchStockData(symbol: string): Promise<{
   throw lastError ?? new Error(`Unable to fetch data for symbol "${displayName}" from TickFlow API after retries.`);
 }
 
-async function handleTickflowResponse(response: Response, displayName: string): Promise<{
+async function handleTickflowResponse(response: Response, displayName: string, timeframe: KlineTimeframe = 'daily'): Promise<{
   symbol: string;
   name: string;
   klines: Kline[];
   source: string;
   period: string;
+  timeframe: KlineTimeframe;
 }> {
   const responseData = await response.json();
   console.log(`[TickFlow] Response data keys: ${Object.keys(responseData || {}).join(', ')}`);
@@ -481,7 +785,8 @@ async function handleTickflowResponse(response: Response, displayName: string): 
     name: displayName,
     klines: klines,
     source: 'TickFlow API',
-    period: '5 years daily'
+    period: timeframe === 'weekly' ? `周线 (近 ${klines.length} 周)` : `5年日线 (近 ${klines.length} 根)`,
+    timeframe,
   };
 }
 
@@ -504,6 +809,8 @@ export interface ChanLunContext {
   currentSetup?: any[];
   /** Number of recent K-line bars to embed in full OHLCV form. Default 90. */
   recentWindow?: number;
+  /** K-line granularity used for this analysis. Default 'daily'. */
+  timeframe?: KlineTimeframe;
 }
 
 const DEFAULT_RECENT_WINDOW = 90;
@@ -605,6 +912,10 @@ export function buildChanLunContext(ctx: ChanLunContext): string {
   const recentWindow = ctx.recentWindow ?? DEFAULT_RECENT_WINDOW;
   const recent = ctx.klines.slice(-recentWindow);
   const summary = summarizeKlines(ctx.klines);
+  const timeframe = ctx.timeframe ?? 'daily';
+  const kLabel = TIMEFRAME_LABEL[timeframe];
+  const spanLabel = timeframe === 'weekly' ? '5 年日线 / 周线' : '5 年日线';
+  const recentSpan = timeframe === 'weekly' ? `近 ${recentWindow} 周` : `近 ${recentWindow} 个交易日`;
 
   const lastKline = ctx.klines[ctx.klines.length - 1];
   const firstRecent = recent[0];
@@ -614,15 +925,15 @@ export function buildChanLunContext(ctx: ChanLunContext): string {
       : 0;
 
   return [
-    `# ${ctx.symbol} 缠论多因子分析上下文`,
+    `# ${ctx.symbol} 缠论多因子分析上下文 (${kLabel})`,
     '',
-    '## 1. K线全期统计 (5 年日线 / 总计 ' + summary.count + ' 根)',
+    `## 1. K线全期统计 (${spanLabel} / 总计 ` + summary.count + ' 根)',
     `- 数据起点: ${summary.first ? `${summary.first.date} 收 ${summary.first.close.toFixed(2)}` : 'N/A'}`,
     `- 数据终点: ${summary.last ? `${summary.last.date} 收 ${summary.last.close.toFixed(2)}` : 'N/A'}`,
     `- 区间最高: ${summary.highest.toFixed(2)} | 区间最低: ${summary.lowest.toFixed(2)} | 区间振幅: ${summary.range.toFixed(2)}`,
     `- 累计收益率: ${pct(summary.totalReturn)} | 最大回撤: ${pct(summary.maxDrawdown)} | 均成交量: ${Math.round(summary.avgVolume)} | 均成交额: ${Math.round(summary.avgAmount)}`,
     '',
-    `## 2. 最近 ${recent.length} 根日 K 线 (近 ${recentWindow} 个交易日) 累计涨跌 ${pct(recentReturn)}`,
+    `## 2. 最近 ${recent.length} 根${kLabel} K 线 (${recentSpan}) 累计涨跌 ${pct(recentReturn)}`,
     '| 日期 | 开 | 高 | 低 | 收 | 量 | 额 |',
     '|---|---|---|---|---|---|---|',
     recent
@@ -651,10 +962,12 @@ export function buildChanLunContext(ctx: ChanLunContext): string {
   ].join('\n');
 }
 
-function buildSystemPrompt(): string {
+function buildSystemPrompt(timeframe: KlineTimeframe = 'daily'): string {
+  const kLabel = TIMEFRAME_LABEL[timeframe];
+  const spanDesc = timeframe === 'weekly' ? '周 K 线汇总 + 最近约 90 周的完整 OHLCV (周线级别, 适合中长线趋势判断)' : '5 年日 K 线汇总 + 最近约 90 个交易日的完整 OHLCV';
   return [
     '你是一位资深 A 股缠论 (ChanLun) 量化分析师, 精通分型、笔、线段、中枢、买卖点、走势背驰 (背离) 等核心概念。',
-    '你将收到一份结构化上下文, 包含 5 年日 K 线汇总 + 最近约 90 个交易日的完整 OHLCV, 以及识别出的分型、笔、线段、中枢。',
+    `你将收到一份基于${kLabel}的结构化上下文, 包含${spanDesc}, 以及识别出的分型、笔、线段、中枢。当前分析周期为${kLabel}, 请按该周期口径解读 (周线笔/线段/中枢对应更长周期趋势)。`,
     '请基于这些数据给出专业、可执行的中文投资分析报告, 严格使用 Markdown 格式, 包含以下章节:',
     '1. # 总览 (Overall Bias): 多空判断、当前趋势方向、关键价位',
     '2. ## 缠论结构解读: 笔 / 线段 / 中枢的状态、最近中枢的 zg/zd/gg/dd 含义',
@@ -942,7 +1255,7 @@ export interface AnalyzeWithAIParams extends ChanLunContext {
  * Gemini path the model is fixed to gemini-2.0-flash.
  */
 export async function analyzeWithAI(params: AnalyzeWithAIParams): Promise<string> {
-  const { model, klines, strokes, segments, hubs, fractions, currentSetup, symbol, recentWindow } = params;
+  const { model, klines, strokes, segments, hubs, fractions, currentSetup, symbol, recentWindow, timeframe } = params;
 
   if (!klines || klines.length === 0) {
     throw new Error('没有可用的 K 线数据, 请先加载股票数据。');
@@ -955,12 +1268,12 @@ export async function analyzeWithAI(params: AnalyzeWithAIParams): Promise<string
     throw new Error('未配置 AI API 密钥。请在配置中设置 Gemini API Key 或 OpenRouter API Key。');
   }
 
-  const systemPrompt = buildSystemPrompt();
-  const contextBlock = buildChanLunContext({ symbol, klines, strokes, segments, hubs, fractions, currentSetup, recentWindow });
+  const systemPrompt = buildSystemPrompt(timeframe ?? 'daily');
+  const contextBlock = buildChanLunContext({ symbol, klines, strokes, segments, hubs, fractions, currentSetup, recentWindow, timeframe });
   const lastKline = klines[klines.length - 1];
 
   const userPrompt = [
-    `请基于以下"${symbol}"的结构化缠论上下文给出专业量化分析报告:`,
+    `请基于以下"${symbol}"的结构化缠论上下文 (${TIMEFRAME_LABEL[timeframe ?? 'daily']})给出专业量化分析报告:`,
     '',
     '--- CONTEXT START ---',
     contextBlock,
@@ -1015,6 +1328,7 @@ export async function chatWithAI(params: ChatWithAIParams): Promise<string> {
     symbol,
     recentWindow,
     temperature,
+    timeframe,
   } = params;
 
   if (!klines || klines.length === 0) {
@@ -1031,15 +1345,15 @@ export async function chatWithAI(params: ChatWithAIParams): Promise<string> {
     throw new Error('未配置 AI API 密钥。请在配置中设置 Gemini API Key 或 OpenRouter API Key。');
   }
 
-  const systemPrompt = buildSystemPrompt();
-  const contextBlock = buildChanLunContext({ symbol, klines, strokes, segments, hubs, fractions, currentSetup, recentWindow });
+  const systemPrompt = buildSystemPrompt(timeframe ?? 'daily');
+  const contextBlock = buildChanLunContext({ symbol, klines, strokes, segments, hubs, fractions, currentSetup, recentWindow, timeframe });
 
   // Inject the ChanLun context as the very first user turn so the model
   // has the full data available, regardless of which model is used.
   const contextPrimer: ChatMessage = {
     role: 'user',
     content: [
-      `以下是"${symbol}"的结构化缠论上下文 (system-managed, 请勿要求重新提供):`,
+      `以下是"${symbol}"的结构化缠论上下文 (${TIMEFRAME_LABEL[timeframe ?? 'daily']}, system-managed, 请勿要求重新提供):`,
       '',
       '--- CONTEXT START ---',
       contextBlock,
@@ -1090,6 +1404,7 @@ export async function chatWithAIStream(
     symbol,
     recentWindow,
     temperature,
+    timeframe,
   } = params;
 
   if (!klines || klines.length === 0) {
@@ -1106,13 +1421,13 @@ export async function chatWithAIStream(
     throw new Error('未配置 AI API 密钥。请在配置中设置 Gemini API Key 或 OpenRouter API Key。');
   }
 
-  const systemPrompt = buildSystemPrompt();
-  const contextBlock = buildChanLunContext({ symbol, klines, strokes, segments, hubs, fractions, currentSetup, recentWindow });
+  const systemPrompt = buildSystemPrompt(timeframe ?? 'daily');
+  const contextBlock = buildChanLunContext({ symbol, klines, strokes, segments, hubs, fractions, currentSetup, recentWindow, timeframe });
 
   const contextPrimer: ChatMessage = {
     role: 'user',
     content: [
-      `以下是"${symbol}"的结构化缠论上下文 (system-managed, 请勿要求重新提供):`,
+      `以下是"${symbol}"的结构化缠论上下文 (${TIMEFRAME_LABEL[timeframe ?? 'daily']}, system-managed, 请勿要求重新提供):`,
       '',
       '--- CONTEXT START ---',
       contextBlock,
@@ -1619,6 +1934,49 @@ async function fetchGlobalBasicInfo(code: string): Promise<StockBasicInfo> {
   return basicInfoFromKlines(code, route.name, klines);
 }
 
+/**
+ * 美股 / 港股报价 -> StockBasicInfo (腾讯 sqt 行情, 支持 CORS)。
+ * 美/港字段布局与 A 股不完全一致, 故用"时间字段相对定位"解析高/低/成交额,
+ * 解析失败时降级为日K推导 (basicInfoFromKlines)。
+ */
+async function fetchUsHkBasicInfo(txSymbol: string, display: string, market: 'us' | 'hk'): Promise<StockBasicInfo> {
+  const fallback = async (): Promise<StockBasicInfo> => {
+    const klines = await fetchTencentKlines(market === 'us' ? 'usfqkline' : 'fqkline', txSymbol, 'daily');
+    return basicInfoFromKlines(display, display, klines);
+  };
+
+  try {
+    const resp = await fetch(`https://web.sqt.gtimg.cn/q=${txSymbol}`);
+    if (!resp.ok) return fallback();
+    const text = new TextDecoder('gbk').decode(await resp.arrayBuffer());
+    const m = text.match(/="(.+)"/);
+    const d = m?.[1]?.split('~');
+    const price = parseFloat(d?.[3] ?? '');
+    const prevClose = parseFloat(d?.[4] ?? '');
+    if (!d || !(price > 0) || !(prevClose > 0)) return fallback();
+
+    // 时间字段形如 '2026-09-04 16:00:01' (美) / '2026/09/04 16:08:06' (港);
+    // 其后依次为 涨跌额 / 涨跌幅 / 最高 / 最低 / ... / 成交量 / 成交额
+    const timeIdx = d.findIndex((f) => /\d{4}[\/-]\d{2}[\/-]\d{2}.+\d{2}:\d{2}/.test(f));
+    const num = (i: number): number => (timeIdx >= 0 ? parseFloat(d[timeIdx + i]) || 0 : 0);
+    const change = price - prevClose;
+    return {
+      symbol: display,
+      name: d[1] || display,
+      price,
+      change,
+      changePercent: (change / prevClose) * 100,
+      open: parseFloat(d[5]) || 0,
+      high: num(3),
+      low: num(4),
+      volume: parseFloat(d[6]) || 0, // 美/港为股数 (A股为手, 另行×100)
+      amount: num(7),
+    };
+  } catch {
+    return fallback();
+  }
+}
+
 /** 加密货币报价 -> StockBasicInfo (Binance 24h ticker) */
 async function fetchCryptoBasicInfo(pair: string): Promise<StockBasicInfo> {
   const resp = await fetch(`https://data-api.binance.vision/api/v3/ticker/24hr?symbol=${pair}`);
@@ -1652,10 +2010,16 @@ export async function fetchStockBasicInfo(symbol: string): Promise<StockBasicInf
   // 加密货币: 'BTCUSDT' 等 *USDT 交易对
   if (/^[A-Z0-9]{2,10}USDT$/.test(clean)) return fetchCryptoBasicInfo(clean);
 
+  // 美股 / 港股: 'AAPL' / 'AAPL.US' / '00700' / '00700.HK'
+  const parsed = resolveSymbol(symbol);
+  if (parsed.market === 'us' || parsed.market === 'hk') {
+    return fetchUsHkBasicInfo(parsed.txSymbol, parsed.resolved, parsed.market);
+  }
+
   // Determine if it's a Shanghai or Shenzhen stock
   let tencentSymbol = '';
   let pureCode = '';
-  
+
   if (/^\d{6}$/.test(clean)) {
     const isSS = /^(60|68|90|11|13|51|58|60)/.test(clean);
     tencentSymbol = `${isSS ? 'sh' : 'sz'}${clean}`;
@@ -1667,7 +2031,7 @@ export async function fetchStockBasicInfo(symbol: string): Promise<StockBasicInf
     pureCode = clean.replace('.SZ', '');
     tencentSymbol = `sz${pureCode}`;
   } else {
-    throw new Error('Invalid symbol format. Please use 6-digit code or symbol with .SH/.SZ suffix.');
+    throw new Error('无法识别的代码。请使用 A股6位代码 (如 600519), 美股 (如 AAPL / AAPL.US), 港股 (如 00700 / 00700.HK)。');
   }
 
   // Tencent Stock API - supports CORS

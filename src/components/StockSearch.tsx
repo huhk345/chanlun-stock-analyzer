@@ -13,7 +13,9 @@ const PRESET_STOCKS = [
   { symbol: '000001', name: 'PingAn Bank (平安银行)' },
   { symbol: '600036', name: 'CMB (招商银行)' },
   { symbol: '601318', name: 'PingAn Insurance (中国平安)' },
-  { symbol: '000858', name: 'Wuliangye (五粮液)' }
+  { symbol: '000858', name: 'Wuliangye (五粮液)' },
+  { symbol: 'AAPL.US', name: 'Apple (苹果)' },
+  { symbol: '00700.HK', name: 'Tencent (腾讯控股)' }
 ];
 
 export default function StockSearch({ onSearch, isLoading, activeSymbol }: StockSearchProps) {
@@ -38,14 +40,14 @@ export default function StockSearch({ onSearch, isLoading, activeSymbol }: Stock
         <div className="w-full lg:max-w-md">
           <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-widest flex items-center gap-2 mb-2 font-sans">
             <Compass className="h-4 w-4 text-blue-400" />
-            <span>搜索A股股票代码</span>
+            <span>搜索股票代码 (A股/美股/港股)</span>
           </h2>
           <form onSubmit={handleSubmit} className="relative flex items-center">
             <input
               type="text"
               value={ticker}
               onChange={(e) => setTicker(e.target.value)}
-              placeholder="例如: 600519, 000001, 002594..."
+              placeholder="例如: 600519, AAPL.US, 00700.HK..."
               disabled={isLoading}
               className="w-full pl-4 pr-12 py-2.5 text-sm bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
             />
@@ -77,7 +79,7 @@ export default function StockSearch({ onSearch, isLoading, activeSymbol }: Stock
       <div className="mt-4 pt-4 border-t border-zinc-800/80">
         <div className="flex items-center gap-2 mb-2">
           <Globe className="h-3.5 w-3.5 text-zinc-500" />
-          <span className="text-[10px] font-semibold uppercase font-sans tracking-widest text-zinc-500">热门A股</span>
+          <span className="text-[10px] font-semibold uppercase font-sans tracking-widest text-zinc-500">热门股票</span>
         </div>
         <div className="flex flex-wrap gap-2">
           {PRESET_STOCKS.map(item => (

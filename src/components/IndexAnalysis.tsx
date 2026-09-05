@@ -8,6 +8,7 @@ import { mergeKlines, findFractions, calculateStrokes, calculateBSPoints } from 
 import {
   IndexId, INDEX_META, ParsedSymbol, parseSymbol, symbolKey, kindLabel,
   fetchIndexMembers, loadStockMeta, fetchYearKlines, fetchStockFlowBatch, StockMeta, StockFlow,
+  ScanTimeframe,
 } from '../utils/indexAnalysisApi';
 import { formatSignedYi } from '../utils/marketApi';
 import { WatchItem, loadWatchlist, upsertWatchlist, removeFromWatchlist } from '../utils/watchlistStorage';
@@ -18,8 +19,11 @@ import { WatchItem, loadWatchlist, upsertWatchlist, removeFromWatchlist } from '
 
 const CUSTOM_KEY = 'chanlun_scan_custom';
 const PREFS_KEY = 'chanlun_scan_prefs';
-const CACHE_KEY = 'chanlun_scan_cache_v1';
-/** 买卖点统计窗口: 最近 90 个自然日 */
+const SCAN_TF_KEY = 'chanlun_scan_timeframe';
+const CACHE_KEY_BASE = 'chanlun_scan_cache_v1';
+/** 周线/日线分开缓存: 旧版单 key 缓存自动迁移为日线缓存 */
+const CACHE_KEY_LEGACY = 'chanlun_scan_cache_v1';
+/** 买卖点统计窗口: 最近 90 个自然日 (日线/周线统一口径) */
 const SIGNAL_WINDOW_DAYS = 90;
 const CONCURRENCY = 6;
 /** 每完成多少只批量落盘一次缓存 */
@@ -68,32 +72,55 @@ function expectedTradeDay(): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** 缓存条目是否覆盖预期最新交易日 (按内容判断, 不依赖扫描时间戳) */
-function entryFresh(entry: CacheEntry | undefined): boolean {
-  return !!entry && entry.d >= expectedTradeDay();
+function cacheKeyFor(tf: ScanTimeframe): string {
+  return `${CACHE_KEY_BASE}_${tf}`;
 }
 
-function loadCache(): ScanCache {
-  try {
-    const raw = localStorage.getItem(CACHE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') return parsed as ScanCache;
-    }
-  } catch { /* ignore */ }
+/**
+ * 缓存条目是否覆盖预期最新交易日 (按内容判断, 不依赖扫描时间戳)。
+ * 周线口径放宽到 7 天: 周K末根日期为本周内某交易日即视为新鲜
+ * (避免周二时末根仍为上周五而被误判过期)。
+ */
+function entryFresh(entry: CacheEntry | undefined, tf: ScanTimeframe = 'daily'): boolean {
+  if (!entry) return false;
+  if (tf === 'weekly') {
+    return daysBetween(entry.d, expectedTradeDay()) <= 7;
+  }
+  return entry.d >= expectedTradeDay();
+}
+
+function loadCache(tf: ScanTimeframe = 'daily'): ScanCache {
+  const tryParse = (key: string): ScanCache | null => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') return parsed as ScanCache;
+      }
+    } catch { /* ignore */ }
+    return null;
+  };
+  // 日线优先读新 key, 兼容旧版单 key 缓存 (自动视为日线缓存)
+  const fresh = tryParse(cacheKeyFor(tf));
+  if (fresh) return fresh;
+  if (tf === 'daily') {
+    const legacy = tryParse(CACHE_KEY_LEGACY);
+    if (legacy) return legacy;
+  }
   return {};
 }
 
-function saveCache(cache: ScanCache) {
+function saveCache(cache: ScanCache, tf: ScanTimeframe = 'daily') {
+  const key = cacheKeyFor(tf);
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+    localStorage.setItem(key, JSON.stringify(cache));
   } catch {
     // 配额超限: 逐出约一半最旧条目后重试一次
     try {
       const keys = Object.keys(cache);
       const drop = keys.slice(0, Math.ceil(keys.length / 2));
       for (const k of drop) delete cache[k];
-      localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+      localStorage.setItem(key, JSON.stringify(cache));
     } catch { /* ignore */ }
   }
 }
@@ -208,7 +235,7 @@ function rowsFromKlines(
 // 主组件
 // ---------------------------------------------------------------------------
 
-export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symbol: string) => void }) {
+export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symbol: string, tf?: ScanTimeframe) => void }) {
   // 宇宙选择 (默认沪深300 + 中证500)
   const [selectedIndexes, setSelectedIndexes] = useState<Record<IndexId, boolean>>(() => {
     try {
@@ -246,20 +273,44 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
     } catch { /* 忽略, 表格显示 — */ }
   }, []);
 
-  // 结果缓存 (localStorage): symbol -> CacheEntry
+  // 扫描周期: 日线 / 周线 (所有指数/成分股/自定义标的统一按该周期扫描)
+  const [scanTimeframe, setScanTimeframe] = useState<ScanTimeframe>(() => {
+    try {
+      const saved = localStorage.getItem(SCAN_TF_KEY);
+      if (saved === 'weekly') return 'weekly';
+    } catch { /* ignore */ }
+    return 'daily';
+  });
+  const scanTimeframeRef = useRef<ScanTimeframe>(scanTimeframe);
+  scanTimeframeRef.current = scanTimeframe;
+
+  // 结果缓存 (localStorage, 按周期分 key): symbol -> CacheEntry
   // 新鲜度按内容判断: 缓存末根K线日期落后于预期交易日 -> 该条目过期, 扫描时重新下载
-  const initialCache = useMemo<ScanCache>(() => loadCache(), []);
+  // 初次挂载读取与 scanTimeframe 初始化一致的周期 key (同读 SCAN_TF_KEY, 避免 hooks 依赖警告)
+  const initialCache = useMemo<ScanCache>(() => {
+    let tf: ScanTimeframe = 'daily';
+    try {
+      if (localStorage.getItem(SCAN_TF_KEY) === 'weekly') tf = 'weekly';
+    } catch { /* ignore */ }
+    return loadCache(tf);
+  }, []);
   const cacheRef = useRef<ScanCache>(initialCache);
   const [cacheInfo, setCacheInfo] = useState(() => ({
     count: Object.keys(initialCache).length,
     latestDate: Object.values(initialCache).reduce<string>((acc, e) => (e.d > acc ? e.d : acc), ''),
   }));
+  const cacheSummary = (cache: ScanCache) => ({
+    count: Object.keys(cache).length,
+    latestDate: Object.values(cache).reduce<string>((acc, e) => (e.d > acc ? e.d : acc), ''),
+  });
   /** 挂载时缓存整体已落后于预期交易日: 自动触发一次增量扫描刷新 */
   const staleOnMountRef = useRef(
     Object.keys(initialCache).length > 0 &&
     Object.values(initialCache).reduce<string>((a, e) => (e.d > a ? e.d : a), '') < expectedTradeDay(),
   );
   const expectedDay = useMemo(expectedTradeDay, []);
+
+
 
   // 扫描状态
   const [progress, setProgress] = useState<ScanProgress>({ running: false, total: 0, done: 0, ok: 0, failed: 0, cached: 0 });
@@ -268,6 +319,19 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
   const scanningRef = useRef(false);
   /** 首次进入: 缓存结果是否已加载完成 */
   const [hydrated, setHydrated] = useState(false);
+
+  // 切换日线/周线: 换用对应周期缓存并从本地恢复结果 (扫描中禁止切换)
+  const handleScanTimeframeChange = useCallback((next: ScanTimeframe) => {
+    if (next === scanTimeframeRef.current || scanningRef.current) return;
+    try { localStorage.setItem(SCAN_TF_KEY, next); } catch { /* ignore */ }
+    setScanTimeframe(next);
+    scanTimeframeRef.current = next;
+    const nextCache = loadCache(next);
+    cacheRef.current = nextCache;
+    setCacheInfo(cacheSummary(nextCache));
+    setRows([]);
+    setHydrated(false);
+  }, []);
 
   // 过滤与排序
   const [typeFilter, setTypeFilter] = useState<Set<BSPointType>>(new Set(ALL_TYPES));
@@ -285,27 +349,38 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
 
   // -------------------------------------------------------------------------
   // 默认展示: 有缓存时直接从 localStorage 恢复上次扫描结果, 无需手动扫描
+  // 周期切换时重新 hydrate 对应周期的缓存。
   // -------------------------------------------------------------------------
 
   useEffect(() => {
     let cancelled = false;
     const hydrate = async () => {
-      if (Object.keys(cacheRef.current).length > 0) {
-        metaRef.current = await loadStockMeta();
-        if (!cancelled && !scanningRef.current) {
-          const out: SignalRow[] = [];
-          for (const [sym, entry] of Object.entries(cacheRef.current)) {
-            out.push(...rowsFromCacheEntry(sym, entry, metaRef.current));
-          }
-          setRows(out);
-          refreshFlows([...new Set(out.map(r => r.symbolKey))]);
+      const tf = scanTimeframeRef.current;
+      // 周期切换后 cacheRef 已指向新周期缓存; 初次挂载时也是当前周期缓存
+      const snapshot = { ...cacheRef.current };
+      if (Object.keys(snapshot).length === 0) {
+        const fresh = loadCache(tf);
+        cacheRef.current = fresh;
+        setCacheInfo(cacheSummary(fresh));
+        if (Object.keys(fresh).length === 0) {
+          if (!cancelled) setHydrated(true);
+          return;
         }
+      }
+      metaRef.current = await loadStockMeta();
+      if (!cancelled && !scanningRef.current && scanTimeframeRef.current === tf) {
+        const out: SignalRow[] = [];
+        for (const [sym, entry] of Object.entries(cacheRef.current)) {
+          out.push(...rowsFromCacheEntry(sym, entry, metaRef.current));
+        }
+        setRows(out);
+        refreshFlows([...new Set(out.map(r => r.symbolKey))]);
       }
       if (!cancelled) setHydrated(true);
     };
     hydrate();
     return () => { cancelled = true; };
-  }, [refreshFlows]);
+  }, [refreshFlows, scanTimeframe]);
 
   // -------------------------------------------------------------------------
   // 自选股操作
@@ -399,11 +474,9 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
     abortRef.current = null;
     scanningRef.current = false;
     setProgress(p => ({ ...p, running: false }));
-    saveCache(cacheRef.current); // 中断也保留已完成部分
-    setCacheInfo({
-      count: Object.keys(cacheRef.current).length,
-      latestDate: Object.values(cacheRef.current).reduce<string>((acc, e) => (e.d > acc ? e.d : acc), ''),
-    });
+    const tf = scanTimeframeRef.current;
+    saveCache(cacheRef.current, tf); // 中断也保留已完成部分
+    setCacheInfo(cacheSummary(cacheRef.current));
   }, []);
 
   const startScan = useCallback(async (force = false) => {
@@ -447,12 +520,13 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
     let sinceFlush = 0;
     const signaledKeys = new Set<string>();
 
+    const tf = scanTimeframeRef.current;
     const worker = async () => {
       while (cursor < universe.length && !controller.signal.aborted) {
         const sym = universe[cursor++];
         const cachedEntry = cacheRef.current[sym];
         // 缓存命中条件: 非强制 && 条目数据已达预期最新交易日; 过期条目重新下载计算
-        const hit = !force && entryFresh(cachedEntry) ? cachedEntry : undefined;
+        const hit = !force && entryFresh(cachedEntry, tf) ? cachedEntry : undefined;
 
         if (hit) {
           // 缓存命中: 零请求零计算, 仅做窗口过滤
@@ -470,12 +544,12 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
         }
 
         try {
-          const klines = await fetchYearKlines(sym, 3, controller.signal);
+          const klines = await fetchYearKlines(sym, 3, controller.signal, tf);
           cacheRef.current[sym] = computeCacheEntry(klines);
           ok++;
           sinceFlush++;
           if (sinceFlush >= CACHE_FLUSH_EVERY) {
-            saveCache(cacheRef.current);
+            saveCache(cacheRef.current, tf);
             sinceFlush = 0;
           }
           const newRows = rowsFromKlines(sym, klines, metaRef.current);
@@ -499,11 +573,8 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
     // 4. 扫描完成后批量拉取有信号标的的当日主力资金流向
     refreshFlows([...signaledKeys]);
 
-    saveCache(cacheRef.current);
-    setCacheInfo({
-      count: Object.keys(cacheRef.current).length,
-      latestDate: Object.values(cacheRef.current).reduce<string>((acc, e) => (e.d > acc ? e.d : acc), ''),
-    });
+    saveCache(cacheRef.current, tf);
+    setCacheInfo(cacheSummary(cacheRef.current));
     if (!controller.signal.aborted) {
       setProgress(p => ({ ...p, running: false }));
       abortRef.current = null;
@@ -561,11 +632,16 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
   const pctClass = (v: number) => (v > 0 ? 'text-red-400' : v < 0 ? 'text-green-400' : 'text-zinc-400');
 
   const openInAnalyzer = (row: SignalRow) => {
-    onSelectStock?.(row.symbolKey.replace('.SH', '.SS'));
+    onSelectStock?.(row.symbolKey.replace('.SH', '.SS'), scanTimeframe);
   };
 
   const anyUniverseSelected = selectedIndexes.hs300 || selectedIndexes.zz500 || customSymbols.length > 0;
-  const cacheStale = cacheInfo.latestDate !== '' && cacheInfo.latestDate < expectedDay;
+  const cacheStale =
+    cacheInfo.latestDate === ''
+      ? false
+      : scanTimeframe === 'weekly'
+        ? daysBetween(cacheInfo.latestDate, expectedDay) > 7
+        : cacheInfo.latestDate < expectedDay;
 
   return (
     <div className="space-y-4">
@@ -577,7 +653,7 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
         <div className="min-w-0">
           <h2 className="text-lg font-bold text-zinc-50 leading-tight">缠论买卖点扫描</h2>
           <p className="text-[11px] text-zinc-500 mt-0.5">
-            默认扫描沪深300 / 中证500成分股 (近1年日线API数据), 列出最近 {SIGNAL_WINDOW_DAYS} 天内的三类买卖点
+            默认扫描沪深300 / 中证500成分股 ({scanTimeframe === 'weekly' ? '周线 TickFlow 1w, 中长线趋势' : '近1年日线API数据'}), 列出最近 {SIGNAL_WINDOW_DAYS} 天内的三类买卖点
           </p>
         </div>
       </div>
@@ -599,6 +675,27 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
               }`}
             >
               {INDEX_META[id].label}成分
+            </button>
+          ))}
+        </div>
+
+        {/* Timeframe toggle: 日线 / 周线 (applies to every index universe) */}
+        <div className="flex items-center gap-1 h-8 px-1 rounded-md bg-zinc-900/70 border border-zinc-800/60">
+          <span className="text-[10px] text-zinc-600 font-semibold uppercase tracking-wider ml-1.5 mr-0.5">周期</span>
+          {(['daily', 'weekly'] as ScanTimeframe[]).map((tf) => (
+            <button
+              key={tf}
+              type="button"
+              onClick={() => tf !== scanTimeframe && handleScanTimeframeChange(tf)}
+              disabled={progress.running}
+              className={`h-6 px-2.5 rounded text-[11px] font-medium transition-all cursor-pointer disabled:opacity-50 disabled:cursor-wait ${
+                scanTimeframe === tf
+                  ? 'bg-blue-500/90 text-white shadow-sm shadow-blue-500/20'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+              }`}
+              title={tf === 'daily' ? '日线级别扫描 (近1年日K)' : '周线级别扫描 (TickFlow 1w, 所有指数/成分股通用)'}
+            >
+              {tf === 'daily' ? '日线' : '周线'}
             </button>
           ))}
         </div>
@@ -794,7 +891,7 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
             ) : (
               <>
                 <Radar className="h-6 w-6 text-zinc-700" />
-                <p className="text-xs text-zinc-500">选择扫描范围后点击「开始扫描」, 将逐只获取近1年日线并计算缠论三类买卖点</p>
+                <p className="text-xs text-zinc-500">选择扫描范围与周期后点击「开始扫描」, 将逐只获取{scanTimeframe === 'weekly' ? '周线 (TickFlow 1w)' : '近1年日线'}并计算缠论三类买卖点</p>
                 <button
                   onClick={() => startScan(false)}
                   disabled={!anyUniverseSelected}
@@ -828,7 +925,9 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
                   return (
                     <tr
                       key={head.symbolKey}
-                      className="border-b border-zinc-900 hover:bg-zinc-900/40 transition-colors group"
+                      onClick={() => openInAnalyzer(head)}
+                      title={`${head.code}${head.name ? ` ${head.name}` : ''} · 点击在个股分析中打开`}
+                      className="border-b border-zinc-900 hover:bg-zinc-900/40 transition-colors group cursor-pointer"
                     >
                       <td className="px-3 py-2 text-[11px] font-mono text-zinc-300 whitespace-nowrap">{head.date}</td>
                       <td className="px-3 py-2 text-[11px] font-mono font-semibold text-zinc-200">{head.code}</td>
@@ -885,7 +984,7 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
                       <td className="px-3 py-2 text-right">
                         <div className="flex items-center justify-end gap-2.5">
                           <button
-                            onClick={() => toggleWatch(head)}
+                            onClick={(e) => { e.stopPropagation(); toggleWatch(head); }}
                             className={`inline-flex items-center gap-1 text-[10px] transition-colors cursor-pointer opacity-60 group-hover:opacity-100 ${
                               watchedKeys.has(head.symbolKey)
                                 ? 'text-amber-400 !opacity-100'
@@ -897,7 +996,7 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
                             自选
                           </button>
                           <button
-                            onClick={() => openInAnalyzer(head)}
+                            onClick={(e) => { e.stopPropagation(); openInAnalyzer(head); }}
                             className="inline-flex items-center gap-1 text-[10px] text-blue-400/70 hover:text-blue-300 transition-colors cursor-pointer opacity-60 group-hover:opacity-100"
                             title="在个股分析中打开"
                           >
@@ -917,7 +1016,7 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
 
       {/* Footer note */}
       <p className="text-[10px] text-zinc-600 leading-relaxed">
-        数据来源: TickFlow 近1年日线 (前复权) · 扫描结果缓存于浏览器 localStorage, 再次扫描秒级完成, 「强制重扫」可获取最新数据 ·
+        数据来源: TickFlow {scanTimeframe === 'weekly' ? '周线 1w (前复权, 约400周)' : '近1年日线 (前复权)'} · 日线/周线结果分开缓存于浏览器 localStorage, 再次扫描秒级完成, 「强制重扫」可获取最新数据 ·
         信号为缠论三类买卖点机械识别结果, 仅供研究参考, 不构成投资建议。
       </p>
 

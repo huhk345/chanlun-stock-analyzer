@@ -10,18 +10,21 @@ interface ApiKeys {
   tickflow: string;
   gemini: string;
   openrouter: string;
+  twelvedata: string;
 }
 
 export default function ConfigView({ isOpen, onClose }: ConfigViewProps) {
   const [apiKeys, setApiKeys] = useState<ApiKeys>({
     tickflow: '',
     gemini: '',
-    openrouter: ''
+    openrouter: '',
+    twelvedata: ''
   });
   const [showKeys, setShowKeys] = useState({
     tickflow: false,
     gemini: false,
-    openrouter: false
+    openrouter: false,
+    twelvedata: false
   });
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
@@ -118,6 +121,43 @@ export default function ConfigView({ isOpen, onClose }: ConfigViewProps) {
             </div>
             <p className="text-[11px] text-zinc-500 leading-relaxed">
               获取完整服务 API Key: <a href="https://api.tickflow.org" target="_blank" className="text-blue-400 hover:underline">https://api.tickflow.org</a>
+            </p>
+          </div>
+
+          {/* TwelveData API Key */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Key className="h-4 w-4 text-zinc-400" />
+              <label className="text-sm font-semibold text-zinc-200">TwelveData API Key</label>
+              <span className="text-[10px] text-zinc-500">(美股K线必需)</span>
+            </div>
+            <div className="relative">
+              <input
+                type={showKeys.twelvedata ? 'text' : 'password'}
+                value={apiKeys.twelvedata || ''}
+                onChange={(e) => setApiKeys(prev => ({ ...prev, twelvedata: e.target.value }))}
+                className="w-full px-3 py-2.5 pr-20 text-sm bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 font-mono"
+                placeholder="美股K线数据, 免费注册获取"
+              />
+              <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                <button
+                  onClick={() => toggleShowKey('twelvedata')}
+                  className="p-1 text-zinc-500 hover:text-zinc-300 transition-colors"
+                >
+                  {showKeys.twelvedata ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+                {apiKeys.twelvedata && (
+                  <button
+                    onClick={() => handleClear('twelvedata')}
+                    className="p-1 text-zinc-500 hover:text-red-400 transition-colors"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+            <p className="text-[11px] text-zinc-500 leading-relaxed">
+              美股日线/周线数据源, 免费注册即得 (终身免费额度): <a href="https://twelvedata.com/pricing" target="_blank" className="text-blue-400 hover:underline">https://twelvedata.com/pricing</a>
             </p>
           </div>
 
