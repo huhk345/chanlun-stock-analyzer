@@ -67,7 +67,7 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
 
 2. **Install dependencies**
    ```bash
-   npm install
+   pnpm install
    ```
 
 3. **Configure environment variables** — Copy `.env.example` to `.env.local` and fill in your API keys:
@@ -82,7 +82,7 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
 
 4. **Run the development server**
    ```bash
-   npm run dev
+   pnpm run dev
    ```
 
 5. Open [http://localhost:5173](http://localhost:5173) in your browser.
@@ -115,7 +115,7 @@ A scheduled daily report system generates automated ChanLun analysis for selecte
 
 **Manual run:**
 ```bash
-npx tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
+pnpm exec tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
 ```
 
 ### Keywords
@@ -167,7 +167,7 @@ npx tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
 
 2. **安装依赖**
    ```bash
-   npm install
+   pnpm install
    ```
 
 3. **配置环境变量** — 将 `.env.example` 复制为 `.env.local` 并填入 API Key:
@@ -182,7 +182,7 @@ npx tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
 
 4. **启动开发服务器**
    ```bash
-   npm run dev
+   pnpm run dev
    ```
 
 5. 在浏览器中打开 [http://localhost:5173](http://localhost:5173)
@@ -221,7 +221,7 @@ npx tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
 
 **手动运行：**
 ```bash
-npx tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
+pnpm exec tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
 ```
 
 ---

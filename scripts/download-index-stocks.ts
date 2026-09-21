@@ -2,7 +2,7 @@
  * 批量下载沪深300和中证500成分股近10年日K线数据
  *
  * 用法:
- *   npx tsx scripts/download-index-stocks.ts [--index hs300|zz500|all] [--output dir]
+ *   pnpm exec tsx scripts/download-index-stocks.ts [--index hs300|zz500|all] [--output dir]
  *
  * 数据源:
  *   - 成分股列表: AKShare (Python) -> 中证指数公司

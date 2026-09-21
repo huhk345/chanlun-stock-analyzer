@@ -2,7 +2,7 @@
  * 缠论日报 CLI 脚本
  *
  * 用法:
- *   npx tsx scripts/chanlun-report.ts [--stocks 000001,600519] [--output dir] [--notify console|serverchan|email|issue]
+ *   pnpm exec tsx scripts/chanlun-report.ts [--stocks 000001,600519] [--output dir] [--notify console|serverchan|email|issue]
  *
  * 功能:
  *   1. 获取指定股票的日K线数据 (TickFlow API)

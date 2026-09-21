@@ -573,7 +573,7 @@ function printHelp(userStrategies: readonly UserStrategyDefinition[]) {
 缠论/通用策略回测框架 CLI 工具 (Generic Backtest CLI)
 ===================================================
 用法:
-  npx tsx scripts/backtest.ts --strategy <strategyId> --startDate <startDate> --endDate <endDate> [options]
+  pnpm exec tsx scripts/backtest.ts --strategy <strategyId> --startDate <startDate> --endDate <endDate> [options]
 
 必填参数:
   --strategy, -s    策略ID (可用值: ${userStrategies.map((s) => s.id).join(', ')})

@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // 指数缠论买卖点扫描数据层
 //   - 成分股列表: public/index-members.{hs300,zz500}.json
-//     (由 scripts/download-index-stocks.ts 生成于 data/, 用 `npm run sync-index` 同步)
+//     (由 scripts/download-index-stocks.ts 生成于 data/, 用 `pnpm run sync-index` 同步)
 //   - 股票名称: public/merged_stock_data.json (code -> stock_name)
 //   - K 线: TickFlow API, 近 1 年日线 (count=400 自然日 ≈ 270 个交易日)
 // ---------------------------------------------------------------------------
