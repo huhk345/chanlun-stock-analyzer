@@ -3,35 +3,41 @@ import type { UserStrategyDefinition } from '../../types/strategy';
 // Auto-import strategies without manual imports
 // This uses environment-specific auto-discovery mechanisms
 
+function isStrategyDefinition(value: unknown): value is UserStrategyDefinition {
+  if (!value || typeof value !== 'object') return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    typeof obj.id === 'string' &&
+    typeof obj.name === 'string' &&
+    typeof obj.decide === 'function'
+  );
+}
+
 let strategies: UserStrategyDefinition[] = [];
 
-// Vite environment: use import.meta.glob (synchronous with eager: true)
-if (typeof import.meta !== 'undefined' && 'glob' in import.meta) {
-  try {
-    // @ts-ignore - Vite-specific feature
-    const strategyModules = import.meta.glob('./*.ts', { eager: true });
+// NOTE: import.meta.glob is a compile-time feature (Vite transforms it into a
+// static module map; tsx also supports it). It is NOT a runtime property, so
+// it must be called unconditionally — gating on `'glob' in import.meta` is
+// always false in the browser and silently yields zero strategies.
+// Plain Node runtimes without glob support throw here, which we catch and
+// fall through to the lazy fs-based loader below.
+try {
+  // @ts-ignore - Vite-specific compile-time feature
+  const strategyModules = import.meta.glob('./*.ts', { eager: true }) as Record<string, Record<string, unknown>>;
 
-    for (const path in strategyModules) {
-      if (path === './index.ts') continue;
+  for (const path in strategyModules) {
+    if (path === './index.ts') continue;
 
-      // @ts-ignore
-      const module = strategyModules[path] as Record<string, unknown>;
-      for (const exportName in module) {
-        const exportValue = module[exportName];
-        if (
-          exportValue &&
-          typeof exportValue === 'object' &&
-          'id' in exportValue &&
-          'name' in exportValue &&
-          'params' in exportValue
-        ) {
-          strategies.push(exportValue as UserStrategyDefinition);
-        }
+    const module = strategyModules[path];
+    for (const exportName in module) {
+      const exportValue = module[exportName];
+      if (isStrategyDefinition(exportValue)) {
+        strategies.push(exportValue);
       }
     }
-  } catch {
-    strategies = [];
   }
+} catch {
+  strategies = [];
 }
 
 // Node.js environment: will be initialized lazily via async function
@@ -60,14 +66,8 @@ export async function loadStrategies(): Promise<UserStrategyDefinition[]> {
         const module = await import(/* @vite-ignore */ filePath);
         for (const exportName in module) {
           const exportValue = module[exportName];
-          if (
-            exportValue &&
-            typeof exportValue === 'object' &&
-            'id' in exportValue &&
-            'name' in exportValue &&
-            'params' in exportValue
-          ) {
-            loadedStrategies.push(exportValue as UserStrategyDefinition);
+          if (isStrategyDefinition(exportValue)) {
+            loadedStrategies.push(exportValue);
           }
         }
       } catch {

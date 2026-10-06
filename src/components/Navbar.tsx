@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User, LogOut, CheckCircle, AlertTriangle, Settings, Search, LineChart, Clock, X, ChevronDown, TrendingUp, TrendingDown, Info, LayoutDashboard, ChartCandlestick } from 'lucide-react';
+import { User, LogOut, CheckCircle, AlertTriangle, Settings, Search, LineChart, Clock, X, ChevronDown, TrendingUp, TrendingDown, Info, LayoutDashboard, ChartCandlestick, Filter } from 'lucide-react';
 import { getCurrentUser, signInUser, signUpUser, signOutUser, isUsingMockDb, SupabaseUser } from '../utils/supabase';
 import { Kline, StockBasicInfo } from '../types/stock';
 
-type ViewMode = 'dashboard' | 'indexes' | 'analyzer';
+type ViewMode = 'dashboard' | 'indexes' | 'screener' | 'analyzer';
 
 interface NavbarProps {
   onUserChanged: (user: SupabaseUser | null) => void;
@@ -22,6 +22,7 @@ interface NavbarProps {
 
 interface SearchHistoryItem {
   symbol: string;
+  name?: string;
   timestamp: number;
 }
 
@@ -89,14 +90,64 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
     }
   }, []);
 
-  const saveToHistory = (symbol: string) => {
-    const newItem: SearchHistoryItem = {
-      symbol: symbol.toUpperCase(),
-      timestamp: Date.now(),
-    };
+  // Backfill the stock name once basic info loads. Search is saved
+  // immediately on submit (name unknown yet), then enriched here so
+  // history entries keep both code + name for display. Entries opened
+  // from dashboard / index scans / shared links (which bypass the
+  // navbar save) are inserted here as well.
+  useEffect(() => {
+    if (!stockBasicInfo?.name || !activeSymbol) return;
+    const infoName = stockBasicInfo.name.trim();
+    if (!infoName) return;
+    const activeUpper = activeSymbol.toUpperCase();
+    const infoUpper = stockBasicInfo.symbol.toUpperCase();
+    const baseOf = (s: string) => s.split('.')[0];
+    const activeBase = baseOf(activeUpper);
+    const infoBase = baseOf(infoUpper);
+    const matches = (sym: string) =>
+      sym === activeUpper || sym === infoUpper ||
+      sym === activeBase || sym === infoBase ||
+      baseOf(sym) === activeBase || baseOf(sym) === infoBase;
 
     setSearchHistory(prev => {
-      const filtered = prev.filter(item => item.symbol !== newItem.symbol);
+      const hasMatch = prev.some(item => matches(item.symbol));
+      let updated: SearchHistoryItem[];
+      if (hasMatch) {
+        let changed = false;
+        updated = prev.map(item => {
+          if (matches(item.symbol) && item.name !== infoName) {
+            changed = true;
+            return { ...item, name: infoName };
+          }
+          return item;
+        });
+        if (!changed) return prev;
+      } else {
+        updated = [{ symbol: activeUpper, name: infoName, timestamp: Date.now() }, ...prev].slice(0, MAX_HISTORY);
+      }
+      try {
+        localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(updated));
+      } catch (err) {
+        console.error('Failed to save search history:', err);
+      }
+      return updated;
+    });
+  }, [stockBasicInfo, activeSymbol]);
+
+  const saveToHistory = (symbol: string, name?: string) => {
+    const upper = symbol.toUpperCase();
+
+    setSearchHistory(prev => {
+      const existing = prev.find(item => item.symbol === upper);
+      // Preserve the known name when re-searching without a fresh one
+      // (e.g. manual code entry before basic info loads).
+      const resolvedName = (name?.trim() ? name.trim() : undefined) ?? existing?.name;
+      const newItem: SearchHistoryItem = {
+        symbol: upper,
+        ...(resolvedName ? { name: resolvedName } : {}),
+        timestamp: Date.now(),
+      };
+      const filtered = prev.filter(item => item.symbol !== upper);
       const updated = [newItem, ...filtered].slice(0, MAX_HISTORY);
 
       try {
@@ -195,20 +246,20 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
     setShowHistory(false);
   };
 
-  const handlePresetClick = (symbol: string) => {
+  const handlePresetClick = (symbol: string, name?: string) => {
     if (!onSearch) return;
     setTicker(symbol);
-    saveToHistory(symbol);
+    saveToHistory(symbol, name);
     onSearch(symbol);
     setShowSearch(false);
     setShowHistory(false);
   };
 
-  const handleHistoryClick = (symbol: string) => {
+  const handleHistoryClick = (item: SearchHistoryItem) => {
     if (!onSearch) return;
-    setTicker(symbol);
-    saveToHistory(symbol);
-    onSearch(symbol);
+    setTicker(item.symbol);
+    saveToHistory(item.symbol, item.name);
+    onSearch(item.symbol);
     setShowSearch(false);
     setShowHistory(false);
   };
@@ -305,6 +356,19 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
             </button>
             <button
               type="button"
+              onClick={() => onViewChange('screener')}
+              className={`flex items-center gap-1.5 h-8 px-2 md:px-3 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                view === 'screener'
+                  ? 'bg-blue-500/15 text-blue-400 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.3)]'
+                  : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60'
+              }`}
+              title="策略选股 (均线多头 / 唐奇安突破等默认策略)"
+            >
+              <Filter className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">选股</span>
+            </button>
+            <button
+              type="button"
               onClick={() => onViewChange('analyzer')}
               className={`flex items-center gap-1.5 h-8 px-2 md:px-3 rounded-md text-xs font-medium transition-all cursor-pointer ${
                 view === 'analyzer'
@@ -370,15 +434,20 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
                   {searchHistory.map((item) => (
                     <div
                       key={item.symbol}
-                      onClick={() => handleHistoryClick(item.symbol)}
+                      onClick={() => handleHistoryClick(item)}
                       className="flex items-center justify-between px-3 py-2 hover:bg-zinc-800/60 cursor-pointer transition-colors group"
                     >
-                      <div className="flex items-center gap-3">
-                        <div className="h-6 w-6 rounded bg-zinc-800 group-hover:bg-blue-500/10 flex items-center justify-center transition-colors">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="h-6 w-6 rounded bg-zinc-800 group-hover:bg-blue-500/10 flex items-center justify-center transition-colors shrink-0">
                           <LineChart className="h-3 w-3 text-zinc-500 group-hover:text-blue-400" />
                         </div>
-                        <span className="text-xs font-mono font-semibold text-zinc-200 group-hover:text-blue-400 transition-colors">{item.symbol}</span>
-                        <span className="text-[10px] text-zinc-500">{formatTime(item.timestamp)}</span>
+                        <div className="flex items-baseline gap-2 min-w-0">
+                          {item.name && (
+                            <span className="text-xs font-semibold text-zinc-200 group-hover:text-blue-400 transition-colors truncate">{item.name}</span>
+                          )}
+                          <span className={`font-mono transition-colors truncate ${item.name ? 'text-[10px] text-zinc-500 group-hover:text-blue-400/70' : 'text-xs font-semibold text-zinc-200 group-hover:text-blue-400'}`}>{item.symbol}</span>
+                        </div>
+                        <span className="text-[10px] text-zinc-500 shrink-0">{formatTime(item.timestamp)}</span>
                       </div>
                       <button
                         onClick={(e) => removeHistoryItem(item.symbol, e)}
@@ -613,10 +682,10 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
                   <button
                     key={item.symbol}
                     type="button"
-                    onClick={() => handleHistoryClick(item.symbol)}
+                    onClick={() => handleHistoryClick(item)}
                     className="px-2.5 py-1 rounded-md border border-zinc-800 bg-zinc-900 text-[11px] font-mono font-semibold text-blue-400 hover:border-blue-500/60 transition-all cursor-pointer"
                   >
-                    {item.symbol}
+                    {item.name ? `${item.name} ${item.symbol}` : item.symbol}
                   </button>
                 ))}
               </div>
@@ -632,7 +701,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
                 <button
                   key={item.symbol}
                   type="button"
-                  onClick={() => handlePresetClick(item.symbol)}
+                  onClick={() => handlePresetClick(item.symbol, item.name)}
                   className={`px-2.5 py-1 rounded-md border text-[11px] font-medium transition-all cursor-pointer ${
                     activeSymbol === item.symbol
                       ? 'border-blue-500 bg-blue-500/10 text-blue-400'

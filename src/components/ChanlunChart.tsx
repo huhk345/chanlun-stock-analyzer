@@ -911,8 +911,8 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
             <div className="flex items-center gap-4 min-w-0">
               <div className="flex flex-col min-w-0">
                 <div className="flex flex-col gap-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-lg md:text-xl font-bold text-zinc-100 truncate">{stockBasicInfo.name}</h2>
+                  <div className="flex items-center gap-2 flex-wrap min-w-0">
+                    <h2 className="text-lg md:text-xl font-bold text-zinc-100 truncate min-w-0">{stockBasicInfo.name}</h2>
                     {reductionPlans && reductionPlans.length > 0 && (
                       <div className="group/badge relative shrink-0">
                         <span className="flex items-center justify-center h-5 w-5 rounded-full bg-orange-500/20 border border-orange-500/40 text-orange-400 cursor-help">
@@ -946,8 +946,8 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
                         </div>
                       </div>
                     )}
+                    <span className="text-sm font-mono text-zinc-500 bg-zinc-800/50 px-2 py-0.5 rounded shrink-0 self-center sm:self-start sm:basis-full sm:w-fit">{stockBasicInfo.symbol}</span>
                   </div>
-                  <span className="text-sm font-mono text-zinc-500 bg-zinc-800/50 px-2 py-0.5 rounded self-start shrink-0">{stockBasicInfo.symbol}</span>
                 </div>
               </div>
             </div>

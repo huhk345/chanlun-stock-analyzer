@@ -27,6 +27,7 @@ import {
 } from '../utils/strategyLoader';
 import {
   generateStrategyCode,
+  generateScreenerStrategyCode,
   extractCodeFromResponse,
 } from '../utils/api';
 import {
@@ -51,6 +52,8 @@ interface StrategyDialogProps {
   existingStrategyIds?: string[];
   availableIndicatorIds?: string[];
   symbol?: string;
+  /** 选股模式: 使用选股专用 prompt (空仓视角/收敛买入/防全市场常买) */
+  screenerMode?: boolean;
 }
 
 function getLocalApiKey(key: string): string {
@@ -78,6 +81,7 @@ export default function StrategyDialog({
   existingStrategyIds = [],
   availableIndicatorIds = [],
   symbol,
+  screenerMode = false,
 }: StrategyDialogProps) {
   const [activeTab, setActiveTab] = useState<'create' | 'manage'>('create');
   const [storedStrategies, setStoredStrategies] = useState<StoredStrategy[]>([]);
@@ -286,7 +290,7 @@ export default function StrategyDialog({
     setActiveTab('manage');
 
     try {
-      const fullCode = await generateStrategyCode(
+      const fullCode = await (screenerMode ? generateScreenerStrategyCode : generateStrategyCode)(
         userDescription,
         availableIndicatorIds,
         (chunk) => {
@@ -452,7 +456,7 @@ export default function StrategyDialog({
     setReasoningText('');
     setNewPrompt('');
     try {
-      const fullCode = await generateStrategyCode(
+      const fullCode = await (screenerMode ? generateScreenerStrategyCode : generateStrategyCode)(
         newEntry.prompt,
         availableIndicatorIds,
         (chunk) => {
@@ -522,7 +526,7 @@ export default function StrategyDialog({
     setDetailEditCode('');
     setReasoningText('');
     try {
-      const fullCode = await generateStrategyCode(
+      const fullCode = await (screenerMode ? generateScreenerStrategyCode : generateStrategyCode)(
         prompt,
         availableIndicatorIds,
         (chunk) => {
@@ -744,12 +748,12 @@ export default function StrategyDialog({
               {/* Description Input */}
               <div className="flex-1 flex flex-col min-h-0">
                 <label className="block text-sm font-medium text-zinc-300 mb-2">
-                  用自然语言描述你的交易策略
+                  {screenerMode ? '用自然语言描述你的选股想法' : '用自然语言描述你的交易策略'}
                 </label>
                 <textarea
                   value={userDescription}
                   onChange={(e) => setUserDescription(e.target.value)}
-                  placeholder="例如：我想创建一个策略，当5日均线上穿20日均线且成交量放大时买入，当5日均线下穿20日均线时卖出"
+                  placeholder={screenerMode ? '例如：找出均线多头排列、回踩10日线不破、成交量温和放大的股票；下跌趋势一律不要' : '例如：我想创建一个策略，当5日均线上穿20日均线且成交量放大时买入，当5日均线下穿20日均线时卖出'}
                   className={`w-full flex-1 min-h-[80px] px-4 py-3 bg-zinc-800 border rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 resize-none transition-all ${
                     isGenerating
                       ? 'border-cyan-500/70 animate-pulse'

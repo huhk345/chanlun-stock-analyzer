@@ -98,7 +98,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
     }
   }, []);
 
-  // When strategy changes, reset indicator selection
+  // When strategy changes, reset indicator selection & backtest state
   useEffect(() => {
     const strategy = allStrategies.find((s) => s.id === selectedStrategyId);
     if (!strategy) return;
@@ -113,6 +113,9 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
       selectedIndicatorIds: defaultIds,
       indicatorParams: {},
     });
+    setBacktest(null);
+    setStepState(null);
+    setStepperMode(false);
   }, [selectedStrategyId, allStrategies]);
 
   const selectedStrategy = useMemo(

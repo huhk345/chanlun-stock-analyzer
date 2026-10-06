@@ -20,7 +20,7 @@ function getApiKey(key: string): string {
 // TickFlow API Configuration
 // 免费API无需API Key，使用 https://free-api.tickflow.org
 // 完整服务需要API Key，使用 https://api.tickflow.org
-const getTickFlowApiKey = () => getApiKey('tickflow') || import.meta.env.VITE_TICKFLOW_API_KEY || '';
+const getTickFlowApiKey = () => getApiKey('tickflow') || (typeof import.meta !== 'undefined' ? import.meta.env?.VITE_TICKFLOW_API_KEY : '') || '';
 const getTickFlowBaseUrl = () => getTickFlowApiKey() ? 'https://api.tickflow.org' : 'https://free-api.tickflow.org';
 
 // Supported markets for the analyzer. TickFlow serves A-shares (cn);
@@ -41,20 +41,30 @@ export function resolveSymbol(symbol: string): {
   txSymbol: string;
 } {
   const clean = symbol.trim().toUpperCase();
-  const cn = (resolved: string, displayName: string) => ({
-    resolved, displayName, isChinaStock: true as const, market: 'cn' as const, txSymbol: '',
-  });
+  const cn = (resolved: string, displayName: string) => {
+    const code = resolved.split('.')[0];
+    const isSS = /^(60|68|90|11|13|51|58)/.test(code);
+    const isBJ = /^(43|83|87|88|92)/.test(code);
+    const prefix = isSS ? 'sh' : isBJ ? 'bj' : 'sz';
+    return {
+      resolved,
+      displayName,
+      isChinaStock: true as const,
+      market: 'cn' as const,
+      txSymbol: `${prefix}${code}`,
+    };
+  };
   if (/^\d{6}$/.test(clean)) {
     // 6-digit pure numbers represent Chinese stocks
     const isSS = /^(60|68|90|11|13|51|58|60)/.test(clean);
     const suffix = isSS ? 'SH' : 'SZ';
     return cn(`${clean}.${suffix}`, `${clean}.${suffix}`);
   }
-  // Handle symbols with .SS or .SZ suffix
+  // Handle symbols with .SS / .SH / .SZ suffix (选股 universe 使用 CODE.SH / CODE.SZ 键)
   if (clean.endsWith('.SS')) {
     return cn(clean.replace('.SS', '.SH'), clean);
   }
-  if (clean.endsWith('.SZ')) {
+  if (clean.endsWith('.SH') || clean.endsWith('.SZ')) {
     return cn(clean, clean);
   }
   // HK: '00700.HK' / '0700.HK'
@@ -552,163 +562,231 @@ async function fetchBinanceKlines(pair: string, timeframe: KlineTimeframe = 'dai
   return klines;
 }
 
-// Fetch stock K-line data directly from TickFlow API
-export async function fetchStockData(symbol: string, timeframe: KlineTimeframe = 'daily'): Promise<{
+export interface FetchStockDataResult {
   symbol: string;
   name: string;
   klines: Kline[];
   source: string;
   period: string;
   timeframe: KlineTimeframe;
-}> {
-  // 全球指数/商品/汇率: 'GI.HSI' (新) 或 'EM.100.HSI' (旧东财 secid 格式)
-  // -> 按 GLOBAL_KLINE_ROUTES 路由到腾讯/新浪/Binance 等多源K线
-  const cleanReq = symbol.trim().toUpperCase();
-  const globalMatch = /^(?:GI|EM)(?:\.\d+)?\.([A-Z0-9]+)$/.exec(cleanReq);
-  if (globalMatch) {
-    const code = globalMatch[1];
-    const { name, klines, source } = await fetchGlobalKlines(code, timeframe);
-    return {
-      symbol: code,
-      name,
-      klines,
-      source,
-      period: `${TIMEFRAME_LABEL[timeframe]} (近 ${klines.length} 根)`,
-      timeframe,
-    };
+}
+
+// In-memory cache for fetched stock data (keyed by `${resolvedSymbol}_${timeframe}`)
+const stockDataMemoryCache = new Map<string, Promise<FetchStockDataResult>>();
+
+/** Clear all in-memory cached stock K-line data. */
+export function clearStockDataMemoryCache(): void {
+  stockDataMemoryCache.clear();
+}
+
+/** Get the count of stock datasets currently cached in memory. */
+export function getStockDataMemoryCacheSize(): number {
+  return stockDataMemoryCache.size;
+}
+
+export function getStockDataCacheKey(symbol: string, timeframe: KlineTimeframe): string {
+  const clean = symbol.trim().toUpperCase();
+  try {
+    const { resolved } = resolveSymbol(clean);
+    return `${resolved}_${timeframe}`;
+  } catch {
+    return `${clean}_${timeframe}`;
+  }
+}
+
+// Fetch stock K-line data directly from TickFlow API (with in-memory caching)
+export async function fetchStockData(
+  symbol: string,
+  timeframe: KlineTimeframe = 'daily',
+  options?: { bypassCache?: boolean }
+): Promise<FetchStockDataResult> {
+  const cacheKey = getStockDataCacheKey(symbol, timeframe);
+
+  if (!options?.bypassCache && stockDataMemoryCache.has(cacheKey)) {
+    return stockDataMemoryCache.get(cacheKey)!;
   }
 
-  // 加密货币: 'BTCUSDT' 等 *USDT 交易对 -> Binance
-  if (/^[A-Z0-9]{2,10}USDT$/.test(cleanReq)) {
-    const klines = await fetchBinanceKlines(cleanReq, timeframe);
-    return {
-      symbol: cleanReq,
-      name: cleanReq,
-      klines,
-      source: 'Binance',
-      period: timeframe === 'weekly' ? '周线 (近1000周)' : '日线 (近1000天)',
-      timeframe,
-    };
-  }
-
-  // 裸代码的全球指数/商品/汇率 (如 'HSI', 'SPX'): 与 GI. 前缀同等路由
-  const bareGlobal = GLOBAL_KLINE_ROUTES[cleanReq];
-  if (bareGlobal) {
-    const { name, klines, source } = await fetchGlobalKlines(cleanReq, timeframe);
-    return {
-      symbol: cleanReq,
-      name,
-      klines,
-      source,
-      period: `${TIMEFRAME_LABEL[timeframe]} (近 ${klines.length} 根)`,
-      timeframe,
-    };
-  }
-
-  const { resolved, displayName, market, txSymbol } = resolveSymbol(symbol);
-
-  // 港股个股 -> 腾讯 ifzq fqkline (支持日线与周线, 免 Key)
-  if (market === 'hk') {
-    const klines = await fetchTencentKlines('fqkline', txSymbol, timeframe);
-    if (klines.length < 30) {
-      throw new Error(`${displayName} 历史数据不足 (${klines.length} 根, 需要至少 30 根)`);
-    }
-    return {
-      symbol: resolved,
-      name: resolved,
-      klines: klines.slice(-GLOBAL_KLINE_BARS),
-      source: '腾讯行情',
-      period: `${TIMEFRAME_LABEL[timeframe]} (近 ${Math.min(klines.length, GLOBAL_KLINE_BARS)} 根)`,
-      timeframe,
-    };
-  }
-
-  // 美股个股 -> TwelveData time_series (原生周线, 需免费 Key;
-  // 腾讯 usfqkline 仅返回首末 2 根哑数据, 不可用)
-  if (market === 'us') {
-    const ticker = txSymbol.replace(/^us/i, '');
-    const klines = await fetchTwelveDataKlines(ticker, timeframe);
-    return {
-      symbol: resolved,
-      name: resolved,
-      klines,
-      source: 'TwelveData',
-      period: timeframe === 'weekly' ? `周线 (近 ${klines.length} 周)` : `日线 (近 ${klines.length} 根)`,
-      timeframe,
-    };
-  }
-
-  if (market !== 'cn') {
-    throw new Error(
-      `无法识别的代码 "${symbol.trim()}"。支持: A股6位代码 (如 600519 / 000001.ss), 美股 (如 AAPL / AAPL.US), 港股 (如 00700 / 00700.HK), 指数 (如 GI.HSI), 加密货币 (如 BTCUSDT)。`
-    );
-  }
-
-  // 日线: 5 年日 K; 周线: TickFlow 原生 1w (约 1000 周, 覆盖上市以来多数历史)
-  const period = timeframe === 'weekly' ? '1w' : '1d';
-  const count = timeframe === 'weekly' ? 1000 : 365 * 5; // 5 years daily / ~19 years weekly
-  const TICKFLOW_API_KEY = getTickFlowApiKey();
-  const TICKFLOW_BASE_URL = getTickFlowBaseUrl();
-  const isFreeAPI = !TICKFLOW_API_KEY;
-
-  // TickFlow API URL with query parameters
-  const tickflowUrl = `${TICKFLOW_BASE_URL}/v1/klines?symbol=${resolved}&period=${period}&count=${count}&adjust=forward`;
-
-  console.log(`[TickFlow] ${isFreeAPI ? '免费API' : '完整服务'} - Fetching ${period} data for ${displayName} (前复权)`);
-  console.log(`[TickFlow] URL: ${tickflowUrl}`);
-
-  const headers: Record<string, string> = {};
-  if (TICKFLOW_API_KEY) {
-    headers['x-api-key'] = TICKFLOW_API_KEY;
-  }
-
-  // TickFlow may signal rate limiting either via HTTP 429 or via a 200 body
-  // containing the "请求频率超限" message with a "请 Nms 后重试" hint.
-  // Parse that hint to wait exactly the suggested duration before retrying.
-  const extractRateLimitDelay = (text: string): number | null => {
-    const msMatch = text.match(/请\s*(\d+)\s*ms\s*后重试/);
-    if (msMatch) return parseInt(msMatch[1], 10);
-    const secMatch = text.match(/请\s*(\d+(?:\.\d+)?)\s*秒?\s*后重试/);
-    if (secMatch) return Math.ceil(parseFloat(secMatch[1]) * 1000);
-    return null;
-  };
-
-  const MAX_RETRIES = 4;
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    // Proactively throttle to 55/min so we stay under the free tier's 60/min
-    // hard cap before even issuing the request.
-    await acquireTickFlowSlot();
-
-    const response = await fetch(tickflowUrl, { headers });
-
-    console.log(`[TickFlow] Response status: ${response.status} (attempt ${attempt + 1}/${MAX_RETRIES + 1})`);
-
-    if (response.ok) {
-      return await handleTickflowResponse(response, displayName, timeframe);
+  const fetchPromise = (async (): Promise<FetchStockDataResult> => {
+    // 全球指数/商品/汇率: 'GI.HSI' (新) 或 'EM.100.HSI' (旧东财 secid 格式)
+    // -> 按 GLOBAL_KLINE_ROUTES 路由到腾讯/新浪/Binance 等多源K线
+    const cleanReq = symbol.trim().toUpperCase();
+    const globalMatch = /^(?:GI|EM)(?:\.\d+)?\.([A-Z0-9]+)$/.exec(cleanReq);
+    if (globalMatch) {
+      const code = globalMatch[1];
+      const { name, klines, source } = await fetchGlobalKlines(code, timeframe);
+      return {
+        symbol: code,
+        name,
+        klines,
+        source,
+        period: `${TIMEFRAME_LABEL[timeframe]} (近 ${klines.length} 根)`,
+        timeframe,
+      };
     }
 
-    const errorText = await response.text();
-    console.error(`TickFlow API error: ${response.status} - ${errorText}`);
+    // 加密货币: 'BTCUSDT' 等 *USDT 交易对 -> Binance
+    if (/^[A-Z0-9]{2,10}USDT$/.test(cleanReq)) {
+      const klines = await fetchBinanceKlines(cleanReq, timeframe);
+      return {
+        symbol: cleanReq,
+        name: cleanReq,
+        klines,
+        source: 'Binance',
+        period: timeframe === 'weekly' ? '周线 (近1000周)' : '日线 (近1000天)',
+        timeframe,
+      };
+    }
 
-    const delayMs = extractRateLimitDelay(errorText);
-    if (delayMs != null && attempt < MAX_RETRIES) {
-      console.warn(`[TickFlow] Rate limited. Waiting ${delayMs}ms before retry...`);
-      await new Promise((r) => setTimeout(r, delayMs));
-      lastError = new Error(
-        `TickFlow 免费接口请求频率超限 (60/min)。已等待 ${Math.round(delayMs / 1000)} 秒后自动重试。若频繁触发, 建议在配置中填入完整服务 API Key (https://api.tickflow.org)。`
+    // 裸代码的全球指数/商品/汇率 (如 'HSI', 'SPX'): 与 GI. 前缀同等路由
+    const bareGlobal = GLOBAL_KLINE_ROUTES[cleanReq];
+    if (bareGlobal) {
+      const { name, klines, source } = await fetchGlobalKlines(cleanReq, timeframe);
+      return {
+        symbol: cleanReq,
+        name,
+        klines,
+        source,
+        period: `${TIMEFRAME_LABEL[timeframe]} (近 ${klines.length} 根)`,
+        timeframe,
+      };
+    }
+
+    const { resolved, displayName, market, txSymbol } = resolveSymbol(symbol);
+
+    // 港股个股 -> 腾讯 ifzq fqkline (支持日线与周线, 免 Key)
+    if (market === 'hk') {
+      const klines = await fetchTencentKlines('fqkline', txSymbol, timeframe);
+      if (klines.length < 30) {
+        throw new Error(`${displayName} 历史数据不足 (${klines.length} 根, 需要至少 30 根)`);
+      }
+      return {
+        symbol: resolved,
+        name: resolved,
+        klines: klines.slice(-GLOBAL_KLINE_BARS),
+        source: '腾讯行情',
+        period: `${TIMEFRAME_LABEL[timeframe]} (近 ${Math.min(klines.length, GLOBAL_KLINE_BARS)} 根)`,
+        timeframe,
+      };
+    }
+
+    // 美股个股 -> TwelveData time_series (原生周线, 需免费 Key;
+    // 腾讯 usfqkline 仅返回首末 2 根哑数据, 不可用)
+    if (market === 'us') {
+      const ticker = txSymbol.replace(/^us/i, '');
+      const klines = await fetchTwelveDataKlines(ticker, timeframe);
+      return {
+        symbol: resolved,
+        name: resolved,
+        klines,
+        source: 'TwelveData',
+        period: timeframe === 'weekly' ? `周线 (近 ${klines.length} 周)` : `日线 (近 ${klines.length} 根)`,
+        timeframe,
+      };
+    }
+
+    if (market !== 'cn') {
+      throw new Error(
+        `无法识别的代码 "${symbol.trim()}"。支持: A股6位代码 (如 600519 / 000001.ss), 美股 (如 AAPL / AAPL.US), 港股 (如 00700 / 00700.HK), 指数 (如 GI.HSI), 加密货币 (如 BTCUSDT)。`
       );
-      continue;
     }
 
-    throw new Error(
-      `Unable to fetch data for symbol "${displayName}" from TickFlow API. Status: ${response.status}` +
-        (errorText ? ` - ${errorText}` : '')
-    );
+    // A股个股: 优先使用腾讯行情 (无 API 频率限制, 高并发秒级响应, 支持 640 根前复权 K 线);
+    // 若配置了自定义 TickFlow API Key 或腾讯异常, 则降级使用 TickFlow
+    const TICKFLOW_API_KEY = getTickFlowApiKey();
+    if (!TICKFLOW_API_KEY && txSymbol) {
+      try {
+        const klines = await fetchTencentKlines('fqkline', txSymbol, timeframe);
+        if (klines.length >= 30) {
+          return {
+            symbol: resolved,
+            name: displayName,
+            klines,
+            source: '腾讯行情',
+            period: `${TIMEFRAME_LABEL[timeframe]} (近 ${klines.length} 根)`,
+            timeframe,
+          };
+        }
+      } catch (tencentErr) {
+        console.warn(`[Tencent] Fetch failed for ${displayName}, falling back to TickFlow:`, tencentErr);
+      }
+    }
+
+    // 日线: 5 年日 K; 周线: TickFlow 原生 1w (约 1000 周, 覆盖上市以来多数历史)
+    const period = timeframe === 'weekly' ? '1w' : '1d';
+    const count = timeframe === 'weekly' ? 1000 : 365 * 5; // 5 years daily / ~19 years weekly
+    const TICKFLOW_BASE_URL = getTickFlowBaseUrl();
+    const isFreeAPI = !TICKFLOW_API_KEY;
+
+    // TickFlow API URL with query parameters
+    const tickflowUrl = `${TICKFLOW_BASE_URL}/v1/klines?symbol=${resolved}&period=${period}&count=${count}&adjust=forward`;
+
+    console.log(`[TickFlow] ${isFreeAPI ? '免费API' : '完整服务'} - Fetching ${period} data for ${displayName} (前复权)`);
+    console.log(`[TickFlow] URL: ${tickflowUrl}`);
+
+    const headers: Record<string, string> = {};
+    if (TICKFLOW_API_KEY) {
+      headers['x-api-key'] = TICKFLOW_API_KEY;
+    }
+
+    // TickFlow may signal rate limiting either via HTTP 429 or via a 200 body
+    // containing the "请求频率超限" message with a "请 Nms 后重试" hint.
+    // Parse that hint to wait exactly the suggested duration before retrying.
+    const extractRateLimitDelay = (text: string): number | null => {
+      const msMatch = text.match(/请\s*(\d+)\s*ms\s*后重试/);
+      if (msMatch) return parseInt(msMatch[1], 10);
+      const secMatch = text.match(/请\s*(\d+(?:\.\d+)?)\s*秒?\s*后重试/);
+      if (secMatch) return Math.ceil(parseFloat(secMatch[1]) * 1000);
+      return null;
+    };
+
+    const MAX_RETRIES = 4;
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      // Proactively throttle to 55/min so we stay under the free tier's 60/min
+      // hard cap before even issuing the request.
+      await acquireTickFlowSlot();
+
+      const response = await fetch(tickflowUrl, { headers });
+
+      console.log(`[TickFlow] Response status: ${response.status} (attempt ${attempt + 1}/${MAX_RETRIES + 1})`);
+
+      if (response.ok) {
+        return await handleTickflowResponse(response, displayName, timeframe);
+      }
+
+      const errorText = await response.text();
+      console.error(`TickFlow API error: ${response.status} - ${errorText}`);
+
+      const delayMs = extractRateLimitDelay(errorText);
+      if (delayMs != null && attempt < MAX_RETRIES) {
+        console.warn(`[TickFlow] Rate limited. Waiting ${delayMs}ms before retry...`);
+        await new Promise((r) => setTimeout(r, delayMs));
+        lastError = new Error(
+          `TickFlow 免费接口请求频率超限 (60/min)。已等待 ${Math.round(delayMs / 1000)} 秒后自动重试。若频繁触发, 建议在配置中填入完整服务 API Key (https://api.tickflow.org)。`
+        );
+        continue;
+      }
+
+      throw new Error(
+        `Unable to fetch data for symbol "${displayName}" from TickFlow API. Status: ${response.status}` +
+          (errorText ? ` - ${errorText}` : '')
+      );
+    }
+
+    throw lastError ?? new Error(`Unable to fetch data for symbol "${displayName}" from TickFlow API after retries.`);
+  })();
+
+  if (!options?.bypassCache) {
+    stockDataMemoryCache.set(cacheKey, fetchPromise);
+    fetchPromise.catch(() => {
+      if (stockDataMemoryCache.get(cacheKey) === fetchPromise) {
+        stockDataMemoryCache.delete(cacheKey);
+      }
+    });
   }
 
-  throw lastError ?? new Error(`Unable to fetch data for symbol "${displayName}" from TickFlow API after retries.`);
+  return fetchPromise;
 }
 
 async function handleTickflowResponse(response: Response, displayName: string, timeframe: KlineTimeframe = 'daily'): Promise<{
@@ -1801,6 +1879,33 @@ RULES:
 8. For BUY: action 'BUY' with amount { unit: 'percent'/'cash'/'shares', value: number }.
 9. For SELL: action 'SELL' with amount { unit: 'shares'/'percent', value: number }. Cash unit is invalid for SELL.
 10. For HOLD: action 'HOLD'. Amount is optional and ignored.`;
+}
+
+/**
+ * Generate 选股 strategy code: 在通用回测 prompt 基础上, 追加选股扫描视角约束
+ * (空仓评估最新一根 K 线是否 BUY、confidence 0-1、避免常买/追高)。
+ * 复用 generateStrategyCode, 仅增强 userMessage, 保持 Runner/Loader 契约不变。
+ */
+export async function generateScreenerStrategyCode(
+  userDescription: string,
+  availableIndicatorIds: string[] = [],
+  onToken?: StreamCallback,
+  model?: string,
+  onReasoning?: ReasoningCallback,
+): Promise<string> {
+  const augmented = [
+    '【选股策略需求】该策略将用于选股扫描: 对每只股票用 decide() 评估最新一根日K (空仓视角),',
+    'BUY 即入选, 因此:',
+    '1. 无持仓时只做买入判断, 有持仓时只做卖出判断 (参考 screener-ma-bull 写法);',
+    '2. 买入条件必须收敛 (如 多头排列+回踩确认 / 突破+放量二选一), 禁止单根阳线就 BUY;',
+    '3. 下跌趋势/破位时必须返回 HOLD, 防止全市场常买;',
+    '4. 必须给出 reason (中文, 含关键价位) 与 confidence (0-1);',
+    '5. id 使用 screener- 前缀的 kebab-case (如 screener-my-idea)。',
+    '',
+    '用户选股想法:',
+    userDescription,
+  ].join('\n');
+  return generateStrategyCode(augmented, availableIndicatorIds, onToken, model, onReasoning);
 }
 
 /**

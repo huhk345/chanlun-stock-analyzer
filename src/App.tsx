@@ -9,6 +9,7 @@ import AboutView from './components/AboutView';
 import StockInfoPanel from './components/StockInfoPanel';
 import MarketDashboard from './components/MarketDashboard';
 import IndexAnalysis from './components/IndexAnalysis';
+import StockScreener from './components/StockScreener';
 import { SupabaseUser } from './utils/supabase';
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade, BSPoint } from './types/stock';
 import {
@@ -43,7 +44,7 @@ const CHAT_RAIL_MAX = 800;
 const CHAT_RAIL_DEFAULT = 420;
 const NAVBAR_HEIGHT = 56;
 
-type ViewMode = 'dashboard' | 'indexes' | 'analyzer';
+type ViewMode = 'dashboard' | 'indexes' | 'screener' | 'analyzer';
 
 // Parse the current location into app routing state.
 // Mirrors the initial-view logic: presence of ?code= implies the analyzer view.
@@ -57,6 +58,8 @@ function parseAppUrl(): { view: ViewMode; code: string; timeframe: KlineTimefram
     view = 'analyzer';
   } else if (rawView === 'indexes') {
     view = 'indexes';
+  } else if (rawView === 'screener') {
+    view = 'screener';
   }
   return { view, code, timeframe };
 }
@@ -76,6 +79,9 @@ function syncAppUrl(
     url.searchParams.delete('code');
   } else if (view === 'indexes') {
     url.searchParams.set('view', 'indexes');
+    url.searchParams.delete('code');
+  } else if (view === 'screener') {
+    url.searchParams.set('view', 'screener');
     url.searchParams.delete('code');
   } else {
     url.searchParams.set('view', 'analyzer');
@@ -472,6 +478,12 @@ export default function App() {
         </main>
       )}
 
+      {/* Main Container - Strategy screener view */}
+      {view === 'screener' && (
+        <main className="flex-1 w-full px-[10px] py-[10px] md:px-6 md:py-6 lg:px-8">
+          <StockScreener onSelectStock={handleSearch} />
+        </main>
+      )}
       {/* Main Container - Chart + Backtest scroll under the fixed right rail */}
       {view === 'analyzer' && (
       <main
@@ -635,7 +647,7 @@ export default function App() {
       {/* Humble Footer */}
       <footer
         className="border-t border-zinc-850 py-3 md:py-6 mt-0 md:mt-12 text-center text-[10px] font-mono text-zinc-500 transition-[padding] duration-200 px-3"
-        style={{ paddingRight: isMobile || view === 'dashboard' ? 0 : `${railOffset}px` }}
+        style={{ paddingRight: isMobile || view !== 'analyzer' ? 0 : `${railOffset}px` }}
       >
         <p>© 2026 缠论量化工作台。由 Google AI Studio 构建。<a href="https://github.com/huhk345/chanlun-stock-analyzer" target="_blank" rel="noopener noreferrer" className="underline hover:text-zinc-300 transition-colors">源代码</a></p>
         <p className="mt-1">本工具仅供学习研究使用, 不构成任何投资建议, 投资有风险, 入市需谨慎。</p>
