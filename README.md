@@ -85,7 +85,7 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
    pnpm run dev
    ```
 
-5. Open [http://localhost:5173](http://localhost:5173) in your browser.
+5. Open [http://localhost:8888](http://localhost:8888) in your browser.
 
 ### Usage
 
@@ -185,7 +185,7 @@ pnpm exec tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
    pnpm run dev
    ```
 
-5. 在浏览器中打开 [http://localhost:5173](http://localhost:5173)
+5. 在浏览器中打开 [http://localhost:8888](http://localhost:8888)
 
 ### 使用方法
 
