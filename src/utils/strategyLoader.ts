@@ -14,7 +14,7 @@ import {
  * 3. Validated before execution
  * 4. Has no network or DOM access within the function scope
  */
-function parseStrategyCode(code: string, metadata: StoredStrategy): UserStrategyDefinition {
+export function parseStrategyCode(code: string, metadata: StoredStrategy): UserStrategyDefinition {
   try {
     // Create a sandboxed function with minimal scope
     // The code should export a UserStrategyDefinition

@@ -12,7 +12,6 @@ import { loadStoredStrategies } from '../utils/strategyLoader';
 import { buildStrategyParams } from '../utils/strategyAdapter';
 import { runBacktest } from '../utils/backtestRunner';
 import {
-  evaluateScreenerSignal,
   filterScreenerSignals,
   sortScreenerSignals,
   sliceKlinesByRange,
@@ -22,6 +21,7 @@ import {
   type ScreenerSignal,
   type ScreenerSortKey,
 } from '../utils/screener';
+import { evaluateSignalWithFallback } from '../utils/analysisApi';
 import {
   IndexId, INDEX_META, ParsedSymbol, parseSymbol, symbolKey,
   fetchIndexMembers, loadStockMeta, type StockMeta,
@@ -277,7 +277,7 @@ export default function StockScreener({ onSelectStock }: { onSelectStock?: (symb
             // 回测区间切片: 信号评估与回测验证共用同一区间 (默认近3年)
             const klines = sliceKlinesByRange(full, rangeSnapshot.start, rangeSnapshot.end);
             if (klines.length === 0) throw new Error('区间内无K线数据');
-            const sig = evaluateScreenerSignal(stratSnapshot, klines, sym, paramsSnapshot);
+            const sig = await evaluateSignalWithFallback(stratSnapshot, klines, sym, paramsSnapshot);
             const code = sym.split('.')[0];
             const row: ScreenerRow = {
               ...sig,

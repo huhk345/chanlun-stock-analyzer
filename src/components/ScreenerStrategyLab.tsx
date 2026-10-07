@@ -12,7 +12,7 @@ import {
   scoreScreenerStrategy,
   type ScreenerStrategyReport,
 } from '../utils/screenerStrategyTest';
-import { evaluateScreenerSignal } from '../utils/screener';
+import { evaluateSignalWithFallback } from '../utils/analysisApi';
 import { runBacktest } from '../utils/backtestRunner';
 import { sliceKlinesByRange } from '../utils/screener';
 import { fetchStockData } from '../utils/api';
@@ -106,7 +106,7 @@ export default function ScreenerStrategyLab({ strategy, customParams, rangeStart
           const { klines: full } = await fetchStockData(sym, 'daily');
           const klines = sliceKlinesByRange(full, rangeSnapshot.start, rangeSnapshot.end);
           if (klines.length === 0) throw new Error('区间内无K线数据');
-          const sig = evaluateScreenerSignal(stratSnapshot, klines, sym, paramsSnapshot);
+          const sig = await evaluateSignalWithFallback(stratSnapshot, klines, sym, paramsSnapshot);
           let btReturn: number | undefined;
           let btSharpe: number | undefined;
           try {
