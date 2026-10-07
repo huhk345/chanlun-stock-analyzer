@@ -4,7 +4,7 @@ import {
   ArrowUpRight, ArrowDownRight, RefreshCw, Database, Star,
 } from 'lucide-react';
 import { Kline, BSPointType } from '../types/stock';
-import { mergeKlines, findFractions, calculateStrokes, calculateBSPoints } from '../utils/chanlun';
+import { fetchBSPointsWithFallback } from '../utils/analysisApi';
 import {
   IndexId, INDEX_META, ParsedSymbol, parseSymbol, symbolKey, kindLabel,
   fetchIndexMembers, loadStockMeta, fetchYearKlines, fetchStockFlowBatch, StockMeta, StockFlow,
@@ -162,11 +162,8 @@ function daysBetween(from: string, to: string): number {
 // ---------------------------------------------------------------------------
 
 /** 完整缠论流水线, 仅保留笔与买卖点 (线段/中枢结果不参与买卖点判定, 省去两遍计算) */
-function computeCacheEntry(klines: Kline[]): CacheEntry {
-  const merged = mergeKlines(klines);
-  const fractions = findFractions(merged, klines);
-  const strokes = calculateStrokes(fractions);
-  const bsPoints = calculateBSPoints(klines, strokes);
+async function computeCacheEntry(klines: Kline[]): Promise<CacheEntry> {
+  const { strokes, bsPoints } = await fetchBSPointsWithFallback(klines);
   const strokeUpByIndex = new Map<number, boolean>(strokes.map((s, i) => [i, s.direction === 'up']));
 
   // 量能指标: 量比 (最新收盘量 / 前5日均量) 与 近5日日均成交额
@@ -223,12 +220,12 @@ function rowsFromCacheEntry(
   return out;
 }
 
-function rowsFromKlines(
+async function rowsFromKlines(
   sym: string,
   klines: Kline[],
   meta: StockMeta,
-): SignalRow[] {
-  return rowsFromCacheEntry(sym, computeCacheEntry(klines), meta);
+): Promise<SignalRow[]> {
+  return rowsFromCacheEntry(sym, await computeCacheEntry(klines), meta);
 }
 
 // ---------------------------------------------------------------------------
@@ -545,14 +542,14 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
 
         try {
           const klines = await fetchYearKlines(sym, 3, controller.signal, tf);
-          cacheRef.current[sym] = computeCacheEntry(klines);
+          cacheRef.current[sym] = await computeCacheEntry(klines);
           ok++;
           sinceFlush++;
           if (sinceFlush >= CACHE_FLUSH_EVERY) {
             saveCache(cacheRef.current, tf);
             sinceFlush = 0;
           }
-          const newRows = rowsFromKlines(sym, klines, metaRef.current);
+          const newRows = await rowsFromKlines(sym, klines, metaRef.current);
           if (newRows.length > 0) {
             signaledKeys.add(sym);
             setRows(prev => [...prev, ...newRows]);

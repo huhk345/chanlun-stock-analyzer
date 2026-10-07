@@ -6,6 +6,7 @@
   "packageManager": "pnpm@10.34.5",
   "scripts": {
     "dev": "vite",
+    "server": "tsx server/index.ts",
     "build": "vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit",

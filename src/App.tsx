@@ -12,14 +12,7 @@ import IndexAnalysis from './components/IndexAnalysis';
 import StockScreener from './components/StockScreener';
 import { SupabaseUser } from './utils/supabase';
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade, BSPoint } from './types/stock';
-import {
-  mergeKlines,
-  findFractions,
-  calculateStrokes,
-  calculateSegments,
-  calculateHubs,
-  calculateBSPoints
-} from './utils/chanlun';
+import { analyzeChanlunWithFallback } from './utils/analysisApi';
 import { fetchStockData, fetchStockBasicInfo, resolveSymbol, KlineTimeframe } from './utils/api';
 
 interface ReductionPlan {
@@ -93,18 +86,6 @@ function syncAppUrl(
   if (next === window.location.href) return;
   if (mode === 'push') window.history.pushState({}, '', next);
   else window.history.replaceState({}, '', next);
-}
-
-// Pure ChanLun pipeline: raw klines -> fractions / strokes / segments / hubs / BS points.
-// Shared by full stock loads and chart-only timeframe switches.
-function computeChanlunParts(rawKlines: Kline[]) {
-  const merged = mergeKlines(rawKlines);
-  const fractions = findFractions(merged, rawKlines);
-  const computedStrokes = calculateStrokes(fractions);
-  const computedSegments = calculateSegments(computedStrokes);
-  const computedHubs = calculateHubs(computedStrokes);
-  const computedBSPoints = calculateBSPoints(rawKlines, computedStrokes);
-  return { fractions, computedStrokes, computedSegments, computedHubs, computedBSPoints };
 }
 
 export default function App() {
@@ -198,8 +179,8 @@ export default function App() {
       });
 
       // Step-by-step ChanLun execution on fetched candlesticks
-      const { fractions, computedStrokes, computedSegments, computedHubs, computedBSPoints } =
-        computeChanlunParts(rawKlines);
+      const { fractions, strokes: computedStrokes, segments: computedSegments, hubs: computedHubs, bsPoints: computedBSPoints } =
+        await analyzeChanlunWithFallback(rawKlines);
 
       // Wait for basic info and sync React state
       const basicInfo = await basicInfoPromise;
@@ -294,8 +275,8 @@ export default function App() {
         throw new Error('Retrieved stock history has insufficient data bars for ChanLun processing.');
       }
 
-      const { fractions, computedStrokes, computedSegments, computedHubs, computedBSPoints } =
-        computeChanlunParts(rawKlines);
+      const { fractions, strokes: computedStrokes, segments: computedSegments, hubs: computedHubs, bsPoints: computedBSPoints } =
+        await analyzeChanlunWithFallback(rawKlines);
 
       setSymbol(data.symbol);
       setKlines(rawKlines);
