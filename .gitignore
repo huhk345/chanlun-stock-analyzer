@@ -15,6 +15,7 @@ src/strategies/user/
 data-test/
 data-validate/
 autoresearch/
+.cache/
 
 
 doc/

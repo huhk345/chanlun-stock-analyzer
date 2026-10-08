@@ -541,7 +541,7 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
         }
 
         try {
-          const klines = await fetchYearKlines(sym, 3, controller.signal, tf);
+          const klines = await fetchYearKlines(sym, 3, controller.signal, tf, force);
           cacheRef.current[sym] = await computeCacheEntry(klines);
           ok++;
           sinceFlush++;
@@ -1088,7 +1088,7 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
 
       {/* Footer note */}
       <p className="text-[10px] text-zinc-600 leading-relaxed">
-        数据来源: TickFlow {scanTimeframe === 'weekly' ? '周线 1w (前复权, 约400周)' : '近1年日线 (前复权)'} · 日线/周线结果分开缓存于浏览器 localStorage, 再次扫描秒级完成, 「强制重扫」可获取最新数据 ·
+        数据来源: TickFlow {scanTimeframe === 'weekly' ? '周线 1w (前复权, 约400周)' : '近1年日线 (前复权)'} (由后端缓存并按增量拉取) · 日线/周线结果分开缓存于浏览器 localStorage, 再次扫描秒级完成, 「强制重扫」可获取最新数据 ·
         信号为缠论三类买卖点机械识别结果, 仅供研究参考, 不构成投资建议。
       </p>
 
