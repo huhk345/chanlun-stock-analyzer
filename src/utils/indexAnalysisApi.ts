@@ -3,11 +3,10 @@
 //   - 成分股列表: public/index-members.{hs300,zz500}.json
 //     (由 scripts/download-index-stocks.ts 生成于 data/, 用 `pnpm run sync-index` 同步)
 //   - 股票名称: public/merged_stock_data.json (code -> stock_name)
-//   - K 线: TickFlow API, 近 1 年日线 (count=400 自然日 ≈ 270 个交易日)
+//   - K 线: 后端 /api/klines (服务端访问 TickFlow 免费接口, 本地缓存 + 增量更新)
 // ---------------------------------------------------------------------------
 
 import { Kline } from '../types/stock';
-import { acquireTickFlowSlot } from './rateLimiter';
 
 export type ScanKind = 'index' | 'etf' | 'stock';
 
@@ -191,53 +190,37 @@ export async function fetchStockFlowBatch(symbolKeys: string[]): Promise<Record<
 }
 
 // ---------------------------------------------------------------------------
-// TickFlow K 线 (近 1 年日线)
+// K 线 (后端 /api/klines, 近 1 年日线 / 约 400 周线)
+//   前端不再直连 TickFlow 免费接口; 后端负责上游请求 + 本地磁盘缓存 + 增量更新。
 // ---------------------------------------------------------------------------
-
-function getApiKey(): string {
-  try {
-    const savedKeys = localStorage.getItem('api_keys');
-    if (savedKeys) {
-      const keys = JSON.parse(savedKeys);
-      if (keys.tickflow) return keys.tickflow;
-    }
-  } catch {
-    // ignore
-  }
-  return import.meta.env.VITE_TICKFLOW_API_KEY || '';
-}
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export type ScanTimeframe = 'daily' | 'weekly';
 
 /**
- * 拉取单只标的 K 线 (前复权), 带 429/网络重试。
+ * 拉取单只标的 K 线 (前复权), 由后端 /api/klines 提供, 带网络重试。
  * - daily: 近 1 年日 K (period=1d, count=400 自然日 ≈ 270+ 个交易日)
  * - weekly: 周 K (period=1w, count=400 周 ≈ 7-8 年, 保证缠论笔/线段/中枢有足够历史)
- * signal 用于扫描取消时中断等待。
+ * @param force 强制后端重新拉取 (对应「强制重扫」)
+ * @param signal 用于扫描取消时中断等待。
  */
 export async function fetchYearKlines(
   symbol: string,
   maxRetries = 3,
   signal?: AbortSignal,
   timeframe: ScanTimeframe = 'daily',
+  force = false,
 ): Promise<Kline[]> {
-  const apiKey = getApiKey();
-  const baseUrl = apiKey ? 'https://api.tickflow.org' : 'https://free-api.tickflow.org';
   const period = timeframe === 'weekly' ? '1w' : '1d';
-  const url = `${baseUrl}/v1/klines?symbol=${symbol}&period=${period}&count=400&adjust=forward`;
-
-  const headers: Record<string, string> = {};
-  if (apiKey) headers['x-api-key'] = apiKey;
+  const url =
+    `/api/klines?symbol=${encodeURIComponent(symbol)}&period=${period}&count=400&adjust=forward` +
+    (force ? '&refresh=1' : '');
 
   let lastError = '';
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      // Proactively throttle to 55/min, under the free tier's 60/min cap.
-      // Shared with api.ts via the module-level limiter.
-      await acquireTickFlowSlot();
-      const resp = await fetch(url, { headers, signal });
+      const resp = await fetch(url, { signal });
       if (resp.status === 429) {
         lastError = 'HTTP 429 (限流)';
         await sleep(attempt * 2000);
@@ -246,26 +229,9 @@ export async function fetchYearKlines(
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
       const responseData = await resp.json();
-      const data = responseData?.data;
-      const length = data?.timestamp?.length || 0;
-      if (!data || length === 0) throw new Error('无K线数据');
-
-      const klines: Kline[] = [];
-      const CHINA_OFFSET = 8 * 60 * 60 * 1000;
-      for (let i = 0; i < length; i++) {
-        const date = new Date(data.timestamp[i] + CHINA_OFFSET);
-        const dateStr = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
-        klines.push({
-          date: dateStr,
-          open: parseFloat(data.open[i].toFixed(2)),
-          high: parseFloat(data.high[i].toFixed(2)),
-          low: parseFloat(data.low[i].toFixed(2)),
-          close: parseFloat(data.close[i].toFixed(2)),
-          volume: data.volume[i] || 0,
-          amount: data.amount[i] || 0,
-        });
-      }
-      return klines;
+      const klines = responseData?.klines;
+      if (!Array.isArray(klines) || klines.length === 0) throw new Error('无K线数据');
+      return klines as Kline[];
     } catch (err: any) {
       if (err?.name === 'AbortError') throw err;
       lastError = err?.message || String(err);

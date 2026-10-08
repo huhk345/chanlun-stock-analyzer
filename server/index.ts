@@ -5,6 +5,8 @@
  *   - 缠论结构计算 (合并K线/分型/笔/线段/中枢)
  *   - 三类买卖点识别 (一买/二买/三买 + 一卖/二卖/三卖)
  *   - 选股信号评估 (用策略 decide() 对最新 K 线打 BUY/SELL/HOLD)
+ *   - K 线拉取: GET /api/klines 由服务端访问 TickFlow 免费接口,
+ *     本地磁盘缓存 + 增量更新 (前端不再直连免费接口)
  *
  * 启动: pnpm server   (默认端口 8899, 可用 PORT 覆盖)
  */
@@ -22,6 +24,7 @@ import {
 import { evaluateScreenerSignal } from '../src/utils/screener.ts';
 import { loadStrategies } from '../src/strategies/user/index.ts';
 import { parseStrategyCode } from '../src/utils/strategyLoader.ts';
+import { getKlines, type KlinePeriod } from './klines.ts';
 
 const PORT = Number(process.env.PORT || 8899);
 
@@ -140,6 +143,19 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
 
   if (req.method === 'GET' && path === '/api/health') {
     sendJson(res, 200, { ok: true, uptime: process.uptime() });
+    return;
+  }
+
+  if (req.method === 'GET' && path === '/api/klines') {
+    const symbol = url.searchParams.get('symbol');
+    if (!symbol) throw Object.assign(new Error('symbol required'), { statusCode: 400 });
+    const period: KlinePeriod = url.searchParams.get('period') === '1w' ? '1w' : '1d';
+    const rawCount = parseInt(url.searchParams.get('count') || '400', 10);
+    const count = Math.min(Math.max(Number.isFinite(rawCount) ? rawCount : 400, 30), 5000);
+    const adjust = url.searchParams.get('adjust') || 'forward';
+    const force = url.searchParams.get('refresh') === '1' || url.searchParams.get('force') === '1';
+    const result = await getKlines(symbol, period, count, adjust, force);
+    sendJson(res, 200, result);
     return;
   }
 
