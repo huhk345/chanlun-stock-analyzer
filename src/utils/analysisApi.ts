@@ -2,7 +2,7 @@
  * 缠论买卖点 / 选股后端 API 客户端.
  *
  * 默认打相对路径 /api (vite dev 已代理到 server); 生产/预览环境可用
- * VITE_ANALYSIS_API_URL 指向独立 Node 服务 (默认 tsx server/index.ts, :3001)。
+ * VITE_ANALYSIS_API_URL 指向独立 Node 服务 (默认 tsx server/index.ts, :8899)。
  * 服务端不可用时调用方应回退到本地计算 (evaluateSignalWithFallback /
  * analyzeChanlunWithFallback 已内置回退)。
  */

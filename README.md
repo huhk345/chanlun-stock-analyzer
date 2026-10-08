@@ -89,7 +89,7 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
 
 6. (Optional) **Node analysis backend** — ChanLun 买卖点/选股 computation can run server-side instead of in-browser:
    ```bash
-   pnpm server   # tsx server/index.ts, listens on :3001
+   pnpm server   # tsx server/index.ts, listens on :8899
    ```
    Endpoints: `GET /api/health`, `GET /api/strategies`, `POST /api/chanlun/analyze`, `POST /api/chanlun/bspoints`, `POST /api/screener/evaluate`, `POST /api/screener/batch`. The Vite dev server proxies `/api` to it; the frontend falls back to local computation when the backend is unavailable. Override the base URL with `VITE_ANALYSIS_API_URL`.
 

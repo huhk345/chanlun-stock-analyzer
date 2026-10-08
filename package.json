@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "server": "tsx server/index.ts",
+    "start": "vite & tsx server/index.ts",
     "build": "vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit",

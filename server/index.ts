@@ -6,7 +6,7 @@
  *   - 三类买卖点识别 (一买/二买/三买 + 一卖/二卖/三卖)
  *   - 选股信号评估 (用策略 decide() 对最新 K 线打 BUY/SELL/HOLD)
  *
- * 启动: pnpm server   (默认端口 3001, 可用 PORT 覆盖)
+ * 启动: pnpm server   (默认端口 8899, 可用 PORT 覆盖)
  */
 import http from 'node:http';
 import type { Kline } from '../src/types/stock.ts';
@@ -23,7 +23,7 @@ import { evaluateScreenerSignal } from '../src/utils/screener.ts';
 import { loadStrategies } from '../src/strategies/user/index.ts';
 import { parseStrategyCode } from '../src/utils/strategyLoader.ts';
 
-const PORT = Number(process.env.PORT || 3001);
+const PORT = Number(process.env.PORT || 8899);
 
 // ---------------------------------------------------------------------------
 // HTTP helpers
