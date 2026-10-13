@@ -7,6 +7,8 @@
  *   - 选股信号评估 (用策略 decide() 对最新 K 线打 BUY/SELL/HOLD)
  *   - K 线拉取: GET /api/klines 由服务端访问 TickFlow 免费接口,
  *     本地磁盘缓存 + 增量更新 (前端不再直连免费接口)
+ *   - 买卖点扫描: WebSocket /ws —— 前端只下发扫描请求, 数据拉取、
+ *     缠论计算、信号行生成与资金流补充全部在服务端完成, 结果增量推送回前端
  *
  * 启动: pnpm server   (默认端口 8899, 可用 PORT 覆盖)
  */
@@ -25,6 +27,9 @@ import { evaluateScreenerSignal } from '../src/utils/screener.ts';
 import { loadStrategies } from '../src/strategies/user/index.ts';
 import { parseStrategyCode } from '../src/utils/strategyLoader.ts';
 import { getKlines, type KlinePeriod } from './klines.ts';
+import { attachWebSocketServer } from './ws.ts';
+import { handleScanConnection, WS_PATH } from './scanSocket.ts';
+import { getCacheSnapshot } from './scan.ts';
 
 const PORT = Number(process.env.PORT || 8899);
 
@@ -173,6 +178,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
     return;
   }
 
+  // 扫描缓存快照 (与 WebSocket `cache` 消息同源, 便于排障/脚本化读取)
+  if (req.method === 'GET' && path === '/api/scan/cache') {
+    const timeframe = url.searchParams.get('timeframe') === 'weekly' ? 'weekly' : 'daily';
+    sendJson(res, 200, { timeframe, ...(await getCacheSnapshot(timeframe)) });
+    return;
+  }
+
   if (req.method === 'POST' && path === '/api/chanlun/analyze') {
     const body = await readJson<{ klines?: unknown }>(req);
     if (!isKlineArray(body.klines)) throw Object.assign(new Error('klines: Kline[] required'), { statusCode: 400 });
@@ -226,6 +238,9 @@ const server = http.createServer((req, res) => {
   });
 });
 
+// 缠论买卖点扫描: 浏览器只发扫描请求, 数据与计算都在服务端完成
+attachWebSocketServer(server, WS_PATH, handleScanConnection);
+
 server.listen(PORT, () => {
-  console.log(`[chanlun-server] listening on http://localhost:${PORT}`);
+  console.log(`[chanlun-server] listening on http://localhost:${PORT} (scan websocket: ws://localhost:${PORT}${WS_PATH})`);
 });

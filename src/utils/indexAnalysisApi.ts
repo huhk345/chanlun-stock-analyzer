@@ -1,12 +1,18 @@
 // ---------------------------------------------------------------------------
-// 指数缠论买卖点扫描数据层
+// 指数/自选标的扫描的静态数据层 (仅前端仍需要的部分)
+//
 //   - 成分股列表: public/index-members.{hs300,zz500}.json
 //     (由 scripts/download-index-stocks.ts 生成于 data/, 用 `pnpm run sync-index` 同步)
 //   - 股票名称: public/merged_stock_data.json (code -> stock_name)
-//   - K 线: 后端 /api/klines (服务端访问 TickFlow 免费接口, 本地缓存 + 增量更新)
+//
+// 缠论买卖点扫描本身 (K 线拉取 + 缠论计算 + 资金流) 已全部移到后端,
+// 由 WebSocket /ws 驱动, 见 src/utils/scanSocket.ts 与 server/scan.ts。
 // ---------------------------------------------------------------------------
 
-import { Kline } from '../types/stock';
+import { INDEX_META, type IndexId, type ScanTimeframe } from '../types/scan';
+
+export { INDEX_META };
+export type { IndexId, ScanTimeframe };
 
 export type ScanKind = 'index' | 'etf' | 'stock';
 
@@ -74,20 +80,13 @@ export function symbolKey(p: ParsedSymbol): string {
 // 成分股列表 / 名称映射
 // ---------------------------------------------------------------------------
 
-export type IndexId = 'hs300' | 'zz500';
-
-export const INDEX_META: Record<IndexId, { label: string; file: string }> = {
-  hs300: { label: '沪深300', file: '/index-members.hs300.json' },
-  zz500: { label: '中证500', file: '/index-members.zz500.json' },
-};
-
 const membersCache: Partial<Record<IndexId, string[]>> = {};
 
 export async function fetchIndexMembers(id: IndexId): Promise<string[]> {
   const cached = membersCache[id];
   if (cached) return cached;
 
-  const resp = await fetch(INDEX_META[id].file);
+  const resp = await fetch(`/${INDEX_META[id].file}`);
   if (!resp.ok) throw new Error(`获取 ${INDEX_META[id].label} 成分股失败 (${resp.status})`);
   const list = await resp.json();
   if (!Array.isArray(list) || list.length === 0) throw new Error(`${INDEX_META[id].label} 成分股列表为空`);
@@ -128,115 +127,4 @@ export function loadStockMeta(): Promise<StockMeta> {
     })
     .catch(() => ({ names: {}, industries: {} }));
   return stockMetaPromise;
-}
-
-// ---------------------------------------------------------------------------
-// 个股当日主力资金流向 (东方财富, 支持批量)
-// ---------------------------------------------------------------------------
-
-const EM_DELAY_BASE = 'https://push2delay.eastmoney.com';
-
-export interface StockFlow {
-  mainInflow: number;  // 今日主力净流入 (元) = 超大单 + 大单
-  mainPercent: number; // 主力净占比 %
-}
-
-/** symbolKey('600000.SH') -> 东方财富 secid ('1.600000') */
-function secidOf(key: string): string {
-  const dot = key.indexOf('.');
-  const code = key.slice(0, dot);
-  const ex = key.slice(dot + 1);
-  return `${ex === 'SH' ? '1' : '0'}.${code}`;
-}
-
-/**
- * 批量获取个股当日主力资金流向。
- * 返回 symbolKey -> StockFlow, 单只失败/无数据的标的不会出现在结果中。
- */
-export async function fetchStockFlowBatch(symbolKeys: string[]): Promise<Record<string, StockFlow>> {
-  const out: Record<string, StockFlow> = {};
-  const num = (v: unknown): number => (typeof v === 'number' ? v : parseFloat(String(v)) || NaN);
-
-  for (let i = 0; i < symbolKeys.length; i += 60) {
-    const chunk = symbolKeys.slice(i, i + 60);
-    const url =
-      `${EM_DELAY_BASE}/api/qt/ulist.np/get?fltt=2&invt=2` +
-      `&secids=${chunk.map(secidOf).join(',')}&fields=f12,f62,f184`;
-    try {
-      const resp = await fetch(url);
-      if (!resp.ok) continue;
-      const json = await resp.json();
-      const diff = json?.data?.diff;
-      if (!Array.isArray(diff)) continue;
-
-      // 返回项仅含 6 位代码, 需映射回带后缀的 symbolKey
-      const byCode = new Map<string, string[]>();
-      for (const k of chunk) {
-        const code = k.split('.')[0];
-        const list = byCode.get(code);
-        if (list) list.push(k); else byCode.set(code, [k]);
-      }
-      for (const it of diff) {
-        const keys = byCode.get(String(it.f12 || ''));
-        const key = keys?.shift();
-        if (!key) continue;
-        const main = num(it.f62);
-        if (isNaN(main)) continue; // ETF/指数等无资金流数据
-        out[key] = { mainInflow: main, mainPercent: num(it.f184) || 0 };
-      }
-    } catch { /* 单批失败不阻塞其余批次 */ }
-  }
-  return out;
-}
-
-// ---------------------------------------------------------------------------
-// K 线 (后端 /api/klines, 近 1 年日线 / 约 400 周线)
-//   前端不再直连 TickFlow 免费接口; 后端负责上游请求 + 本地磁盘缓存 + 增量更新。
-// ---------------------------------------------------------------------------
-
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-export type ScanTimeframe = 'daily' | 'weekly';
-
-/**
- * 拉取单只标的 K 线 (前复权), 由后端 /api/klines 提供, 带网络重试。
- * - daily: 近 1 年日 K (period=1d, count=400 自然日 ≈ 270+ 个交易日)
- * - weekly: 周 K (period=1w, count=400 周 ≈ 7-8 年, 保证缠论笔/线段/中枢有足够历史)
- * @param force 强制后端重新拉取 (对应「强制重扫」)
- * @param signal 用于扫描取消时中断等待。
- */
-export async function fetchYearKlines(
-  symbol: string,
-  maxRetries = 3,
-  signal?: AbortSignal,
-  timeframe: ScanTimeframe = 'daily',
-  force = false,
-): Promise<Kline[]> {
-  const period = timeframe === 'weekly' ? '1w' : '1d';
-  const url =
-    `/api/klines?symbol=${encodeURIComponent(symbol)}&period=${period}&count=400&adjust=forward` +
-    (force ? '&refresh=1' : '');
-
-  let lastError = '';
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const resp = await fetch(url, { signal });
-      if (resp.status === 429) {
-        lastError = 'HTTP 429 (限流)';
-        await sleep(attempt * 2000);
-        continue;
-      }
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
-      const responseData = await resp.json();
-      const klines = responseData?.klines;
-      if (!Array.isArray(klines) || klines.length === 0) throw new Error('无K线数据');
-      return klines as Kline[];
-    } catch (err: any) {
-      if (err?.name === 'AbortError') throw err;
-      lastError = err?.message || String(err);
-      if (attempt < maxRetries) await sleep(1200);
-    }
-  }
-  throw new Error(lastError || '请求失败');
 }

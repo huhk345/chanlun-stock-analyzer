@@ -87,11 +87,22 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
 
 5. Open [http://localhost:8888](http://localhost:8888) in your browser.
 
-6. (Optional) **Node analysis backend** — ChanLun 买卖点/选股 computation can run server-side instead of in-browser:
+6. **Node analysis backend** — the ChanLun 买卖点扫描 (BS-point scan) and 选股 computation run server-side instead of in-browser:
    ```bash
    pnpm server   # tsx server/index.ts, listens on :8899
    ```
-   Endpoints: `GET /api/health`, `GET /api/strategies`, `POST /api/chanlun/analyze`, `POST /api/chanlun/bspoints`, `POST /api/screener/evaluate`, `POST /api/screener/batch`. The Vite dev server proxies `/api` to it; the frontend falls back to local computation when the backend is unavailable. Override the base URL with `VITE_ANALYSIS_API_URL`.
+   HTTP endpoints: `GET /api/health`, `GET /api/strategies`, `GET /api/klines`, `GET /api/scan/cache`, `POST /api/chanlun/analyze`, `POST /api/chanlun/bspoints`, `POST /api/screener/evaluate`, `POST /api/screener/batch`.
+
+   **缠论买卖点扫描走 WebSocket `/ws`** — the browser only sends a scan request; the server fetches the K-lines, computes the ChanLun structures / BS-points, builds the signal rows and streams them back over the socket:
+   ```text
+   browser --{type:'scan', timeframe, indexes, custom, force}--> server
+   browser <--{scan-start | progress | rows | flows | done}------- server
+   ```
+   Server-side: K-lines are cached under `.cache/klines/`, scan results under `.cache/scan/{daily,weekly}.json` (an incremental scan only re-fetches symbols whose last bar is behind the expected latest trading day), so repeat scans are instant and the browser keeps no cache of its own. Multiple tabs share one running scan; closing a tab does not stop the scan.
+
+   Vite proxies both `/api` and `/ws` to the backend (`ws: true`). Override the backend address with `ANALYSIS_API_TARGET` (dev/preview proxy target), the HTTP base URL with `VITE_ANALYSIS_API_URL`, or the WebSocket URL with `VITE_ANALYSIS_WS_URL` (defaults to same-origin `/ws`).
+
+   The single-stock analysis endpoints (`/api/chanlun/*`, `/api/screener/*`) still fall back to in-browser computation when the backend is down; the 买卖点扫描 requires the backend and shows a reconnect banner when the socket drops.
 
 ### Usage
 
