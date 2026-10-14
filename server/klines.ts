@@ -1,19 +1,26 @@
 /**
  * 缠论买卖点 K 线服务端数据层。
  *
- * 前端不再直连 TickFlow 免费接口, 而是请求后端 `/api/klines`;
+ * 前端不再直连上游, 而是请求后端 `/api/klines`;
  * 由本模块负责:
- *   - 调用 TickFlow API (免费接口或配置了 Key 的完整服务) 获取 K 线
+ *   - 调用 K 线数据源获取 K 线 (默认腾讯, 无频率限制; TickFlow 作为兜底)
  *   - 将结果缓存到本地磁盘 (默认 .cache/klines/)
  *   - 增量获取: 缓存已存在时, 只按缺口拉取少量最新 K 线, 与缓存按日期合并
  *
  * 缓存新鲜度按"末根 K 线日期 vs 预期最新交易日"判断 (节假日忽略),
  * 未过期直接返回本地缓存, 过期才发起增量请求。
+ *
+ * 数据源优先级 (环境变量 KLINE_SOURCE 可强制指定 tencent / tickflow):
+ *   - tencent  (默认): 腾讯行情 newfqkline, 免 Key, 免公开限流, 单只约 0.25s;
+ *                     限速与域名轮换见 tencentKlines.ts (默认 15 次/秒)
+ *   - tickflow (兜底) : 免费接口硬顶 60 次/分钟, 仅在腾讯失败时兜底
+ * 两者字段口径一致 (成交量均为"手"), 切换数据源无需清空本地缓存。
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Kline } from '../src/types/stock.ts';
 import { acquireTickFlowSlot } from '../src/utils/rateLimiter.ts';
+import { fetchTencentKlines } from './tencentKlines.ts';
 
 const TICKFLOW_API_KEY = process.env.TICKFLOW_API_KEY || process.env.VITE_TICKFLOW_API_KEY || '';
 const TICKFLOW_BASE_URL = TICKFLOW_API_KEY ? 'https://api.tickflow.org' : 'https://free-api.tickflow.org';
@@ -197,6 +204,35 @@ async function fetchFromTickFlow(
 }
 
 // ---------------------------------------------------------------------------
+// 数据源路由: 腾讯优先 (无限流), TickFlow 兜底
+// ---------------------------------------------------------------------------
+
+/** KLINE_SOURCE=tickflow 可强制走旧数据源排障; 默认腾讯优先 */
+const PREFER_TICKFLOW = (process.env.KLINE_SOURCE || '').toLowerCase() === 'tickflow';
+
+/**
+ * 拉取 K 线 (腾讯优先, 失败自动回退 TickFlow)。
+ * 两只上游的返回值口径一致, 因此调用方无需关心实际数据源。
+ */
+async function fetchKlines(
+  symbol: string,
+  period: KlinePeriod,
+  count: number,
+  adjust: string,
+): Promise<Kline[]> {
+  if (PREFER_TICKFLOW) return fetchFromTickFlow(symbol, period, count, adjust);
+  try {
+    return await fetchTencentKlines(symbol, period, count, adjust);
+  } catch (err) {
+    console.warn(
+      `[klines] 腾讯获取 ${symbol} ${period} 失败, 回退 TickFlow:`,
+      err instanceof Error ? err.message : err,
+    );
+    return fetchFromTickFlow(symbol, period, count, adjust);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 增量合并
 // ---------------------------------------------------------------------------
 
@@ -259,9 +295,9 @@ export async function getKlines(
       const prev = cached?.klines ?? [];
       const fetchCount = computeFetchCount(prev, period, count, force);
       console.log(
-        `[klines] ${symbol} ${period}: ${force ? '强制刷新' : prev.length ? `增量拉取 ${fetchCount} 根` : `首次全量 ${fetchCount} 根`}`,
+        `[klines] ${symbol} ${period}: ${PREFER_TICKFLOW ? 'TickFlow' : '腾讯'} · ${force ? '强制刷新' : prev.length ? `增量拉取 ${fetchCount} 根` : `首次全量 ${fetchCount} 根`}`,
       );
-      const fresh = await fetchFromTickFlow(symbol, period, fetchCount, adjust);
+      const fresh = await fetchKlines(symbol, period, fetchCount, adjust);
       const merged = mergeKlines(prev, fresh);
       const updatedAt = writeCache(symbol, period, adjust, merged);
       return { klines: merged, updatedAt };

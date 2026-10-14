@@ -52,7 +52,7 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
 | Visualization | D3.js + Recharts |
 | Icons & Motion | Lucide React + Motion |
 | AI | Google Gemini / OpenRouter |
-| Data | TickFlow API (free tier available) |
+| Data | Tencent quote API (free, no key) · TickFlow API (fallback) |
 | Auth & DB | Supabase |
 
 ### Getting Started
@@ -76,7 +76,9 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
    ```
    | Variable | Required | Description |
    |----------|----------|-------------|
-   | `VITE_TICKFLOW_API_KEY` | No | TickFlow API key (free tier works without key) |
+   | `VITE_TICKFLOW_API_KEY` | No | TickFlow API key — fallback K-line source only (Tencent is the default and needs no key) |
+   | `KLINE_SOURCE` | No | `tencent` (default) or `tickflow` — force the K-line source |
+   | `TENCENT_RPS` | No | Tencent global rate limit in requests/sec (default 15) |
    | `VITE_GEMINI_API_KEY` | Yes | Google Gemini API key from [AI Studio](https://aistudio.google.com/app/apikey) |
    | `VITE_OPENROUTER_API_KEY` | No | OpenRouter API key for multi-model support |
 
@@ -169,7 +171,7 @@ pnpm exec tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
 | 可视化 | D3.js + Recharts |
 | 图标与动效 | Lucide React + Motion |
 | AI | Google Gemini / OpenRouter |
-| 数据 | TickFlow API (提供免费接口) |
+| 数据 | 腾讯行情 (免费, 免 Key) · TickFlow API (兜底) |
 | 认证与数据库 | Supabase |
 
 ### 快速开始
@@ -193,7 +195,9 @@ pnpm exec tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
    ```
    | 变量 | 是否必须 | 说明 |
    |------|----------|------|
-   | `VITE_TICKFLOW_API_KEY` | 否 | TickFlow API Key (不提供则使用免费接口) |
+   | `VITE_TICKFLOW_API_KEY` | 否 | TickFlow API Key — 仅作 K 线兜底数据源 (默认腾讯, 免 Key) |
+   | `KLINE_SOURCE` | 否 | K 线数据源: `tencent` (默认) 或 `tickflow` |
+   | `TENCENT_RPS` | 否 | 腾讯行情全局限速 (次/秒, 默认 15) |
    | `VITE_GEMINI_API_KEY` | 是 | Google Gemini API Key, 从 [AI Studio](https://aistudio.google.com/app/apikey) 获取 |
    | `VITE_OPENROUTER_API_KEY` | 否 | OpenRouter API Key, 支持多种 AI 模型 |
 

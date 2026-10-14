@@ -36,8 +36,13 @@ const SCAN_CACHE_DIR = process.env.SCAN_CACHE_DIR
   ? path.resolve(process.env.SCAN_CACHE_DIR)
   : path.join(ROOT_DIR, '.cache', 'scan');
 
-/** 每周期同时向 TickFlow 拉取的标的数 (上游 55 次/分钟限流, 这里只控制内存/连接并发) */
-const CONCURRENCY = 6;
+/**
+ * 每周期同时拉取的标的数。
+ * 上游腾讯行情免 Key 且无公开限流, 这里主要控制内存/连接并发。
+ * 实测 (沪深300+中证500 800 只, 强制全量):
+ *   TickFlow 限流 60/分钟 约需 13 分钟 -> 腾讯约 55 秒 (受 15 次/秒 限速约束)
+ */
+const CONCURRENCY = 8;
 /** 每只标的取用的 K 线根数 (近 1 年日线 / 约 400 周线) */
 const KLINE_COUNT = 400;
 /** 每新算完多少只标的落盘一次扫描缓存 */
