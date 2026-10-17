@@ -17,7 +17,7 @@ export interface MergedKline {
   originalLow: number;
 }
 
-export type FractionType = 'TOP' | 'BOTTOM';
+type FractionType = 'TOP' | 'BOTTOM';
 
 export interface Fraction {
   type: FractionType;
@@ -65,13 +65,6 @@ export interface BSPoint {
   strokeIndex: number;    // Index of the stroke that generated this point
 }
 
-export interface StockInfo {
-  symbol: string;
-  name: string;
-  exchange: string;
-  currency: string;
-}
-
 export interface StockBasicInfo {
   symbol: string;          // 股票代码
   name: string;            // 股票名称
@@ -92,7 +85,12 @@ export interface StockBasicInfo {
 export interface BacktestTrade {
   id: string;
   type: 'BUY' | 'SELL';
+  /** 信号来源标签 (策略 id, 或引擎级信号如 stop-loss) */
   signalType: string;
+  /** 策略给出的完整买卖信号理由 (回测账本/图表标注展示) */
+  reason?: string;
+  /** 策略给出的信号置信度 0~1 */
+  confidence?: number;
   price: number;
   date: string;
   shares: number;
@@ -117,6 +115,8 @@ export interface BacktestResult {
   totalFees: number;
   sharpeRatio: number;
   buyHoldReturnPercent: number;
+  /** 区间内权益曲线相对峰值的最大回撤 % (0 表示无回撤, 老数据可能缺失) */
+  maxDrawdownPercent?: number;
   trades: BacktestTrade[];
   createdAt: string;
 }

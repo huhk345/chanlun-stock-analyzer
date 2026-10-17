@@ -40,7 +40,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          vendor: ['react', 'react-dom', 'd3', 'recharts', 'lightweight-charts'],
+          vendor: ['react', 'react-dom', 'recharts', 'lightweight-charts'],
         },
       },
     },

@@ -11,19 +11,16 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
-    "test:screener": "tsx scripts/test-screener.ts",
     "sync-index": "cp data/hs300/_constituents.json public/index-members.hs300.json && cp data/zz500/_constituents.json public/index-members.zz500.json"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",
     "@types/prismjs": "^1.26.6",
     "@vitejs/plugin-react": "^5.0.4",
-    "d3": "^7.9.0",
     "dom-to-image-more": "^3.9.0",
     "exa-js": "^2.14.0",
     "lightweight-charts": "^5.2.0",
     "lucide-react": "^0.546.0",
-    "motion": "^12.23.24",
     "prismjs": "^1.30.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
@@ -34,15 +31,12 @@
     "vite": "^6.2.3"
   },
   "devDependencies": {
-    "@types/d3": "^7.4.3",
     "@types/node": "^22.14.0",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.10",
-    "autoprefixer": "^10.4.21",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.22.4",
-    "typescript": "~5.8.2",
-    "vite": "^6.2.3"
+    "typescript": "~5.8.2"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

@@ -1,14 +1,18 @@
 /**
  * 缠论买卖点扫描的 WebSocket 协议处理。
  *
- * 前端只发 4 种消息 (cache / scan / cancel / ping), 后端负责:
+ * 前端只发 5 种消息 (ping / cache / scan / cancel), 后端负责:
  *   - cache: 直接回磁盘缓存快照, 页面秒开, 不产生任何上游请求
  *   - scan:  交给扫描引擎 (server/scan.ts) 拉数据 + 算缠论, 增量推送 rows/progress
  *   - cancel: 中断当前连接挂着的那次扫描
  * 所有非法输入都在这里被过滤/兜底, 不让异常冒到 socket 层。
+ *
+ * 浏览器不直接访问任何行情上游 (腾讯 ifzq):
+ * 全量扫描都在服务端完成, 复用同一份数据层与评估口径。
  */
 import type { WebSocketPeer } from './ws.ts';
 import { cancelScan, getCacheSnapshot, requestScan, type ScanJob } from './scan.ts';
+import { isAshareSymbol } from '../src/utils/symbols.ts';
 import type {
   IndexId,
   ScanClientMessage,
@@ -25,8 +29,6 @@ function isTimeframe(v: unknown): v is ScanTimeframe {
 function isIndexId(v: unknown): v is IndexId {
   return v === 'hs300' || v === 'zz500';
 }
-
-const isSymbol = (v: unknown): v is string => typeof v === 'string' && /^\d{6}\.(SH|SZ)$/.test(v);
 
 export function handleScanConnection(peer: WebSocketPeer): void {
   /** 当前连接订阅的扫描任务 (用于中途接入重放 / 定向中断) */
@@ -58,6 +60,9 @@ export function handleScanConnection(peer: WebSocketPeer): void {
     }
 
     switch (msg.type) {
+      // ---------------------------------------------------------------------
+      // 缠论买卖点扫描 (server/scan.ts)
+      // ---------------------------------------------------------------------
       case 'ping':
         send({ type: 'pong' });
         return;
@@ -82,7 +87,7 @@ export function handleScanConnection(peer: WebSocketPeer): void {
         const body = msg as { timeframe?: unknown; indexes?: unknown; custom?: unknown; force?: unknown };
         const timeframe = isTimeframe(body.timeframe) ? body.timeframe : 'daily';
         const indexes = Array.isArray(body.indexes) ? body.indexes.filter(isIndexId) : [];
-        const custom = Array.isArray(body.custom) ? body.custom.filter(isSymbol) : [];
+        const custom = Array.isArray(body.custom) ? body.custom.filter(isAshareSymbol) : [];
         const force = body.force === true;
 
         if (job) {
@@ -118,7 +123,7 @@ export function handleScanConnection(peer: WebSocketPeer): void {
     }
   };
 
-  // 连接断开只取消订阅: 扫描任务留在服务端继续跑完并落盘缓存, 其他标签页仍可共享结果
+  // 连接断开只取消订阅: 任务留在服务端继续跑完并落盘缓存, 其他标签页仍可共享结果
   peer.onClose = () => {
     job?.unsubscribe(listener);
     job = null;

@@ -21,40 +21,16 @@ import {
   updatePositionAfterBuy,
   updatePositionAfterSell,
 } from './backtestRunner';
-import { mergeKlines, findFractions, calculateStrokes, calculateSegments, calculateHubs } from './chanlun';
+import { computeChanlunStructures } from './chanlun';
+import {
+  nextTradeId,
+  tradesToSnapshots,
+  sharpeFromReturns,
+} from './backtestUtils';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-let tradeCounter = 0;
-function nextTradeId(): string {
-  tradeCounter++;
-  return `trade-${Date.now()}-${tradeCounter}`;
-}
-
-function buildChanLunCache(klines: readonly Kline[]) {
-  const mutableKlines = [...klines];
-  const merged = mergeKlines(mutableKlines);
-  const fractions = findFractions(merged, mutableKlines);
-  const strokes = calculateStrokes(fractions);
-  const segments = calculateSegments(strokes);
-  const hubs = calculateHubs(strokes);
-  return { mergedKlines: merged, fractions, strokes, segments, hubs };
-}
-
-function tradesToSnapshots(trades: BacktestTrade[]): BacktestTradeSnapshot[] {
-  return trades.map((t) => ({
-    id: t.id,
-    date: t.date,
-    action: t.type,
-    price: t.price,
-    shares: t.shares,
-    value: t.value,
-    fee: t.fee,
-    reason: t.signalType,
-  }));
-}
 
 function cloneAccount(a: BacktestAccountState): BacktestAccountState {
   return { ...a };
@@ -116,7 +92,12 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
   let account = createInitialAccount(initialCash, currency);
   let position = createInitialPosition();
   let trades: BacktestTrade[] = [];
+  /** 策略连续异常达到该次数后才判定为「不可用」, 之前按 HOLD 降级继续跑 */
+  const MAX_CONSECUTIVE_ERRORS = 5;
   let strategyStopped = false;
+  let consecutiveErrors = 0;
+  /** 是否已成功评估过至少一次 (用于区分「数据不足」与「策略真的坏了」) */
+  let hasDecidedOnce = false;
   let diagnostics: BacktestDiagnostic[] = [];
   let totalFees = 0;
   let isStarted = false;
@@ -163,6 +144,7 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
           id: nextTradeId(),
           type: 'SELL',
           signalType: 'stop-loss',
+          reason: `触发固定止损 ${stopLossPercent}%`,
           price: currentPrice,
           date: currentKline.date,
           shares: sellShares,
@@ -179,7 +161,7 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
           price: trade.price,
           shares: trade.shares,
           value: trade.value,
-          reason: trade.signalType,
+          reason: trade.reason ?? trade.signalType,
         };
 
         stepDiagnostics.push({
@@ -228,7 +210,7 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
     };
 
     // Provide ChanLun analysis data
-    strategyInput.chanlun = buildChanLunCache(klinesSlice);
+    strategyInput.chanlun = computeChanlunStructures(klinesSlice);
 
     // Compute indicator values and merge into params
     const indicatorValues = computeIndicatorValues(selectedIndicators, symbol, klinesSlice, i);
@@ -238,14 +220,28 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
     if (!strategyStopped) {
       try {
         decision = strategy.decide(strategyInput);
+        consecutiveErrors = 0;
+        hasDecidedOnce = true;
       } catch (err) {
-        strategyStopped = true;
+        // 单根 K 线异常只降级为 HOLD, 不中断整段回测 —— 否则该根之后的全部买卖信号都会丢失。
+        // 尚未成功评估过 (多为样本不足导致) 时一律继续跑; 已经跑通后再连续异常才判定不可用。
+        consecutiveErrors++;
         const msg = err instanceof Error ? err.message : String(err);
-        stepDiagnostics.push({
-          date: currentKline.date,
-          level: 'error',
-          message: `Strategy threw an error: ${msg}. Strategy will no longer be called.`,
-        });
+        if (hasDecidedOnce && consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+          strategyStopped = true;
+          stepDiagnostics.push({
+            date: currentKline.date,
+            level: 'error',
+            message: `Strategy threw ${consecutiveErrors} consecutive errors, last: ${msg}. Strategy will no longer be called.`,
+          });
+        } else {
+          stepDiagnostics.push({
+            date: currentKline.date,
+            level: 'warning',
+            message: `Strategy error (treated as HOLD, 后续信号继续评估): ${msg}`,
+          });
+        }
+        decision = { action: 'HOLD', reason: `策略异常按 HOLD 处理: ${msg}` };
       }
     }
 
@@ -302,6 +298,8 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
               id: nextTradeId(),
               type: 'BUY',
               signalType: strategy.id || strategy.name,
+              reason: decision.reason,
+              confidence: decision.confidence,
               price: currentPrice,
               date: currentKline.date,
               shares,
@@ -317,7 +315,7 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
               shares: trade.shares,
               value: trade.value,
               fee: trade.fee,
-              reason: trade.signalType,
+              reason: trade.reason ?? trade.signalType,
             };
           }
         } else if (decision.action === 'SELL') {
@@ -340,6 +338,8 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
               id: nextTradeId(),
               type: 'SELL',
               signalType: strategy.id || strategy.name,
+              reason: decision.reason,
+              confidence: decision.confidence,
               price: currentPrice,
               date: currentKline.date,
               shares: sellShares,
@@ -357,7 +357,7 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
               shares: trade.shares,
               value: trade.value,
               fee: trade.fee,
-              reason: trade.signalType,
+              reason: trade.reason ?? trade.signalType,
             };
           }
         }
@@ -428,15 +428,8 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
     const winRate = totalSells > 0 ? (winningTrades / totalSells) * 100 : 0;
     const buyHoldReturnPercent = firstPrice > 0 ? ((lastPrice - firstPrice) / firstPrice) * 100 : 0;
 
-    let sharpeRatio = 0;
     const closedTrades = trades.filter(t => t.type === 'SELL' && t.pnlPercent !== undefined);
-    if (closedTrades.length > 1) {
-      const returns = closedTrades.map(t => (t.pnlPercent ?? 0) / 100);
-      const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
-      const variance = returns.reduce((a, b) => a + (b - mean) ** 2, 0) / returns.length;
-      const std = Math.sqrt(variance);
-      sharpeRatio = std > 0 ? (mean / std) * Math.sqrt(252) : 0;
-    }
+    const sharpeRatio = sharpeFromReturns(closedTrades.map(t => (t.pnlPercent ?? 0) / 100));
 
     return {
       id: `backtest-${Date.now()}`,
@@ -453,6 +446,7 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
       totalFees,
       sharpeRatio,
       buyHoldReturnPercent,
+      maxDrawdownPercent: 0,
       trades: cloneTrades(trades),
       createdAt: new Date().toISOString(),
     };

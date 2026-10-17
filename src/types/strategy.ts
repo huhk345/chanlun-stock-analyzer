@@ -4,7 +4,7 @@ import type { Kline, Stroke, Segment, Hub, Fraction } from './stock';
 // Strategy timeframe & parameter types
 // ---------------------------------------------------------------------------
 
-export type StrategyTimeframe = 'daily';
+type StrategyTimeframe = 'daily';
 
 export type StrategyParamValue = string | number | boolean;
 
@@ -42,24 +42,24 @@ export interface BacktestTradeSnapshot {
 // Indicator Cache contract
 // ---------------------------------------------------------------------------
 
-export interface IndicatorCache {
+interface IndicatorCache {
   byId: Readonly<Record<string, IndicatorData>>;
 }
 
-export interface IndicatorData {
+interface IndicatorData {
   id: string;
   name: string;
   series: readonly IndicatorSeries[];
 }
 
-export interface IndicatorSeries {
+interface IndicatorSeries {
   id: string;
   name: string;
   type: 'line' | 'histogram';
   data: readonly IndicatorPoint[];
 }
 
-export interface IndicatorPoint {
+interface IndicatorPoint {
   time: string;
   value: number | null;
 }
@@ -68,7 +68,7 @@ export interface IndicatorPoint {
 // ChanLun Cache contract
 // ---------------------------------------------------------------------------
 
-export interface ChanLunCache {
+interface ChanLunCache {
   mergedKlines: readonly import('../types/stock').MergedKline[];
   fractions: readonly Fraction[];
   strokes: readonly Stroke[];
@@ -104,7 +104,7 @@ export type UserStrategyAction = 'BUY' | 'SELL' | 'HOLD';
 
 export type UserStrategyAmountUnit = 'cash' | 'shares' | 'percent';
 
-export interface UserStrategyAmount {
+interface UserStrategyAmount {
   unit: UserStrategyAmountUnit;
   value: number;
 }
@@ -120,11 +120,11 @@ export interface UserStrategyDecision {
 // Strategy Function & Definition contracts
 // ---------------------------------------------------------------------------
 
-export type UserStrategyFunction = (
+type UserStrategyFunction = (
   input: UserStrategyInput
 ) => UserStrategyDecision;
 
-export interface UserStrategyParamDefinition {
+interface UserStrategyParamDefinition {
   key: string;
   label: string;
   type: 'number' | 'string' | 'boolean';
@@ -134,7 +134,7 @@ export interface UserStrategyParamDefinition {
   step?: number;
 }
 
-export interface AvailableIndicator {
+interface AvailableIndicator {
   id: string;
   name: string;
   description?: string;
@@ -142,7 +142,7 @@ export interface AvailableIndicator {
   params?: readonly UserStrategyParamDefinition[];
 }
 
-export interface RequiredIndicator {
+interface RequiredIndicator {
   id: string;
   params?: Readonly<Record<string, StrategyParamValue>>;
 }
@@ -202,15 +202,6 @@ export interface IndicatorSelectionState {
 // AI-Assisted Strategy Creation contracts
 // ---------------------------------------------------------------------------
 
-export interface StrategyDialogRequest {
-  userDescription: string;
-  context?: {
-    symbol?: string;
-    existingStrategyIds?: readonly string[];
-    availableIndicatorIds?: readonly string[];
-  };
-}
-
 export interface StrategyDialogResponse {
   success: boolean;
   strategy?: UserStrategyDefinition;
@@ -253,11 +244,6 @@ export interface StoredStrategy {
   availableIndicators?: readonly AvailableIndicator[];
   requiredIndicators?: readonly RequiredIndicator[];
   requiresChanLun?: boolean;
-}
-
-export interface StrategyStorageData {
-  version: number;
-  strategies: StoredStrategy[];
 }
 
 // ---------------------------------------------------------------------------

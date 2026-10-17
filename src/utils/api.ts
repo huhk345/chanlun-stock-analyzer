@@ -1,137 +1,14 @@
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo } from '../types/stock';
 import { acquireTickFlowSlot } from './rateLimiter';
-
-// Helper function to get API keys from localStorage or environment variables
-function getApiKey(key: string): string {
-  try {
-    const savedKeys = localStorage.getItem('api_keys');
-    if (savedKeys) {
-      const keys = JSON.parse(savedKeys);
-      if (keys[key]) {
-        return keys[key];
-      }
-    }
-  } catch (e) {
-    console.error('Failed to read API keys from localStorage');
-  }
-  return '';
-}
+import { getApiKey } from './apiKeys';
+import { extractRateLimitDelay, parseTickflowColumns, sanitizeKlines } from './klineUtils';
+import { resolveSymbol } from './symbols';
 
 // TickFlow API Configuration
 // 免费API无需API Key，使用 https://free-api.tickflow.org
 // 完整服务需要API Key，使用 https://api.tickflow.org
 const getTickFlowApiKey = () => getApiKey('tickflow') || (typeof import.meta !== 'undefined' ? import.meta.env?.VITE_TICKFLOW_API_KEY : '') || '';
 const getTickFlowBaseUrl = () => getTickFlowApiKey() ? 'https://api.tickflow.org' : 'https://free-api.tickflow.org';
-
-// Supported markets for the analyzer. TickFlow serves A-shares (cn);
-// US / HK single stocks are served by Tencent ifzq (CORS-friendly).
-export type StockMarket = 'cn' | 'us' | 'hk';
-
-// Helper: Resolve user input into a canonical symbol + market.
-// Supported formats (case-insensitive):
-//   - A股: 6-digit code ('600519'), '600519.SH' / '.SS' / '.SZ'
-//   - 美股: bare ticker ('AAPL', 'NVDA', 'BRK.B'), 'AAPL.US' / '.OQ' (NASDAQ) / '.N' (NYSE) / '.AM' (AMEX)
-//   - 港股: '00700.HK', 'HK00700', bare 4-5 digit code ('00700')
-export function resolveSymbol(symbol: string): {
-  resolved: string;
-  displayName: string;
-  isChinaStock: boolean;
-  market: StockMarket | 'other';
-  /** Tencent ifzq code for us/hk markets (e.g. 'usAAPL', 'hk00700'); '' otherwise. */
-  txSymbol: string;
-} {
-  const clean = symbol.trim().toUpperCase();
-  const cn = (resolved: string, displayName: string) => {
-    const code = resolved.split('.')[0];
-    const isSS = /^(60|68|90|11|13|51|58)/.test(code);
-    const isBJ = /^(43|83|87|88|92)/.test(code);
-    const prefix = isSS ? 'sh' : isBJ ? 'bj' : 'sz';
-    return {
-      resolved,
-      displayName,
-      isChinaStock: true as const,
-      market: 'cn' as const,
-      txSymbol: `${prefix}${code}`,
-    };
-  };
-  if (/^\d{6}$/.test(clean)) {
-    // 6-digit pure numbers represent Chinese stocks
-    const isSS = /^(60|68|90|11|13|51|58|60)/.test(clean);
-    const suffix = isSS ? 'SH' : 'SZ';
-    return cn(`${clean}.${suffix}`, `${clean}.${suffix}`);
-  }
-  // Handle symbols with .SS / .SH / .SZ suffix (选股 universe 使用 CODE.SH / CODE.SZ 键)
-  if (clean.endsWith('.SS')) {
-    return cn(clean.replace('.SS', '.SH'), clean);
-  }
-  if (clean.endsWith('.SH') || clean.endsWith('.SZ')) {
-    return cn(clean, clean);
-  }
-  // HK: '00700.HK' / '0700.HK'
-  const hkSuffixed = /^(\d{4,5})\.HK$/.exec(clean);
-  if (hkSuffixed) {
-    const code = hkSuffixed[1].padStart(5, '0');
-    return {
-      resolved: `${code}.HK`,
-      displayName: `${code}.HK`,
-      isChinaStock: false,
-      market: 'hk',
-      txSymbol: `hk${code}`,
-    };
-  }
-  // HK: 'HK00700' / 'hk0700'
-  const hkPrefixed = /^HK(\d{4,5})$/.exec(clean);
-  if (hkPrefixed) {
-    const code = hkPrefixed[1].padStart(5, '0');
-    return {
-      resolved: `${code}.HK`,
-      displayName: `${code}.HK`,
-      isChinaStock: false,
-      market: 'hk',
-      txSymbol: `hk${code}`,
-    };
-  }
-  // HK: bare 4-5 digit code ('00700')
-  if (/^\d{4,5}$/.test(clean)) {
-    const code = clean.padStart(5, '0');
-    return {
-      resolved: `${code}.HK`,
-      displayName: `${code}.HK`,
-      isChinaStock: false,
-      market: 'hk',
-      txSymbol: `hk${code}`,
-    };
-  }
-  // US: 'AAPL.US' / 'NVDA.OQ' / 'TSLA.N' / 'SPY.AM'
-  const usSuffixed = /^([A-Z]{1,5}(?:\.[A-Z])?)\.(US|OQ|N|AM)$/.exec(clean);
-  if (usSuffixed) {
-    const ticker = usSuffixed[1];
-    return {
-      resolved: `${ticker}.US`,
-      displayName: `${ticker}.US`,
-      isChinaStock: false,
-      market: 'us',
-      txSymbol: `us${ticker}`,
-    };
-  }
-  // US: bare ticker ('AAPL', 'NVDA', 'BRK.B')
-  if (/^[A-Z]{1,5}(?:\.[A-Z])?$/.test(clean)) {
-    return {
-      resolved: `${clean}.US`,
-      displayName: `${clean}.US`,
-      isChinaStock: false,
-      market: 'us',
-      txSymbol: `us${clean}`,
-    };
-  }
-  return {
-    resolved: clean,
-    displayName: clean,
-    isChinaStock: false,
-    market: 'other',
-    txSymbol: '',
-  };
-}
 
 // ---------------------------------------------------------------------------
 // 非A股标的K线: 全球指数/商品汇率/加密货币
@@ -262,15 +139,6 @@ const GLOBAL_KLINE_ROUTES: Record<string, GlobalKlineRoute> = {
   SB00Y: { source: 'sina-futures', symbol: 'SB', name: 'ICE白糖期货', label: '新浪财经' },
 };
 
-// 修正个别数据源 high/low 与 open/close 交叉的脏数据
-function sanitizeKlines(klines: Kline[]): Kline[] {
-  return klines.map((k) => ({
-    ...k,
-    high: Math.max(k.open, k.high, k.low, k.close),
-    low: Math.min(k.open, k.high, k.low, k.close),
-  }));
-}
-
 /**
  * 新浪 JSONP 加载器: 通过 <script> 标签绕过 CORS。
  * 新浪把响应用回调包裹成 `window.<cb>(数据);` (函数调用形式),
@@ -316,7 +184,7 @@ function loadSinaJsonp(urlTemplate: string): Promise<any> {
 
 export type KlineTimeframe = 'daily' | 'weekly';
 
-export const TIMEFRAME_LABEL: Record<KlineTimeframe, string> = {
+const TIMEFRAME_LABEL: Record<KlineTimeframe, string> = {
   daily: '日线',
   weekly: '周线',
 };
@@ -325,7 +193,7 @@ export const TIMEFRAME_LABEL: Record<KlineTimeframe, string> = {
  * 将日 K 聚合成周 K (按自然周 周一~周日分组, 日期取周内最后一个交易日)。
  * 用于腾讯/新浪等无稳定周线接口的数据源回退。
  */
-export function aggregateDailyToWeekly(daily: Kline[]): Kline[] {
+function aggregateDailyToWeekly(daily: Kline[]): Kline[] {
   if (daily.length === 0) return [];
   const sorted = [...daily].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   const groups = new Map<string, Kline[]>();
@@ -562,7 +430,7 @@ async function fetchBinanceKlines(pair: string, timeframe: KlineTimeframe = 'dai
   return klines;
 }
 
-export interface FetchStockDataResult {
+interface FetchStockDataResult {
   symbol: string;
   name: string;
   klines: Kline[];
@@ -574,17 +442,7 @@ export interface FetchStockDataResult {
 // In-memory cache for fetched stock data (keyed by `${resolvedSymbol}_${timeframe}`)
 const stockDataMemoryCache = new Map<string, Promise<FetchStockDataResult>>();
 
-/** Clear all in-memory cached stock K-line data. */
-export function clearStockDataMemoryCache(): void {
-  stockDataMemoryCache.clear();
-}
-
-/** Get the count of stock datasets currently cached in memory. */
-export function getStockDataMemoryCacheSize(): number {
-  return stockDataMemoryCache.size;
-}
-
-export function getStockDataCacheKey(symbol: string, timeframe: KlineTimeframe): string {
+function getStockDataCacheKey(symbol: string, timeframe: KlineTimeframe): string {
   const clean = symbol.trim().toUpperCase();
   try {
     const { resolved } = resolveSymbol(clean);
@@ -731,14 +589,6 @@ export async function fetchStockData(
     // TickFlow may signal rate limiting either via HTTP 429 or via a 200 body
     // containing the "请求频率超限" message with a "请 Nms 后重试" hint.
     // Parse that hint to wait exactly the suggested duration before retrying.
-    const extractRateLimitDelay = (text: string): number | null => {
-      const msMatch = text.match(/请\s*(\d+)\s*ms\s*后重试/);
-      if (msMatch) return parseInt(msMatch[1], 10);
-      const secMatch = text.match(/请\s*(\d+(?:\.\d+)?)\s*秒?\s*后重试/);
-      if (secMatch) return Math.ceil(parseFloat(secMatch[1]) * 1000);
-      return null;
-    };
-
     const MAX_RETRIES = 4;
     let lastError: Error | null = null;
 
@@ -789,14 +639,7 @@ export async function fetchStockData(
   return fetchPromise;
 }
 
-async function handleTickflowResponse(response: Response, displayName: string, timeframe: KlineTimeframe = 'daily'): Promise<{
-  symbol: string;
-  name: string;
-  klines: Kline[];
-  source: string;
-  period: string;
-  timeframe: KlineTimeframe;
-}> {
+async function handleTickflowResponse(response: Response, displayName: string, timeframe: KlineTimeframe = 'daily'): Promise<FetchStockDataResult> {
   const responseData = await response.json();
   console.log(`[TickFlow] Response data keys: ${Object.keys(responseData || {}).join(', ')}`);
 
@@ -813,36 +656,8 @@ async function handleTickflowResponse(response: Response, displayName: string, t
     throw new Error('No K-line data points returned from TickFlow API');
   }
 
-  const klines: Kline[] = [];
-
   // TickFlow returns columnar data: arrays for each field
-  for (let i = 0; i < dataLength; i++) {
-    const timestamp = data.timestamp[i];
-    const open = data.open[i];
-    const high = data.high[i];
-    const low = data.low[i];
-    const close = data.close[i];
-    const volume = data.volume[i] || 0;
-    const amount = data.amount[i] || 0;
-
-    // Convert timestamp to date string (YYYY-MM-DD) in China timezone (UTC+8)
-    const CHINA_OFFSET = 8 * 60 * 60 * 1000;
-    const date = new Date(timestamp + CHINA_OFFSET);
-    const year = date.getUTCFullYear();
-    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-    const day = String(date.getUTCDate()).padStart(2, '0');
-    const dateStr = `${year}-${month}-${day}`;
-
-    klines.push({
-      date: dateStr,
-      open: parseFloat(open.toFixed(2)),
-      high: parseFloat(high.toFixed(2)),
-      low: parseFloat(low.toFixed(2)),
-      close: parseFloat(close.toFixed(2)),
-      volume: volume,
-      amount: amount,
-    });
-  }
+  const klines = parseTickflowColumns(data);
 
   console.log(`[TickFlow] Processed ${klines.length} klines`);
   if (klines.length > 0) {
@@ -876,7 +691,7 @@ const getOpenRouterApiKey = () => getApiKey('openrouter') || import.meta.env.VIT
 // ChanLun context serialization
 // ---------------------------------------------------------------------------
 
-export interface ChanLunContext {
+interface ChanLunContext {
   symbol: string;
   klines: Kline[];
   strokes: Stroke[];
@@ -986,7 +801,7 @@ function formatFractions(fractions: Fraction[]): string {
  * Includes summary statistics, recent K-line OHLCV rows, and complete
  * strokes / segments / hubs / fractions arrays.
  */
-export function buildChanLunContext(ctx: ChanLunContext): string {
+function buildChanLunContext(ctx: ChanLunContext): string {
   const recentWindow = ctx.recentWindow ?? DEFAULT_RECENT_WINDOW;
   const recent = ctx.klines.slice(-recentWindow);
   const summary = summarizeKlines(ctx.klines);
@@ -1070,9 +885,10 @@ async function callOpenRouterChat(
   apiKey: string,
   model: string,
   messages: ChatMessage[],
-  temperature = 0.7,
+  options: ChatCallOptions = {},
 ): Promise<string> {
-  console.log(`[AI] OpenRouter -> ${model} (${messages.length} msg)`);
+  const { temperature = 0.7, onToken, onReasoning } = options;
+  console.log(`[AI] OpenRouter${onToken ? ' stream' : ''} -> ${model} (${messages.length} msg)`);
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -1084,13 +900,14 @@ async function callOpenRouterChat(
     body: JSON.stringify({
       model,
       temperature,
+      ...(onToken ? { stream: true } : {}),
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
     }),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.error('[AI] OpenRouter error:', response.status, errorText);
+    console.error(`[AI] OpenRouter${onToken ? ' stream' : ''} error:`, response.status, errorText);
     let detail = errorText;
     try {
       const parsed = JSON.parse(errorText);
@@ -1101,16 +918,26 @@ async function callOpenRouterChat(
     throw new Error(`OpenRouter 调用失败 (${response.status}): ${detail || '请检查模型 id 或 API Key'}`);
   }
 
-  const data = await response.json();
-  return data.choices?.[0]?.message?.content || '';
+  if (!onToken) {
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || '';
+  }
+
+  return readSseStream(response, (parsed) => {
+    const delta = parsed?.choices?.[0]?.delta;
+    const reasoning = delta?.reasoning || delta?.reasoning_content || '';
+    if (reasoning && onReasoning) onReasoning(reasoning);
+    return delta?.content || '';
+  }, onToken);
 }
 
 async function callGeminiChat(
   apiKey: string,
   messages: ChatMessage[],
-  temperature = 0.7,
+  options: ChatCallOptions = {},
 ): Promise<string> {
-  console.log(`[AI] Gemini direct (${messages.length} msg)`);
+  const { temperature = 0.7, onToken } = options;
+  console.log(`[AI] Gemini${onToken ? ' stream' : ''} (${messages.length} msg)`);
   // Split out the system message and remap roles to Gemini format.
   const systemMsg = messages.find((m) => m.role === 'system');
   const conversation = messages.filter((m) => m.role !== 'system');
@@ -1119,7 +946,9 @@ async function callGeminiChat(
     parts: [{ text: m.content }],
   }));
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+  const url = onToken
+    ? `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=${apiKey}`
+    : `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
   const body: any = {
     contents,
     generationConfig: { temperature },
@@ -1135,12 +964,16 @@ async function callGeminiChat(
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.error('[AI] Gemini error:', responseTextSafe(errorText));
+    console.error(`[AI] Gemini${onToken ? ' stream' : ''} error:`, responseTextSafe(errorText));
     throw new Error(`Gemini 调用失败 (${response.status}): 请检查 VITE_GEMINI_API_KEY 是否有效`);
   }
 
-  const data = await response.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  if (!onToken) {
+    const data = await response.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  }
+
+  return readSseStream(response, (parsed) => parsed?.candidates?.[0]?.content?.parts?.[0]?.text || '', onToken);
 }
 
 function responseTextSafe(text: string): string {
@@ -1151,129 +984,23 @@ function responseTextSafe(text: string): string {
 // Streaming helpers
 // ---------------------------------------------------------------------------
 
-export type StreamCallback = (chunk: string) => void;
-export type ReasoningCallback = (reasoning: string) => void;
+type StreamCallback = (chunk: string) => void;
+type ReasoningCallback = (reasoning: string) => void;
 
-async function callOpenRouterChatStream(
-  apiKey: string,
-  model: string,
-  messages: ChatMessage[],
-  onToken: StreamCallback,
-  temperature = 0.7,
-  onReasoning?: ReasoningCallback,
-): Promise<string> {
-  console.log(`[AI] OpenRouter stream -> ${model} (${messages.length} msg)`);
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-      'HTTP-Referer': window.location.origin,
-      'X-Title': 'ChanLun Stock Analyzer',
-    },
-    body: JSON.stringify({
-      model,
-      temperature,
-      stream: true,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('[AI] OpenRouter stream error:', response.status, errorText);
-    let detail = errorText;
-    try {
-      const parsed = JSON.parse(errorText);
-      detail = parsed?.error?.message || parsed?.message || errorText;
-    } catch {
-      // keep raw text
-    }
-    throw new Error(`OpenRouter 调用失败 (${response.status}): ${detail || '请检查模型 id 或 API Key'}`);
-  }
-
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error('ReadableStream not supported');
-
-  const decoder = new TextDecoder();
-  let full = '';
-  let buffer = '';
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('data: ')) continue;
-
-        const data = trimmed.slice(6);
-        if (data === '[DONE]') continue;
-
-        try {
-          const parsed = JSON.parse(data);
-          const delta = parsed?.choices?.[0]?.delta;
-          const content = delta?.content || '';
-          const reasoning = delta?.reasoning || delta?.reasoning_content || '';
-          if (reasoning && onReasoning) {
-            onReasoning(reasoning);
-          }
-          if (content) {
-            full += content;
-            onToken(content);
-          }
-        } catch {
-          // skip malformed JSON
-        }
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  return full;
+interface ChatCallOptions {
+  temperature?: number;
+  /** 提供时走流式 (SSE), 每个内容块回调 */
+  onToken?: StreamCallback;
+  /** 流式下的推理过程回调 (仅 OpenRouter) */
+  onReasoning?: ReasoningCallback;
 }
 
-async function callGeminiChatStream(
-  apiKey: string,
-  messages: ChatMessage[],
+/** 读取 SSE 响应: 每个 data: 行经 extract 提取内容块, 逐块回调并拼接完整文本 */
+async function readSseStream(
+  response: Response,
+  extract: (parsed: any) => string,
   onToken: StreamCallback,
-  temperature = 0.7,
 ): Promise<string> {
-  console.log(`[AI] Gemini stream (${messages.length} msg)`);
-  const systemMsg = messages.find((m) => m.role === 'system');
-  const conversation = messages.filter((m) => m.role !== 'system');
-  const contents = conversation.map((m) => ({
-    role: m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }],
-  }));
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=${apiKey}`;
-  const body: any = {
-    contents,
-    generationConfig: { temperature },
-  };
-  if (systemMsg) {
-    body.systemInstruction = { parts: [{ text: systemMsg.content }] };
-  }
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('[AI] Gemini stream error:', errorText);
-    throw new Error(`Gemini 调用失败 (${response.status}): 请检查 VITE_GEMINI_API_KEY 是否有效`);
-  }
-
   const reader = response.body?.getReader();
   if (!reader) throw new Error('ReadableStream not supported');
 
@@ -1298,11 +1025,10 @@ async function callGeminiChatStream(
         if (!data || data === '[DONE]') continue;
 
         try {
-          const parsed = JSON.parse(data);
-          const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-          if (text) {
-            full += text;
-            onToken(text);
+          const content = extract(JSON.parse(data));
+          if (content) {
+            full += content;
+            onToken(content);
           }
         } catch {
           // skip malformed JSON
@@ -1320,146 +1046,17 @@ async function callGeminiChatStream(
 // Public entry points
 // ---------------------------------------------------------------------------
 
-export interface AnalyzeWithAIParams extends ChanLunContext {
-  /** OpenRouter model id (e.g. "google/gemini-2.0-flash-exp:free"). */
-  model?: string;
-  /** Optional temperature override. */
-  temperature?: number;
-}
-
-/**
- * Run a multi-factor ChanLun analysis using either OpenRouter (preferred) or
- * the direct Gemini API. The model id is forwarded to OpenRouter; for the
- * Gemini path the model is fixed to gemini-2.0-flash.
- */
-export async function analyzeWithAI(params: AnalyzeWithAIParams): Promise<string> {
-  const { model, klines, strokes, segments, hubs, fractions, currentSetup, symbol, recentWindow, timeframe } = params;
-
-  if (!klines || klines.length === 0) {
-    throw new Error('没有可用的 K 线数据, 请先加载股票数据。');
-  }
-
-  const OPENROUTER_API_KEY = getOpenRouterApiKey();
-  const GEMINI_API_KEY = getGeminiApiKey();
-
-  if (!OPENROUTER_API_KEY && !GEMINI_API_KEY) {
-    throw new Error('未配置 AI API 密钥。请在配置中设置 Gemini API Key 或 OpenRouter API Key。');
-  }
-
-  const systemPrompt = buildSystemPrompt(timeframe ?? 'daily');
-  const contextBlock = buildChanLunContext({ symbol, klines, strokes, segments, hubs, fractions, currentSetup, recentWindow, timeframe });
-  const lastKline = klines[klines.length - 1];
-
-  const userPrompt = [
-    `请基于以下"${symbol}"的结构化缠论上下文 (${TIMEFRAME_LABEL[timeframe ?? 'daily']})给出专业量化分析报告:`,
-    '',
-    '--- CONTEXT START ---',
-    contextBlock,
-    '--- CONTEXT END ---',
-    '',
-    `当前最新一根 K 线: 日期=${lastKline.date}, 收=${lastKline.close}, 区间 [${lastKline.low.toFixed(2)}, ${lastKline.high.toFixed(2)}]。`,
-    '请严格按系统提示中的 6 个章节给出中文 Markdown 报告。',
-  ].join('\n');
-
-  if (OPENROUTER_API_KEY) {
-    const selectedModel = model && model.trim().length > 0 ? model : 'google/gemini-2.0-flash-exp:free';
-    return callOpenRouterChat(OPENROUTER_API_KEY, selectedModel, [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ]);
-  }
-
-  return callGeminiChat(GEMINI_API_KEY, [
-    { role: 'system', content: systemPrompt },
-    { role: 'user', content: userPrompt },
-  ]);
-}
-
 // ---------------------------------------------------------------------------
 // Chat with the AI (multi-turn, context is included in the system prompt)
 // ---------------------------------------------------------------------------
 
-export interface ChatWithAIParams extends ChanLunContext {
+interface ChatWithAIParams extends ChanLunContext {
   /** Conversation history (most recent last). System messages are accepted but
    *  the actual system prompt is rebuilt from the fresh context. */
   messages: ChatMessage[];
   /** OpenRouter model id. */
   model?: string;
   temperature?: number;
-}
-
-/**
- * Send the current conversation to the AI, using a freshly built system prompt
- * that embeds the latest ChanLun context. The returned string is the
- * assistant's reply.
- */
-export async function chatWithAI(params: ChatWithAIParams): Promise<string> {
-  const {
-    messages,
-    model,
-    klines,
-    strokes,
-    segments,
-    hubs,
-    fractions,
-    currentSetup,
-    symbol,
-    recentWindow,
-    temperature,
-    timeframe,
-  } = params;
-
-  if (!klines || klines.length === 0) {
-    throw new Error('没有可用的 K 线数据, 请先加载股票数据。');
-  }
-  if (!messages || messages.length === 0) {
-    throw new Error('请输入要发送给 AI 的消息。');
-  }
-
-  const OPENROUTER_API_KEY = getOpenRouterApiKey();
-  const GEMINI_API_KEY = getGeminiApiKey();
-
-  if (!OPENROUTER_API_KEY && !GEMINI_API_KEY) {
-    throw new Error('未配置 AI API 密钥。请在配置中设置 Gemini API Key 或 OpenRouter API Key。');
-  }
-
-  const systemPrompt = buildSystemPrompt(timeframe ?? 'daily');
-  const contextBlock = buildChanLunContext({ symbol, klines, strokes, segments, hubs, fractions, currentSetup, recentWindow, timeframe });
-
-  // Inject the ChanLun context as the very first user turn so the model
-  // has the full data available, regardless of which model is used.
-  const contextPrimer: ChatMessage = {
-    role: 'user',
-    content: [
-      `以下是"${symbol}"的结构化缠论上下文 (${TIMEFRAME_LABEL[timeframe ?? 'daily']}, system-managed, 请勿要求重新提供):`,
-      '',
-      '--- CONTEXT START ---',
-      contextBlock,
-      '--- CONTEXT END ---',
-      '',
-      '请记住这些数据, 后续我将基于此上下文进行提问。请用中文 Markdown 简洁回答。',
-    ].join('\n'),
-  };
-
-  // Sanitize: keep only user / assistant turns, ignore any client-supplied
-  // system messages (we always provide our own).
-  const conversation = messages
-    .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .map((m) => ({ role: m.role, content: m.content.trim() }))
-    .filter((m) => m.content.length > 0);
-
-  const finalMessages: ChatMessage[] = [
-    { role: 'system', content: systemPrompt },
-    contextPrimer,
-    ...conversation,
-  ];
-
-  if (OPENROUTER_API_KEY) {
-    const selectedModel = model && model.trim().length > 0 ? model : 'google/gemini-2.0-flash-exp:free';
-    return callOpenRouterChat(OPENROUTER_API_KEY, selectedModel, finalMessages, temperature);
-  }
-
-  return callGeminiChat(GEMINI_API_KEY, finalMessages, temperature);
 }
 
 /**
@@ -1528,65 +1125,10 @@ export async function chatWithAIStream(
 
   if (OPENROUTER_API_KEY) {
     const selectedModel = model && model.trim().length > 0 ? model : 'google/gemini-2.0-flash-exp:free';
-    return callOpenRouterChatStream(OPENROUTER_API_KEY, selectedModel, finalMessages, onToken, temperature);
+    return callOpenRouterChat(OPENROUTER_API_KEY, selectedModel, finalMessages, { temperature, onToken });
   }
 
-  return callGeminiChatStream(GEMINI_API_KEY, finalMessages, onToken, temperature);
-}
-
-/**
- * Backwards-compatible wrapper used by older callers. It still works but
- * delegates to the new unified pipeline with the legacy truncated context.
- */
-export async function analyzeWithGemini(params: {
-  symbol: string;
-  lastKline?: Kline;
-  stats?: {
-    strokesCount: number;
-    segmentsCount: number;
-    hubsCount: number;
-  };
-  currentSetup?: any[];
-}): Promise<string> {
-  // The legacy call only receives counts. We degrade gracefully by
-  // telling the user to use the new AI advisor and run a minimal prompt.
-  const OPENROUTER_API_KEY = getOpenRouterApiKey();
-  const GEMINI_API_KEY = getGeminiApiKey();
-
-  if (!OPENROUTER_API_KEY && !GEMINI_API_KEY) {
-    throw new Error('未配置 AI API 密钥。请在配置中设置 Gemini API Key 或 OpenRouter API Key。');
-  }
-
-  const lastKline = params.lastKline;
-  const stats = params.stats;
-
-  const prompt = `You are an elite financial quant analyst specializing in "ChanLun" (缠论).
-    Provide a professional, localized technical analyst commentary report in beautiful Markdown format for stock/symbol "${params.symbol}".
-    Here is the active state and parsed parameters of this asset:
-    - Current Candle Data: Date: ${lastKline?.date}, Open: ${lastKline?.open}, Close: ${lastKline?.close}, High: ${lastKline?.high}, Low: ${lastKline?.low}
-    - ChanLun Components Identified:
-      - Stroke (线笔) Count: ${stats?.strokesCount}
-      - Segments (线段) Count: ${stats?.segmentsCount}
-      - Identified Hubs (中枢) Count: ${stats?.hubsCount}
-      - Buy/Sell Triggers (买卖点) active: ${JSON.stringify(params.currentSetup || [])}
-
-    Write a detailed review with the following sections:
-    1. **ChanLun Market Stage Breakdown (分型与中枢结构分析)** - Assess what the existence of ${stats?.hubsCount} hubs and current strokes means. Has there been a breakout (三买 or 三卖) or are we currently oscillating in a consolidation zone?
-    2. **Buy/Sell Signal Valuation (买卖点估值与应对战略)** - Review the recent active buy/sell signals. Explain whether they are strong or diverging setups (Divergence/背驰).
-    3. **Actionable Trading Playbook & Risk Controls (仓位管理与风控建议)** - Recommend concrete stop-loss prices and position entry sizes based on these structural zones.
-
-    Use strong technical prose. Respond in a highly legible and encouraging tone, strictly in the user's apparent context (Chinese language prefered since ChanLun is a traditional Chinese methodology). Make it look highly quantitative and authoritative.`;
-
-  if (OPENROUTER_API_KEY) {
-    return callOpenRouterChat(OPENROUTER_API_KEY, 'google/gemini-2.0-flash-exp:free', [
-      { role: 'system', content: 'You are a professional ChanLun (缠论) financial analyst. Reply in Chinese using Markdown.' },
-      { role: 'user', content: prompt },
-    ]);
-  }
-  return callGeminiChat(GEMINI_API_KEY, [
-    { role: 'system', content: 'You are a professional ChanLun (缠论) financial analyst. Reply in Chinese using Markdown.' },
-    { role: 'user', content: prompt },
-  ]);
+  return callGeminiChat(GEMINI_API_KEY, finalMessages, { temperature, onToken });
 }
 
 // ---------------------------------------------------------------------------
@@ -1674,20 +1216,6 @@ export async function generateIndicatorCode(
 
   if (OPENROUTER_API_KEY) {
     const selectedModel = model?.trim() || 'google/gemini-2.0-flash-exp:free';
-
-    if (onToken) {
-      return callOpenRouterChatStream(
-        OPENROUTER_API_KEY,
-        selectedModel,
-        [
-          { role: 'system', content: INDICATOR_GENERATION_SYSTEM_PROMPT },
-          { role: 'user', content: userMessage },
-        ],
-        onToken,
-        0.3,
-      );
-    }
-
     return callOpenRouterChat(
       OPENROUTER_API_KEY,
       selectedModel,
@@ -1695,19 +1223,7 @@ export async function generateIndicatorCode(
         { role: 'system', content: INDICATOR_GENERATION_SYSTEM_PROMPT },
         { role: 'user', content: userMessage },
       ],
-      0.3,
-    );
-  }
-
-  if (onToken) {
-    return callGeminiChatStream(
-      GEMINI_API_KEY,
-      [
-        { role: 'system', content: INDICATOR_GENERATION_SYSTEM_PROMPT },
-        { role: 'user', content: userMessage },
-      ],
-      onToken,
-      0.3,
+      { temperature: 0.3, onToken },
     );
   }
 
@@ -1717,7 +1233,7 @@ export async function generateIndicatorCode(
       { role: 'system', content: INDICATOR_GENERATION_SYSTEM_PROMPT },
       { role: 'user', content: userMessage },
     ],
-    0.3,
+    { temperature: 0.3, onToken },
   );
 }
 
@@ -1876,36 +1392,10 @@ RULES:
 5. klines are sorted oldest to newest. Only data up to currentIndex is available.
 6. Use percent amounts unless the strategy specifically needs cash or shares.
 7. Keep the decide function pure and deterministic.
-8. For BUY: action 'BUY' with amount { unit: 'percent'/'cash'/'shares', value: number }.
-9. For SELL: action 'SELL' with amount { unit: 'shares'/'percent', value: number }. Cash unit is invalid for SELL.
-10. For HOLD: action 'HOLD'. Amount is optional and ignored.`;
-}
-
-/**
- * Generate 选股 strategy code: 在通用回测 prompt 基础上, 追加选股扫描视角约束
- * (空仓评估最新一根 K 线是否 BUY、confidence 0-1、避免常买/追高)。
- * 复用 generateStrategyCode, 仅增强 userMessage, 保持 Runner/Loader 契约不变。
- */
-export async function generateScreenerStrategyCode(
-  userDescription: string,
-  availableIndicatorIds: string[] = [],
-  onToken?: StreamCallback,
-  model?: string,
-  onReasoning?: ReasoningCallback,
-): Promise<string> {
-  const augmented = [
-    '【选股策略需求】该策略将用于选股扫描: 对每只股票用 decide() 评估最新一根日K (空仓视角),',
-    'BUY 即入选, 因此:',
-    '1. 无持仓时只做买入判断, 有持仓时只做卖出判断 (参考 screener-ma-bull 写法);',
-    '2. 买入条件必须收敛 (如 多头排列+回踩确认 / 突破+放量二选一), 禁止单根阳线就 BUY;',
-    '3. 下跌趋势/破位时必须返回 HOLD, 防止全市场常买;',
-    '4. 必须给出 reason (中文, 含关键价位) 与 confidence (0-1);',
-    '5. id 使用 screener- 前缀的 kebab-case (如 screener-my-idea)。',
-    '',
-    '用户选股想法:',
-    userDescription,
-  ].join('\n');
-  return generateStrategyCode(augmented, availableIndicatorIds, onToken, model, onReasoning);
+8. For BUY: action 'BUY' with amount { unit: 'percent'/'cash'/'shares', value: number }. Only when position.shares === 0.
+9. For SELL: action 'SELL' with amount { unit: 'shares'/'percent', value: number }. Cash unit is invalid for SELL. Only when position.shares > 0 (sell only after buy).
+10. For HOLD: action 'HOLD'. Amount is optional and ignored.
+11. Position branching is mandatory: if (position.shares > 0) return only SELL/HOLD, else return only BUY/HOLD. Never SELL when flat, never BUY when holding.`;
 }
 
 /**
@@ -1932,21 +1422,6 @@ export async function generateStrategyCode(
 
   if (OPENROUTER_API_KEY) {
     const selectedModel = model?.trim() || 'google/gemini-2.0-flash-exp:free';
-
-    if (onToken) {
-      return callOpenRouterChatStream(
-        OPENROUTER_API_KEY,
-        selectedModel,
-        [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMessage },
-        ],
-        onToken,
-        0.3,
-        onReasoning,
-      );
-    }
-
     return callOpenRouterChat(
       OPENROUTER_API_KEY,
       selectedModel,
@@ -1954,19 +1429,7 @@ export async function generateStrategyCode(
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userMessage },
       ],
-      0.3,
-    );
-  }
-
-  if (onToken) {
-    return callGeminiChatStream(
-      GEMINI_API_KEY,
-      [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage },
-      ],
-      onToken,
-      0.3,
+      { temperature: 0.3, onToken, onReasoning },
     );
   }
 
@@ -1976,7 +1439,7 @@ export async function generateStrategyCode(
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userMessage },
     ],
-    0.3,
+    { temperature: 0.3, onToken },
   );
 }
 

@@ -17,28 +17,6 @@ export function calculateSMA(klines: Kline[], period: number): (number | null)[]
 }
 
 /**
- * Calculates Exponential Moving Average (EMA)
- */
-export function calculateEMA(klines: Kline[], period: number): (number | null)[] {
-  const emas: (number | null)[] = [];
-  const k = 2 / (period + 1);
-  let prevEma: number | null = null;
-
-  for (let i = 0; i < klines.length; i++) {
-    const close = klines[i].close;
-    if (i === 0) {
-      emas.push(close);
-      prevEma = close;
-    } else {
-      const emaVal = close * k + (prevEma as number) * (1 - k);
-      emas.push(parseFloat(emaVal.toFixed(2)));
-      prevEma = emaVal;
-    }
-  }
-  return emas;
-}
-
-/**
  * Calculates Bollinger Bands (BOLL)
  */
 export function calculateBollingerBands(

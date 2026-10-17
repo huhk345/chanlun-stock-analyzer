@@ -3,12 +3,12 @@ import type { Kline } from './stock';
 /**
  * Timeframe for indicator calculation
  */
-export type IndicatorTimeframe = 'daily';
+type IndicatorTimeframe = 'daily';
 
 /**
  * Allowed parameter value types
  */
-export type IndicatorParamValue = string | number | boolean;
+type IndicatorParamValue = string | number | boolean;
 
 /**
  * Input passed to user-defined indicator calculation function
@@ -41,7 +41,7 @@ export interface UserIndicatorResult {
 /**
  * Base interface for all series types
  */
-export interface BaseUserIndicatorSeries {
+interface BaseUserIndicatorSeries {
   /** Unique identifier within this indicator's result */
   id: string;
   /** Display name for the series */
@@ -102,7 +102,7 @@ export interface UserIndicatorPoint {
 /**
  * Signal marker on candlestick
  */
-export interface UserIndicatorSignal {
+interface UserIndicatorSignal {
   /** Date string matching Kline.date format */
   time: string;
   /** Marker position relative to bar */
@@ -118,7 +118,7 @@ export interface UserIndicatorSignal {
 /**
  * Hover panel field definition
  */
-export interface UserIndicatorField {
+interface UserIndicatorField {
   /** Unique key for this field */
   key: string;
   /** Display label */
@@ -134,7 +134,7 @@ export interface UserIndicatorField {
 /**
  * Parameter definition for user-configurable indicator parameters
  */
-export interface UserIndicatorParamDefinition {
+interface UserIndicatorParamDefinition {
   /** Parameter key (used in params object) */
   key: string;
   /** Display label */
@@ -154,7 +154,7 @@ export interface UserIndicatorParamDefinition {
 /**
  * User-defined indicator calculation function signature
  */
-export type UserIndicatorFunction = (
+type UserIndicatorFunction = (
   input: UserIndicatorInput
 ) => UserIndicatorResult;
 
@@ -212,30 +212,6 @@ export interface StoredIndicator {
   defaultVisible?: boolean;
   /** Parameter definitions */
   params?: readonly UserIndicatorParamDefinition[];
-}
-
-/**
- * Local storage data structure
- */
-export interface IndicatorStorageData {
-  /** Storage format version */
-  version: number;
-  /** Stored indicators */
-  indicators: StoredIndicator[];
-}
-
-/**
- * Request for AI-assisted indicator generation
- */
-export interface IndicatorDialogRequest {
-  /** User's natural language description of the indicator */
-  userDescription: string;
-  /** Optional context for generation */
-  context?: {
-    symbol?: string;
-    existingIndicatorIds?: readonly string[];
-    preferredOutputType?: 'line' | 'histogram' | 'signal';
-  };
 }
 
 /**

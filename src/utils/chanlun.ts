@@ -622,3 +622,37 @@ export function calculateBSPoints(klines: Kline[], strokes: Stroke[]): BSPoint[]
   points.sort((a, b) => a.originalIndex - b.originalIndex || a.type.localeCompare(b.type));
   return points;
 }
+
+// ---------------------------------------------------------------------------
+// 常用流水线组合 (浏览器 / Node 服务 / CLI 脚本共用)
+// ---------------------------------------------------------------------------
+
+export interface ChanlunStructures {
+  mergedKlines: MergedKline[];
+  fractions: Fraction[];
+  strokes: Stroke[];
+  segments: Segment[];
+  hubs: Hub[];
+}
+
+/** 完整缠论结构 (合并K线 -> 分型 -> 笔 -> 线段/中枢), 不含买卖点 */
+export function computeChanlunStructures(klines: Kline[]): ChanlunStructures {
+  const mergedKlines = mergeKlines(klines);
+  const fractions = findFractions(mergedKlines, klines);
+  const strokes = calculateStrokes(fractions);
+  const segments = calculateSegments(strokes);
+  const hubs = calculateHubs(strokes);
+  return { mergedKlines, fractions, strokes, segments, hubs };
+}
+
+/** 笔 + 买卖点 (线段/中枢不参与买卖点判定, 跳过两遍计算保持轻量) */
+export function computeStrokesAndBSPoints(klines: Kline[]): { strokes: Stroke[]; bsPoints: BSPoint[] } {
+  const strokes = calculateStrokes(findFractions(mergeKlines(klines), klines));
+  return { strokes, bsPoints: calculateBSPoints(klines, strokes) };
+}
+
+/** 完整缠论流水线: 结构 + 买卖点 */
+export function runChanlunPipeline(klines: Kline[]): ChanlunStructures & { bsPoints: BSPoint[] } {
+  const structures = computeChanlunStructures(klines);
+  return { ...structures, bsPoints: calculateBSPoints(klines, structures.strokes) };
+}

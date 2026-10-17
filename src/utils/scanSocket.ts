@@ -2,10 +2,14 @@
  * 缠论买卖点扫描的 WebSocket 客户端。
  *
  * 浏览器端不再拉 K 线、不再算缠论: 只负责发一次扫描请求, 之后接收后端
- * (server/scan.ts) 推送的进度 / 信号行 / 资金流。本封装处理连接建立、
+ * (server/scan.ts) 推送的进度 / 信号行。本封装处理连接建立、
  * 断线重连 (指数退避) 与离线时的消息排队, 页面只管收发语义。
  */
 import type { ScanClientMessage, ScanServerMessage } from '../types/scan';
+
+/** 同一条 /ws 通道上流通的全部消息 (缠论扫描) */
+export type AnalysisClientMessage = ScanClientMessage;
+export type AnalysisServerMessage = ScanServerMessage;
 
 export type ScanConnectionState = 'connecting' | 'open' | 'closed';
 
@@ -17,7 +21,7 @@ const RECONNECT_MAX_MS = 15000;
  * 默认走同源 /ws (vite dev 与 preview 都把 /ws 代理到 :8899);
  * 生产环境前后端分离时用 VITE_ANALYSIS_WS_URL 指定完整地址。
  */
-export function scanWsUrl(): string {
+function scanWsUrl(): string {
   const configured = (import.meta.env?.VITE_ANALYSIS_WS_URL as string | undefined) ?? '';
   if (configured) return configured.replace(/\/$/, '');
   const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -26,14 +30,14 @@ export function scanWsUrl(): string {
 
 export class ScanSocket {
   private ws: WebSocket | null = null;
-  private queued: ScanClientMessage[] = [];
+  private queued: AnalysisClientMessage[] = [];
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryDelay = RECONNECT_MIN_MS;
   private disposed = false;
   private current: ScanConnectionState = 'closed';
 
   constructor(
-    private readonly onMessage: (msg: ScanServerMessage) => void,
+    private readonly onMessage: (msg: AnalysisServerMessage) => void,
     private readonly onState: (state: ScanConnectionState) => void,
   ) {}
 
@@ -64,9 +68,9 @@ export class ScanSocket {
     };
     ws.onmessage = event => {
       if (typeof event.data !== 'string') return;
-      let msg: ScanServerMessage;
+      let msg: AnalysisServerMessage;
       try {
-        msg = JSON.parse(event.data) as ScanServerMessage;
+        msg = JSON.parse(event.data) as AnalysisServerMessage;
       } catch {
         return;
       }
@@ -84,7 +88,7 @@ export class ScanSocket {
   }
 
   /** 发送一条指令; 未连上时排队 (同类指令只保留最新一条), 连上后自动补发 */
-  send(msg: ScanClientMessage): void {
+  send(msg: AnalysisClientMessage): void {
     if (this.disposed) return;
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg));

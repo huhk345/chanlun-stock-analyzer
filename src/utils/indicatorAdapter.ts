@@ -9,9 +9,6 @@ import type {
 import type { Kline } from '../types/stock';
 import { calculateSMA, calculateBollingerBands, calculateMACD } from './indicators';
 import type {
-  IndicatorCache,
-  IndicatorData,
-  IndicatorSeries,
   StrategyParamValue,
 } from '../types/strategy';
 
@@ -222,7 +219,7 @@ export function calculateUserIndicatorSafely(
 /**
  * Builds parameter values with defaults applied
  */
-export function buildIndicatorParams(
+function buildIndicatorParams(
   definition: UserIndicatorDefinition,
   customParams?: Record<string, string | number | boolean>
 ): Record<string, string | number | boolean> {
@@ -266,41 +263,6 @@ export function createIndicatorInput(
  */
 export function isValidIndicatorId(id: string): boolean {
   return /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(id);
-}
-
-/**
- * Builds an IndicatorCache from selected indicator definitions
- * for the current klines slice.
- */
-export function buildIndicatorCache(
-  definitions: readonly UserIndicatorDefinition[],
-  symbol: string,
-  klines: readonly Kline[],
-): IndicatorCache {
-  const byId: Record<string, IndicatorData> = {};
-
-  for (const def of definitions) {
-    const input = createIndicatorInput(klines, symbol, def);
-    const normalized = calculateUserIndicatorSafely(def, input);
-
-    const series: IndicatorSeries[] = normalized.result.series.map(s => ({
-      id: s.id,
-      name: s.name,
-      type: s.type,
-      data: s.data.map(p => ({
-        time: p.time,
-        value: p.value,
-      })),
-    }));
-
-    byId[def.id] = {
-      id: def.id,
-      name: def.name,
-      series,
-    };
-  }
-
-  return { byId } as IndicatorCache;
 }
 
 /**

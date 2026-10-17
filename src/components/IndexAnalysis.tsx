@@ -5,12 +5,12 @@ import {
 } from 'lucide-react';
 import { formatSignedYi } from '../utils/marketApi';
 import { WatchItem, loadWatchlist, upsertWatchlist, removeFromWatchlist } from '../utils/watchlistStorage';
-import { ScanSocket, type ScanConnectionState } from '../utils/scanSocket';
+import { ScanSocket, type AnalysisServerMessage, type ScanConnectionState } from '../utils/scanSocket';
 import { parseSymbol, symbolKey, kindLabel, type ParsedSymbol } from '../utils/indexAnalysisApi';
 import {
   ALL_BS_TYPES, INDEX_META, SIGNAL_WINDOW_DAYS,
   type IndexId, type ScanCacheInfo, type ScanClientMessage, type ScanProgress,
-  type ScanServerMessage, type ScanSignalRow, type ScanTimeframe, type StockFlow,
+  type ScanSignalRow, type ScanTimeframe, type StockFlow,
 } from '../types/scan';
 import type { BSPointType } from '../types/stock';
 
@@ -167,7 +167,7 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
   // 通道生命周期 + 消息分发
   // -------------------------------------------------------------------------
 
-  const handleServerMessage = useCallback((msg: ScanServerMessage) => {
+  const handleServerMessage = useCallback((msg: AnalysisServerMessage) => {
     switch (msg.type) {
       case 'cache':
         // 扫描进行中忽略过期快照, 避免覆盖正在推送的结果
@@ -221,6 +221,9 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
 
       case 'pong':
         break;
+
+      default:
+        break; // 未知消息类型忽略
     }
   }, []);
 

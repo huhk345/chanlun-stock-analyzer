@@ -1,4 +1,5 @@
 import type { UserStrategyDefinition } from '../../types/strategy';
+import { warnDuplicateIds } from '../../utils/registryUtils';
 
 // Auto-import strategies without manual imports
 // This uses environment-specific auto-discovery mechanisms
@@ -85,33 +86,10 @@ export async function loadStrategies(): Promise<UserStrategyDefinition[]> {
 // Export strategies - will be populated in Vite, empty in Node.js initially
 export const userStrategies: readonly UserStrategyDefinition[] = strategies;
 
-export function validateStrategyIds(): void {
-  const ids = new Set<string>();
-  const duplicates: string[] = [];
-
-  for (const strategy of userStrategies) {
-    if (ids.has(strategy.id)) {
-      duplicates.push(strategy.id);
-    }
-    ids.add(strategy.id);
-  }
-
-  if (duplicates.length > 0) {
-    console.warn(
-      `Duplicate strategy IDs found: ${duplicates.join(', ')}. ` +
-      'Each strategy must have a unique ID.'
-    );
-  }
+function validateStrategyIds(): void {
+  warnDuplicateIds('strategy', userStrategies);
 }
 
 if (typeof import.meta.env !== 'undefined' && import.meta.env.DEV) {
   validateStrategyIds();
-}
-
-export function getUserStrategyById(id: string): UserStrategyDefinition | undefined {
-  return userStrategies.find(strategy => strategy.id === id);
-}
-
-export function getAllStrategyIds(): string[] {
-  return userStrategies.map(strategy => strategy.id);
 }

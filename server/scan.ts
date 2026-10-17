@@ -12,11 +12,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Kline, BSPointType } from '../src/types/stock.ts';
-import { mergeKlines, findFractions, calculateStrokes, calculateBSPoints } from '../src/utils/chanlun.ts';
+import { computeStrokesAndBSPoints } from '../src/utils/chanlun.ts';
+import { daysBetween, expectedTradeDay, isFresh } from '../src/utils/klineUtils.ts';
 import { getKlines } from './klines.ts';
 import { fetchStockFlowBatch } from './flows.ts';
+import { buildUniverse, loadStockMeta, type StockMeta } from './universe.ts';
 import {
-  INDEX_META,
   SIGNAL_WINDOW_DAYS,
   TYPE_LABELS,
   type IndexId,
@@ -29,8 +30,6 @@ import {
 } from '../src/types/scan.ts';
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '..');
-const PUBLIC_DIR = path.join(ROOT_DIR, 'public');
-const DATA_DIR = path.join(ROOT_DIR, 'data');
 
 const SCAN_CACHE_DIR = process.env.SCAN_CACHE_DIR
   ? path.resolve(process.env.SCAN_CACHE_DIR)
@@ -53,34 +52,6 @@ const PROGRESS_INTERVAL_MS = 200;
 const periodOf = (tf: ScanTimeframe): '1d' | '1w' => (tf === 'weekly' ? '1w' : '1d');
 
 // ---------------------------------------------------------------------------
-// 交易日 / 新鲜度 (与 klines.ts 同口径, 周线放宽到 7 天)
-// ---------------------------------------------------------------------------
-
-const CHINA_OFFSET_MS = 8 * 60 * 60 * 1000;
-const DAY_MS = 86400000;
-
-function daysBetween(from: string, to: string): number {
-  return Math.round((Date.parse(to) - Date.parse(from)) / DAY_MS);
-}
-
-/** 预期最新交易日 (北京时间 YYYY-MM-DD, 忽略节假日): 16:00 前取上一平日 */
-function expectedTradeDay(): string {
-  const d = new Date(Date.now() + CHINA_OFFSET_MS);
-  if (d.getUTCHours() < 16) d.setUTCDate(d.getUTCDate() - 1);
-  const dow = d.getUTCDay();
-  if (dow === 0) d.setUTCDate(d.getUTCDate() - 2);
-  else if (dow === 6) d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().slice(0, 10);
-}
-
-/** 缓存条目是否覆盖预期最新交易日 (按内容判断, 不依赖扫描时间戳) */
-function entryFresh(entry: CacheEntry | undefined, tf: ScanTimeframe): boolean {
-  if (!entry) return false;
-  if (tf === 'weekly') return daysBetween(entry.d, expectedTradeDay()) <= 7;
-  return entry.d >= expectedTradeDay();
-}
-
-// ---------------------------------------------------------------------------
 // 扫描缓存 (.cache/scan/{daily,weekly}.json)
 // ---------------------------------------------------------------------------
 
@@ -100,6 +71,12 @@ type ScanCache = Record<string, CacheEntry>;
 interface CacheFile {
   updatedAt: number;
   entries: ScanCache;
+}
+
+/** 缓存条目是否覆盖预期最新交易日 (按内容判断, 不依赖扫描时间戳) */
+function entryFresh(entry: CacheEntry | undefined, tf: ScanTimeframe): boolean {
+  if (!entry) return false;
+  return isFresh(entry.d, tf === 'weekly' ? '1w' : '1d');
 }
 
 /** 进程内常驻缓存对象: 扫描任务直接原地更新, 落盘只写快照 */
@@ -151,78 +128,8 @@ function cacheInfoFor(tf: ScanTimeframe, entries: ScanCache): ScanCacheInfo {
 }
 
 // ---------------------------------------------------------------------------
-// 扫描宇宙: 成分股 / 名称 / 板块
+// 扫描宇宙: 成分股 / 名称 / 板块 (仅供本扫描使用)
 // ---------------------------------------------------------------------------
-
-const membersByIndex = new Map<IndexId, string[]>();
-
-/** 成分股: public/index-members.{id}.json (缺失时回退 data/{id}/_constituents.json) */
-async function loadIndexMembers(id: IndexId): Promise<string[]> {
-  const cached = membersByIndex.get(id);
-  if (cached) return cached;
-
-  const candidates = [
-    path.join(PUBLIC_DIR, INDEX_META[id].file),
-    path.join(DATA_DIR, id, '_constituents.json'),
-  ];
-  for (const file of candidates) {
-    try {
-      const list = JSON.parse(fs.readFileSync(file, 'utf-8'));
-      if (Array.isArray(list) && list.length > 0) {
-        const symbols = list.filter((s): s is string => typeof s === 'string' && /^\d{6}\.(SH|SZ)$/.test(s));
-        membersByIndex.set(id, symbols);
-        return symbols;
-      }
-    } catch { /* 试下一个来源 */ }
-  }
-  throw new Error(`${INDEX_META[id].label} 成分股列表不可用 (${candidates.join(' / ')})`);
-}
-
-interface StockMeta {
-  names: Record<string, string>;
-  industries: Record<string, string>;
-}
-
-let stockMetaPromise: Promise<StockMeta> | null = null;
-
-/** code(6位) -> 名称 / 板块路径, 来自 public/merged_stock_data.json */
-function loadStockMeta(): Promise<StockMeta> {
-  if (stockMetaPromise) return stockMetaPromise;
-  stockMetaPromise = (async () => {
-    const meta: StockMeta = { names: {}, industries: {} };
-    try {
-      const raw = await fs.promises.readFile(path.join(PUBLIC_DIR, 'merged_stock_data.json'), 'utf-8');
-      const data = JSON.parse(raw) as Record<string, { stock_name?: string; industry?: string }>;
-      for (const [code, info] of Object.entries(data || {})) {
-        if (info?.stock_name) meta.names[code] = info.stock_name;
-        if (info?.industry) meta.industries[code] = info.industry;
-      }
-    } catch (err) {
-      console.warn('[scan] 股票名称/板块映射加载失败 (扫描仍可继续, 仅缺名称与板块列):', err);
-    }
-    return meta;
-  })();
-  return stockMetaPromise;
-}
-
-/** 去重合并成分股 + 自定义标的 */
-async function buildUniverse(indexes: IndexId[], custom: string[]): Promise<string[]> {
-  const universe: string[] = [];
-  const seen = new Set<string>();
-  const push = (s: string) => {
-    if (seen.has(s)) return;
-    seen.add(s);
-    universe.push(s);
-  };
-
-  const selected = indexes.filter((id): id is IndexId => id in INDEX_META);
-  const lists = await Promise.all(selected.map(loadIndexMembers));
-  for (const list of lists) for (const s of list) push(s);
-  for (const s of custom) if (/^\d{6}\.(SH|SZ)$/.test(s)) push(s);
-
-  if (universe.length === 0) throw new Error('扫描范围为空, 请至少选择一个指数或添加自定义标的');
-  return universe;
-}
 
 // ---------------------------------------------------------------------------
 // 单只标的: K 线 -> 缠论买卖点 -> 缓存条目 -> 信号行
@@ -234,9 +141,8 @@ async function analyzeSymbol(symbol: string, tf: ScanTimeframe, force: boolean):
   return computeEntry(klines);
 }
 
-export function computeEntry(klines: Kline[]): CacheEntry {
-  const strokes = calculateStrokes(findFractions(mergeKlines(klines), klines));
-  const bsPoints = calculateBSPoints(klines, strokes);
+function computeEntry(klines: Kline[]): CacheEntry {
+  const { strokes, bsPoints } = computeStrokesAndBSPoints(klines);
   const strokeUpByIndex = new Map<number, boolean>(strokes.map((s, i) => [i, s.direction === 'up']));
 
   // 量能指标: 量比 (最新收盘量 / 前5日均量) 与 近5日日均成交额
@@ -260,7 +166,7 @@ export function computeEntry(klines: Kline[]): CacheEntry {
 }
 
 /** 缓存条目 -> 最近 90 天内的信号行 (无信号返回空数组) */
-export function rowsFromEntry(symbol: string, entry: CacheEntry, meta: StockMeta): ScanSignalRow[] {
+function rowsFromEntry(symbol: string, entry: CacheEntry, meta: StockMeta): ScanSignalRow[] {
   if (entry.s.length === 0) return [];
   const code = symbol.split('.')[0];
   const industryPath = meta.industries[code];

@@ -1,5 +1,3 @@
-import { BacktestResult } from '../types/stock';
-
 // User structures
 export interface SupabaseUser {
   id: string;
@@ -49,34 +47,4 @@ export async function signOutUser(): Promise<void> {
 export async function getCurrentUser(): Promise<SupabaseUser | null> {
   const cached = localStorage.getItem('chanlun_current_user');
   return cached ? JSON.parse(cached) : null;
-}
-
-/**
- * --- DATA SAVE & RETRIEVAL INTERFACE (LocalStorage) ---
- */
-
-export async function fetchBacktests(userId: string): Promise<BacktestResult[]> {
-  const tests = JSON.parse(localStorage.getItem('chanlun_backtests') || '[]');
-  return tests.filter((t: BacktestResult) => t.userId === userId);
-}
-
-export async function saveBacktestResult(result: Omit<BacktestResult, 'id' | 'createdAt'>): Promise<BacktestResult> {
-  const newRecord: BacktestResult = {
-    ...result,
-    id: `bt-${Math.random().toString(36).substr(2, 9)}`,
-    createdAt: new Date().toISOString()
-  };
-
-  const tests = JSON.parse(localStorage.getItem('chanlun_backtests') || '[]');
-  tests.push(newRecord);
-  localStorage.setItem('chanlun_backtests', JSON.stringify(tests));
-
-  return newRecord;
-}
-
-export async function deleteBacktestResult(id: string): Promise<boolean> {
-  const tests = JSON.parse(localStorage.getItem('chanlun_backtests') || '[]');
-  const filtered = tests.filter((t: BacktestResult) => t.id !== id);
-  localStorage.setItem('chanlun_backtests', JSON.stringify(filtered));
-  return true;
 }

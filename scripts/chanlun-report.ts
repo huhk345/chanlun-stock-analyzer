@@ -18,6 +18,17 @@ import Exa from 'exa-js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { acquireTickFlowSlot } from '../src/utils/rateLimiter';
+import type { Kline, Fraction, Stroke, Segment, Hub } from '../src/types/stock';
+import {
+  mergeKlines,
+  findFractions,
+  calculateStrokes,
+  calculateSegments,
+  calculateHubs,
+  calculateSegmentHubs,
+} from '../src/utils/chanlun';
+import { parseTickflowColumns } from '../src/utils/klineUtils';
+import { resolveSymbol } from '../src/utils/symbols';
 
 // 手动加载 .env 文件 (CLI 环境下不会自动加载)
 function loadEnvFile(): void {
@@ -35,65 +46,6 @@ function loadEnvFile(): void {
   }
 }
 loadEnvFile();
-
-// ---------------------------------------------------------------------------
-// Types (from src/types/stock.ts — duplicated for standalone CLI usage)
-// ---------------------------------------------------------------------------
-
-interface Kline {
-  date: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-  amount: number;
-}
-
-interface MergedKline {
-  high: number;
-  low: number;
-  direction: 'up' | 'down';
-  originalIndices: number[];
-  originalHigh: number;
-  originalLow: number;
-}
-
-type FractionType = 'TOP' | 'BOTTOM';
-
-interface Fraction {
-  type: FractionType;
-  price: number;
-  index: number;
-  originalIndex: number;
-  date: string;
-}
-
-interface Stroke {
-  id: string;
-  start: Fraction;
-  end: Fraction;
-  direction: 'up' | 'down';
-}
-
-interface Segment {
-  id: string;
-  start: Fraction;
-  end: Fraction;
-  direction: 'up' | 'down';
-}
-
-interface Hub {
-  id: string;
-  zg: number;
-  zd: number;
-  gg: number;
-  dd: number;
-  startIndex: number;
-  endIndex: number;
-  strokesCount: number;
-  level: number;
-}
 
 // ---------------------------------------------------------------------------
 // Config
@@ -166,178 +118,6 @@ const DEFAULT_STOCKS = [
 ];
 
 // ---------------------------------------------------------------------------
-// ChanLun computation (from src/utils/chanlun.ts — standalone)
-// ---------------------------------------------------------------------------
-
-function mergeKlines(klines: Kline[]): MergedKline[] {
-  if (klines.length === 0) return [];
-  const merged: MergedKline[] = [];
-  merged.push({
-    high: klines[0].high, low: klines[0].low, direction: 'up',
-    originalIndices: [0], originalHigh: klines[0].high, originalLow: klines[0].low,
-  });
-  for (let i = 1; i < klines.length; i++) {
-    const k = klines[i];
-    const last = merged[merged.length - 1];
-    const lastContainsCurrent = last.high >= k.high && last.low <= k.low;
-    const currentContainsLast = k.high >= last.high && k.low <= last.low;
-    if (lastContainsCurrent || currentContainsLast) {
-      let direction: 'up' | 'down' = 'up';
-      if (merged.length > 1) {
-        const prev = merged[merged.length - 2];
-        direction = last.high > prev.high ? 'up' : last.high < prev.high ? 'down' : last.direction;
-      }
-      if (direction === 'up') {
-        last.high = Math.max(last.high, k.high);
-        last.low = Math.max(last.low, k.low);
-      } else {
-        last.high = Math.min(last.high, k.high);
-        last.low = Math.min(last.low, k.low);
-      }
-      last.direction = direction;
-      last.originalIndices.push(i);
-      last.originalHigh = Math.max(last.originalHigh, k.high);
-      last.originalLow = Math.min(last.originalLow, k.low);
-    } else {
-      merged.push({
-        high: k.high, low: k.low,
-        direction: k.high > last.high ? 'up' : 'down',
-        originalIndices: [i], originalHigh: k.high, originalLow: k.low,
-      });
-    }
-  }
-  return merged;
-}
-
-function findFractions(merged: MergedKline[], original: Kline[]): Fraction[] {
-  const fractions: Fraction[] = [];
-  for (let i = 1; i < merged.length - 1; i++) {
-    const prev = merged[i - 1], curr = merged[i], next = merged[i + 1];
-    const isTop = curr.high > prev.high && curr.high > next.high && curr.low > prev.low && curr.low > next.low;
-    const isBottom = curr.low < prev.low && curr.low < next.low && curr.high < prev.high && curr.high < next.high;
-    if (isTop) {
-      const idx = curr.originalIndices.reduce((best, j) => original[j].high > original[best].high ? j : best, curr.originalIndices[0]);
-      fractions.push({ type: 'TOP', price: original[idx].high, index: i, originalIndex: idx, date: original[idx].date });
-    } else if (isBottom) {
-      const idx = curr.originalIndices.reduce((best, j) => original[j].low < original[best].low ? j : best, curr.originalIndices[0]);
-      fractions.push({ type: 'BOTTOM', price: original[idx].low, index: i, originalIndex: idx, date: original[idx].date });
-    }
-  }
-  return fractions;
-}
-
-function connectFenxingToStroke(fractions: Fraction[], minDistance: number): Fraction[] {
-  if (fractions.length < 2) return [];
-  let biPoints: Fraction[] = [];
-  for (const fx of fractions) {
-    if (biPoints.length === 0) { biPoints.push(fx); continue; }
-    const last = biPoints[biPoints.length - 1];
-    if (fx.type === last.type) {
-      if ((last.type === 'TOP' && fx.price > last.price) || (last.type === 'BOTTOM' && fx.price < last.price)) {
-        biPoints[biPoints.length - 1] = fx;
-      }
-    } else if (Math.abs(fx.index - last.index) >= minDistance) {
-      biPoints.push(fx);
-    }
-  }
-  const finalPoints: Fraction[] = [];
-  for (const fx of biPoints) {
-    if (finalPoints.length === 0) { finalPoints.push(fx); continue; }
-    const last = finalPoints[finalPoints.length - 1];
-    if (fx.type === last.type) {
-      if ((fx.type === 'TOP' && fx.price > last.price) || (fx.type === 'BOTTOM' && fx.price < last.price)) {
-        finalPoints[finalPoints.length - 1] = fx;
-      }
-    } else if (Math.abs(fx.index - last.index) >= minDistance) {
-      finalPoints.push(fx);
-    }
-  }
-  return finalPoints;
-}
-
-function calculateStrokes(fractions: Fraction[]): Stroke[] {
-  const pts = connectFenxingToStroke(fractions, 4);
-  if (pts.length < 2) return [];
-  const strokes: Stroke[] = [];
-  for (let i = 0; i < pts.length - 1; i++) {
-    const curr = pts[i], nxt = pts[i + 1];
-    if (curr.type === 'TOP' && nxt.type === 'BOTTOM') {
-      strokes.push({ id: `stroke-${curr.originalIndex}-${nxt.originalIndex}`, start: curr, end: nxt, direction: 'down' });
-    } else if (curr.type === 'BOTTOM' && nxt.type === 'TOP') {
-      strokes.push({ id: `stroke-${curr.originalIndex}-${nxt.originalIndex}`, start: curr, end: nxt, direction: 'up' });
-    }
-  }
-  return strokes;
-}
-
-function calculateSegments(strokes: Stroke[]): Segment[] {
-  if (strokes.length < 3) return [];
-  const sfx: Fraction[] = [];
-  for (let i = 1; i < strokes.length - 1; i++) {
-    const pp = strokes[i - 1].end.price, cp = strokes[i].end.price, np = strokes[i + 1].end.price;
-    if (cp > pp && cp > np) {
-      sfx.push({ type: 'TOP', price: Math.max(strokes[i].start.price, strokes[i].end.price), index: i, originalIndex: strokes[i].end.originalIndex, date: strokes[i].end.date });
-    } else if (cp < pp && cp < np) {
-      sfx.push({ type: 'BOTTOM', price: Math.min(strokes[i].start.price, strokes[i].end.price), index: i, originalIndex: strokes[i].end.originalIndex, date: strokes[i].end.date });
-    }
-  }
-  if (sfx.length < 2) return [];
-  const segPts = connectFenxingToStroke(sfx, 3);
-  if (segPts.length < 2) return [];
-  const segments: Segment[] = [];
-  for (let i = 0; i < segPts.length - 1; i++) {
-    const curr = segPts[i], nxt = segPts[i + 1];
-    const ss = strokes[curr.index], es = strokes[nxt.index];
-    let direction: 'up' | 'down', startF: Fraction, endF: Fraction;
-    if (curr.type === 'TOP' && nxt.type === 'BOTTOM') {
-      direction = 'down';
-      startF = ss.direction === 'down' ? ss.start : ss.end;
-      endF = es.direction === 'up' ? es.start : es.end;
-    } else if (curr.type === 'BOTTOM' && nxt.type === 'TOP') {
-      direction = 'up';
-      startF = ss.direction === 'up' ? ss.start : ss.end;
-      endF = es.direction === 'down' ? es.start : es.end;
-    } else continue;
-    segments.push({ id: `segment-${startF.originalIndex}-${endF.originalIndex}`, start: startF, end: endF, direction });
-  }
-  return segments;
-}
-
-function identifyHubsGeneric(lines: { start: Fraction; end: Fraction; direction: string }[], level: number): Hub[] {
-  if (lines.length < 3) return [];
-  const hubs: Hub[] = [];
-  let i = 0;
-  while (i <= lines.length - 3) {
-    const l1 = lines[i], l2 = lines[i + 1], l3 = lines[i + 2];
-    const l1H = Math.max(l1.start.price, l1.end.price), l1L = Math.min(l1.start.price, l1.end.price);
-    const l2H = Math.max(l2.start.price, l2.end.price), l2L = Math.min(l2.start.price, l2.end.price);
-    const l3H = Math.max(l3.start.price, l3.end.price), l3L = Math.min(l3.start.price, l3.end.price);
-    const zg = Math.min(l1H, l2H, l3H), zd = Math.max(l1L, l2L, l3L);
-    if (zg > zd) {
-      let gg = Math.max(l1H, l2H, l3H), dd = Math.min(l1L, l2L, l3L);
-      let hubEndIndex = l3.end.originalIndex, count = 3;
-      let j = i + 3;
-      while (j < lines.length) {
-        const nl = lines[j];
-        const nH = Math.max(nl.start.price, nl.end.price), nL = Math.min(nl.start.price, nl.end.price);
-        if (nH > zd && nL < zg) { hubEndIndex = nl.end.originalIndex; gg = Math.max(gg, nH); dd = Math.min(dd, nL); count++; j++; } else break;
-      }
-      hubs.push({ id: `hub-${l1.start.originalIndex}-${hubEndIndex}`, zg: +zg.toFixed(2), zd: +zd.toFixed(2), gg: +gg.toFixed(2), dd: +dd.toFixed(2), startIndex: l1.start.originalIndex, endIndex: hubEndIndex, strokesCount: count, level });
-      i = j;
-    } else { i++; }
-  }
-  return hubs;
-}
-
-function calculateHubs(strokes: Stroke[]): Hub[] {
-  return identifyHubsGeneric(strokes, 1);
-}
-
-function calculateSegmentHubs(segments: Segment[]): Hub[] {
-  return identifyHubsGeneric(segments, 2);
-}
-
-// ---------------------------------------------------------------------------
 // Trading Day Check (TickDB API)
 // ---------------------------------------------------------------------------
 
@@ -382,17 +162,6 @@ async function isTradingDay(date: string): Promise<boolean> {
 // Stock data fetching (TickFlow API — Node.js fetch)
 // ---------------------------------------------------------------------------
 
-function resolveSymbol(symbol: string): { resolved: string; displayName: string; isChinaStock: boolean } {
-  const clean = symbol.trim().toUpperCase();
-  if (/^\d{6}$/.test(clean)) {
-    const isSS = /^(60|68|90|11|13|51|58|60)/.test(clean);
-    return { resolved: `${clean}.${isSS ? 'SH' : 'SZ'}`, displayName: `${clean}.${isSS ? 'SH' : 'SZ'}`, isChinaStock: true };
-  }
-  if (clean.endsWith('.SS')) return { resolved: clean.replace('.SS', '.SH'), displayName: clean, isChinaStock: true };
-  if (clean.endsWith('.SZ')) return { resolved: clean, displayName: clean, isChinaStock: true };
-  return { resolved: clean, displayName: clean, isChinaStock: false };
-}
-
 async function fetchStockData(symbol: string): Promise<{ symbol: string; klines: Kline[] }> {
   const { resolved, displayName, isChinaStock } = resolveSymbol(symbol);
   if (!isChinaStock) throw new Error(`仅支持A股: ${symbol}`);
@@ -409,25 +178,9 @@ async function fetchStockData(symbol: string): Promise<{ symbol: string; klines:
   const json = await resp.json();
   if (!json?.data) throw new Error(`无数据: ${displayName}`);
 
-  const data = json.data;
-  const len = data.timestamp?.length || 0;
-  if (len === 0) throw new Error(`无K线: ${displayName}`);
+  const klines = parseTickflowColumns(json.data);
+  if (klines.length === 0) throw new Error(`无K线: ${displayName}`);
 
-  const klines: Kline[] = [];
-  const CHINA_OFFSET = 8 * 60 * 60 * 1000;
-  for (let i = 0; i < len; i++) {
-    const d = new Date(data.timestamp[i] + CHINA_OFFSET);
-    const dateStr = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-    klines.push({
-      date: dateStr,
-      open: +data.open[i].toFixed(2),
-      high: +data.high[i].toFixed(2),
-      low: +data.low[i].toFixed(2),
-      close: +data.close[i].toFixed(2),
-      volume: data.volume[i] || 0,
-      amount: data.amount[i] || 0,
-    });
-  }
   console.log(`[TickFlow] ${displayName}: ${klines.length} 根K线`);
   return { symbol: displayName, klines };
 }

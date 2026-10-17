@@ -26,7 +26,7 @@ export interface OpenRouterModel {
   created?: number;
 }
 
-export interface OpenRouterModelsResponse {
+interface OpenRouterModelsResponse {
   data: OpenRouterModel[];
 }
 
@@ -92,7 +92,7 @@ export function setStoredSelectedModel(modelId: string): void {
   }
 }
 
-export function getDefaultFreeModel(): string {
+function getDefaultFreeModel(): string {
   return 'google/gemini-2.0-flash-exp:free';
 }
 

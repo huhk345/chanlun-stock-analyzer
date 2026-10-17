@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User, LogOut, CheckCircle, AlertTriangle, Settings, Search, LineChart, Clock, X, ChevronDown, TrendingUp, TrendingDown, Info, LayoutDashboard, ChartCandlestick, Filter } from 'lucide-react';
+import { User, LogOut, CheckCircle, AlertTriangle, Settings, Search, LineChart, Clock, X, ChevronDown, TrendingUp, TrendingDown, Info, LayoutDashboard, ChartCandlestick } from 'lucide-react';
 import { getCurrentUser, signInUser, signUpUser, signOutUser, isUsingMockDb, SupabaseUser } from '../utils/supabase';
 import { Kline, StockBasicInfo } from '../types/stock';
 
-type ViewMode = 'dashboard' | 'indexes' | 'screener' | 'analyzer';
+type ViewMode = 'dashboard' | 'indexes' | 'analyzer';
 
 interface NavbarProps {
   onUserChanged: (user: SupabaseUser | null) => void;
@@ -353,19 +353,6 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
             >
               <ChartCandlestick className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">缠论买卖点</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => onViewChange('screener')}
-              className={`flex items-center gap-1.5 h-8 px-2 md:px-3 rounded-md text-xs font-medium transition-all cursor-pointer ${
-                view === 'screener'
-                  ? 'bg-blue-500/15 text-blue-400 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.3)]'
-                  : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60'
-              }`}
-              title="策略选股 (均线多头 / 唐奇安突破等默认策略)"
-            >
-              <Filter className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">选股</span>
             </button>
             <button
               type="button"

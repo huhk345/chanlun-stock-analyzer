@@ -5,14 +5,19 @@ import type {
   BacktestDiagnostic,
   BacktestAccountState,
   BacktestPositionState,
-  BacktestTradeSnapshot,
   UserStrategyInput,
   UserStrategyDecision,
 } from '../types/strategy';
 import { buildStrategyParams, validateDecision, resolveOrderShares, calcAStockFees, isLimitUp, isLimitDown } from './strategyAdapter';
 import { computeIndicatorValues } from './indicatorAdapter';
 import { loadStoredIndicators } from './indicatorLoader';
-import { mergeKlines, findFractions, calculateStrokes, calculateSegments, calculateHubs } from './chanlun';
+import { computeChanlunStructures } from './chanlun';
+import {
+  nextTradeId,
+  tradesToSnapshots,
+  sharpeFromEquityCurve,
+  maxDrawdownFromEquityCurve,
+} from './backtestUtils';
 
 // ---------------------------------------------------------------------------
 // Helper: create initial account state
@@ -115,46 +120,6 @@ export function updatePositionAfterSell(
 }
 
 // ---------------------------------------------------------------------------
-// Helper: build ChanLun snapshot for strategy input
-// ---------------------------------------------------------------------------
-
-function buildChanLunCache(klines: readonly Kline[]) {
-  const mutableKlines = [...klines];
-  const merged = mergeKlines(mutableKlines);
-  const fractions = findFractions(merged, mutableKlines);
-  const strokes = calculateStrokes(fractions);
-  const segments = calculateSegments(strokes);
-  const hubs = calculateHubs(strokes);
-  return { mergedKlines: merged, fractions, strokes, segments, hubs };
-}
-
-// ---------------------------------------------------------------------------
-// Helper: convert BacktestTrade[] to BacktestTradeSnapshot[]
-// ---------------------------------------------------------------------------
-
-function tradesToSnapshots(trades: BacktestTrade[]): BacktestTradeSnapshot[] {
-  return trades.map((t) => ({
-    id: t.id,
-    date: t.date,
-    action: t.type,
-    price: t.price,
-    shares: t.shares,
-    value: t.value,
-    reason: t.signalType,
-  }));
-}
-
-// ---------------------------------------------------------------------------
-// Helper: generate a unique trade ID
-// ---------------------------------------------------------------------------
-
-let tradeCounter = 0;
-function nextTradeId(): string {
-  tradeCounter++;
-  return `trade-${Date.now()}-${tradeCounter}`;
-}
-
-// ---------------------------------------------------------------------------
 // Main: runBacktest
 // ---------------------------------------------------------------------------
 
@@ -195,6 +160,7 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
         totalFees: 0,
         sharpeRatio: 0,
         buyHoldReturnPercent: 0,
+        maxDrawdownPercent: 0,
         trades: [],
         createdAt: now,
       },
@@ -215,7 +181,13 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
   let account = createInitialAccount(initialCash, currency);
   let position = createInitialPosition();
   const trades: BacktestTrade[] = [];
+  /** 策略连续异常达到该次数后才判定为「不可用」, 之前按 HOLD 降级继续跑 */
+  const MAX_CONSECUTIVE_ERRORS = 5;
   let strategyStopped = false;
+  let consecutiveErrors = 0;
+  /** 是否已成功评估过至少一次 (用于区分「数据不足」与「策略真的坏了」) */
+  let hasDecidedOnce = false;
+  let totalErrorDiagnostics = 0;
   let totalFees = 0;
 
   // Track daily equity for Sharpe ratio
@@ -250,6 +222,7 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
           id: nextTradeId(),
           type: 'SELL',
           signalType: 'stop-loss',
+          reason: `触发固定止损 ${stopLossPercent}%`,
           price: currentPrice,
           date: currentKline.date,
           shares: sellShares,
@@ -286,7 +259,7 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
     };
 
     // Provide ChanLun analysis data
-    strategyInput.chanlun = buildChanLunCache(klinesSlice);
+    strategyInput.chanlun = computeChanlunStructures(klinesSlice);
 
     // Compute indicator values and merge into params
     const indicatorValues = computeIndicatorValues(selectedIndicators, symbol, klinesSlice, i);
@@ -298,15 +271,32 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
     if (!strategyStopped) {
       try {
         decision = strategy.decide(strategyInput);
+        consecutiveErrors = 0;
+        hasDecidedOnce = true;
       } catch (err) {
-        strategyStopped = true;
+        // 单根 K 线异常只降级为 HOLD, 不中断整段回测 —— 否则该根之后的全部买卖信号都会丢失。
+        // 尚未成功评估过 (多为样本不足导致) 时一律继续跑, 只记一条汇总诊断;
+        // 已经跑通之后再连续异常, 才判定策略不可用。
+        consecutiveErrors++;
         const msg = err instanceof Error ? err.message : String(err);
-        diagnostics.push({
-          date: currentKline.date,
-          level: 'error',
-          message: `Strategy threw an error: ${msg}. Strategy will no longer be called.`,
-        });
-        decision = null;
+        const fatal = hasDecidedOnce && consecutiveErrors >= MAX_CONSECUTIVE_ERRORS;
+        if (fatal) {
+          strategyStopped = true;
+          diagnostics.push({
+            date: currentKline.date,
+            level: 'error',
+            message: `Strategy threw ${consecutiveErrors} consecutive errors after ${klines.length} bars, last: ${msg}. Strategy will no longer be called.`,
+          });
+        } else if (totalErrorDiagnostics < 3) {
+          // 只保留前几条样本异常诊断, 避免刷屏; 其余静默降级
+          totalErrorDiagnostics++;
+          diagnostics.push({
+            date: currentKline.date,
+            level: 'warning',
+            message: `Strategy error (treated as HOLD, 后续信号继续评估): ${msg}`,
+          });
+        }
+        decision = { action: 'HOLD', reason: `策略异常按 HOLD 处理: ${msg}` };
       }
     }
 
@@ -392,6 +382,8 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
         id: nextTradeId(),
         type: 'BUY',
         signalType: strategy.id || strategy.name,
+        reason: decision.reason,
+        confidence: decision.confidence,
         price: currentPrice,
         date: currentKline.date,
         shares,
@@ -420,6 +412,8 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
         id: nextTradeId(),
         type: 'SELL',
         signalType: strategy.id || strategy.name,
+        reason: decision.reason,
+        confidence: decision.confidence,
         price: currentPrice,
         date: currentKline.date,
         shares: sellShares,
@@ -446,18 +440,10 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
   const buyHoldReturnPercent = firstPrice > 0 ? ((lastPrice - firstPrice) / firstPrice) * 100 : 0;
 
   // Sharpe ratio from daily equity curve
-  let sharpeRatio = 0;
-  if (equityCurve.length > 1) {
-    const dailyReturns: number[] = [];
-    for (let i = 1; i < equityCurve.length; i++) {
-      const prevEq = equityCurve[i - 1];
-      dailyReturns.push(prevEq > 0 ? (equityCurve[i] - prevEq) / prevEq : 0);
-    }
-    const mean = dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length;
-    const variance = dailyReturns.reduce((a, b) => a + (b - mean) ** 2, 0) / dailyReturns.length;
-    const std = Math.sqrt(variance);
-    sharpeRatio = std > 0 ? (mean / std) * Math.sqrt(252) : 0;
-  }
+  const sharpeRatio = sharpeFromEquityCurve(equityCurve);
+
+  // Max drawdown from equity curve (peak-to-trough %)
+  const maxDrawdownPercent = maxDrawdownFromEquityCurve(equityCurve);
 
   const result: BacktestResult = {
     id: `backtest-${Date.now()}`,
@@ -474,6 +460,7 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
     totalFees,
     sharpeRatio,
     buyHoldReturnPercent,
+    maxDrawdownPercent,
     trades,
     createdAt: new Date().toISOString(),
   };

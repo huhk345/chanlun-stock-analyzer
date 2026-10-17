@@ -3,7 +3,6 @@ import type {
   UserStrategyDefinition,
   UserStrategyDecision,
   UserStrategyAction,
-  UserStrategyAmount,
   UserStrategyAmountUnit,
   BacktestAccountState,
   BacktestPositionState,
@@ -48,7 +47,7 @@ export function calcAStockFees(
  *   300xxx (ChiNext) / 688xxx (STAR)   → ±20%
  *   4xxxxx / 8xxxxx                     → ±5%   (三板 simplified)
  */
-export function getStockLimitRatio(symbol: string): number {
+function getStockLimitRatio(symbol: string): number {
   const code = symbol.replace(/\.(SS|SZ|SH|BJ)$/, '').trim();
 
   if (/^(688|300)/.test(code)) return 1.20;
@@ -56,11 +55,11 @@ export function getStockLimitRatio(symbol: string): number {
   return 1.10;
 }
 
-export function getLimitUpPrice(prevClose: number, ratio: number): number {
+function getLimitUpPrice(prevClose: number, ratio: number): number {
   return Math.round(prevClose * ratio * 100) / 100;
 }
 
-export function getLimitDownPrice(prevClose: number, ratio: number): number {
+function getLimitDownPrice(prevClose: number, ratio: number): number {
   return Math.round(prevClose * (2 - ratio) * 100) / 100;
 }
 
@@ -84,21 +83,6 @@ export function isLimitDown(currentKline: Kline, klines: readonly Kline[], symbo
   const ratio = getStockLimitRatio(symbol);
   const limitDown = getLimitDownPrice(prevClose, ratio);
   return currentKline.close <= limitDown;
-}
-
-// ---------------------------------------------------------------------------
-// Strategy ID validation
-// ---------------------------------------------------------------------------
-
-const STRATEGY_ID_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-
-/**
- * Validates that a strategy ID follows kebab-case format.
- * Must start with a lowercase letter, followed by lowercase letters/digits,
- * with optional hyphen-separated segments.
- */
-export function isValidStrategyId(id: string): boolean {
-  return STRATEGY_ID_PATTERN.test(id);
 }
 
 // ---------------------------------------------------------------------------
@@ -147,65 +131,6 @@ const VALID_UNITS: ReadonlySet<UserStrategyAmountUnit> = new Set(['cash', 'share
 
 function isValidAction(value: unknown): value is UserStrategyAction {
   return typeof value === 'string' && VALID_ACTIONS.has(value as UserStrategyAction);
-}
-
-function normalizeAmount(amount: unknown): UserStrategyAmount | undefined {
-  if (!amount || typeof amount !== 'object') return undefined;
-
-  const obj = amount as Record<string, unknown>;
-
-  let unit: UserStrategyAmountUnit | undefined;
-  if (typeof obj.unit === 'string' && VALID_UNITS.has(obj.unit as UserStrategyAmountUnit)) {
-    unit = obj.unit as UserStrategyAmountUnit;
-  }
-
-  let value: number | undefined;
-  if (typeof obj.value === 'number' && Number.isFinite(obj.value)) {
-    value = obj.value;
-  }
-
-  if (unit === undefined || value === undefined) return undefined;
-
-  // Clamp percent values > 100
-  if (unit === 'percent' && value > 100) {
-    value = 100;
-  }
-
-  return { unit, value };
-}
-
-/**
- * Normalizes a raw decision object, ensuring:
- * - action is a valid UserStrategyAction (defaults to HOLD if invalid)
- * - amount is valid for BUY/SELL actions
- * - confidence is clamped between 0 and 1
- */
-export function normalizeDecision(decision: Partial<UserStrategyDecision>): UserStrategyDecision {
-  const action: UserStrategyAction = isValidAction(decision.action) ? decision.action : 'HOLD';
-
-  let amount: UserStrategyAmount | undefined;
-  if (decision.amount !== undefined) {
-    amount = normalizeAmount(decision.amount);
-  }
-
-  // Remove amount for HOLD
-  if (action === 'HOLD') {
-    amount = undefined;
-  }
-
-  let confidence: number | undefined;
-  if (decision.confidence !== undefined) {
-    if (typeof decision.confidence === 'number' && Number.isFinite(decision.confidence)) {
-      confidence = Math.max(0, Math.min(1, decision.confidence));
-    }
-  }
-
-  return {
-    action,
-    ...(amount !== undefined ? { amount } : {}),
-    ...(decision.reason !== undefined ? { reason: decision.reason } : {}),
-    ...(confidence !== undefined ? { confidence } : {}),
-  };
 }
 
 // ---------------------------------------------------------------------------

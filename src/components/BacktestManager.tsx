@@ -3,9 +3,10 @@ import { createPortal } from 'react-dom';
 import { Play, ShieldAlert, CheckCircle, Download, ChevronLeft, ChevronRight, SkipForward, RotateCcw, Wand2, ChevronDown } from 'lucide-react';
 import { Kline, BacktestResult, BacktestTrade } from '../types/stock';
 import { SupabaseUser } from '../utils/supabase';
-import type { UserStrategyDefinition, BacktestStepState, IndicatorSelectionState, BacktestDiagnostic } from '../types/strategy';
+import type { UserStrategyDefinition, BacktestStepState, IndicatorSelectionState, BacktestDiagnostic, StrategyParamValue } from '../types/strategy';
 import { userStrategies } from '../strategies/user';
 import { loadStoredStrategies } from '../utils/strategyLoader';
+import { buildStrategyParams } from '../utils/strategyAdapter';
 import { runBacktest } from '../utils/backtestRunner';
 import { createBacktestStepper } from '../utils/backtestStepper';
 import StrategyDialog from './StrategyDialog';
@@ -37,6 +38,9 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
     selectedIndicatorIds: [],
     indicatorParams: {},
   });
+
+  // Strategy params (策略参数: 买卖逻辑的阈值)
+  const [customParams, setCustomParams] = useState<Record<string, StrategyParamValue>>({});
 
   // Day-by-day stepper
   const [stepperMode, setStepperMode] = useState(false);
@@ -113,6 +117,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
       selectedIndicatorIds: defaultIds,
       indicatorParams: {},
     });
+    setCustomParams(buildStrategyParams(strategy));
     setBacktest(null);
     setStepState(null);
     setStepperMode(false);
@@ -181,6 +186,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
         currency: 'CNY',
         commissionRate,
         strategy: selectedStrategy,
+        params: customParams,
         selectedIndicatorIds: indicatorSelection.selectedIndicatorIds,
       });
 
@@ -212,6 +218,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
       currency: 'CNY',
       commissionRate,
       strategy: selectedStrategy,
+      params: customParams,
       selectedIndicatorIds: indicatorSelection.selectedIndicatorIds,
     });
 
@@ -268,15 +275,19 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
 
   const handleExportCSV = () => {
     if (!backtest) return;
-    const rows = [['日期', '类型', '信号来源', '执行价格', '交易股数', '交易金额', '盈亏', '盈亏率']];
+    const rows = [['日期', '方向', '信号来源', '信号依据', '置信度', '执行价格', '交易股数', '交易金额', '费用', '盈亏', '盈亏率']];
     for (const t of backtest.trades) {
+      const reason = String(t.reason ?? t.signalType).replace(/"/g, '""');
       rows.push([
         t.date,
-        t.type,
+        t.type === 'BUY' ? '买入' : '卖出',
         t.signalType,
+        `"${reason}"`,
+        t.confidence !== undefined ? String(t.confidence) : '',
         String(t.price),
         String(t.shares),
         String(t.value),
+        t.fee !== undefined ? String(t.fee) : '',
         t.pnl !== undefined ? String(t.pnl) : '',
         t.pnlPercent !== undefined ? String(t.pnlPercent) : '',
       ]);
@@ -497,6 +508,38 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
                 </button>
               </div>
             </div>
+
+            {/* 策略参数: 买卖逻辑的阈值 */}
+            {selectedStrategy?.params && selectedStrategy.params.length > 0 && (
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 mb-2 font-sans">策略参数 (买卖逻辑)</label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                  {selectedStrategy.params.map((p) => (
+                    <label key={p.key} className="block rounded-lg bg-zinc-900 border border-zinc-800 px-2.5 py-2">
+                      <span className="block text-[10px] text-zinc-500 truncate font-sans" title={p.key}>{p.label}</span>
+                      {p.type === 'boolean' ? (
+                        <input
+                          type="checkbox"
+                          checked={Boolean(customParams[p.key] ?? p.defaultValue)}
+                          onChange={(e) => setCustomParams((prev) => ({ ...prev, [p.key]: e.target.checked }))}
+                          className="mt-1 h-4 w-4 rounded border-zinc-600 text-blue-500"
+                        />
+                      ) : (
+                        <input
+                          type="number"
+                          value={Number(customParams[p.key] ?? p.defaultValue)}
+                          min={p.min}
+                          max={p.max}
+                          step={p.step ?? 1}
+                          onChange={(e) => setCustomParams((prev) => ({ ...prev, [p.key]: parseFloat(e.target.value) }))}
+                          className="mt-1 w-full bg-transparent text-xs font-mono text-zinc-100 focus:outline-none"
+                        />
+                      )}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -792,32 +835,41 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
                     <thead className="bg-zinc-900 border-b border-zinc-800 text-zinc-500 font-mono font-semibold">
                       <tr>
                         <th className="px-4 py-2.5">日期</th>
-                        <th className="px-4 py-2.5">类型</th>
+                        <th className="px-4 py-2.5">方向</th>
                         <th className="px-4 py-2.5">执行价格</th>
                         <th className="px-4 py-2.5">交易分配</th>
                         <th className="px-4 py-2.5">交易费</th>
+                        <th className="px-4 py-2.5 font-sans">信号依据</th>
                         <th className="px-4 py-2.5 text-right">盈亏结果</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-900 font-mono">
                       {backtest.trades.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="text-center py-6 text-zinc-500 font-sans">未触发任何交易。请尝试延长分析周期。</td>
+                          <td colSpan={7} className="text-center py-6 text-zinc-500 font-sans">未触发任何交易。请尝试延长分析周期。</td>
                         </tr>
                       ) : (
                         backtest.trades.map((tr, i) => (
                           <tr key={`tr-led-${tr.id}-${i}`} className="hover:bg-zinc-900/40">
                             <td className="px-4 py-2 text-zinc-400 font-sans">{tr.date}</td>
                             <td className="px-4 py-2">
-                              <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold ${
-                                tr.type === 'BUY' ? 'bg-red-950/30 text-red-400 border border-red-900/20' : 'bg-green-950/30 text-green-400 border border-green-900/20'
-                              }`}>
-                                {tr.type}
-                              </span>
+                              <div className="flex items-center gap-1.5">
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold ${
+                                  tr.type === 'BUY' ? 'bg-red-950/30 text-red-400 border border-red-900/20' : 'bg-green-950/30 text-green-400 border border-green-900/20'
+                                }`}>
+                                  {tr.type === 'BUY' ? '买入' : '卖出'}
+                                </span>
+                                {tr.confidence != null && (
+                                  <span className="text-[10px] text-zinc-600">{(tr.confidence * 100).toFixed(0)}%</span>
+                                )}
+                              </div>
                             </td>
                             <td className="px-4 py-2 font-bold">¥{fmt(tr.price)}</td>
                             <td className="px-4 py-2 text-zinc-500">{tr.shares}股 (¥{fmt(tr.value)})</td>
                             <td className="px-4 py-2 text-zinc-500">¥{fmt(tr.fee ?? 0)}</td>
+                            <td className="px-4 py-2 text-zinc-400 font-sans max-w-[240px]" title={tr.reason ?? tr.signalType}>
+                              {tr.reason ?? tr.signalType}
+                            </td>
                             <td className={`px-4 py-2 text-right font-extrabold ${
                               tr.pnl !== undefined
                                 ? (tr.pnl >= 0 ? 'text-red-400' : 'text-green-400')

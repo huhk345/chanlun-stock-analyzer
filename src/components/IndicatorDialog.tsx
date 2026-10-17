@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import {
   X, Plus, Trash2, Download, Upload, Save, Code, AlertCircle, CheckCircle,
-  Cpu, ChevronDown, Search, RefreshCw, Wand2, Settings,
+  RefreshCw, Wand2, Settings,
 } from 'lucide-react';
 import type {
   UserIndicatorDefinition,
@@ -25,15 +25,9 @@ import {
   generateIndicatorCode,
   extractCodeFromResponse,
 } from '../utils/api';
-import {
-  clearCachedModels,
-  fetchOpenRouterFreeModels,
-  getStoredSelectedModel,
-  setStoredSelectedModel,
-  resolveSelectedModel,
-  formatPricingLabel,
-} from '../utils/openrouter';
-import type { OpenRouterModel } from '../utils/openrouter';
+import { hasAnyAiApiKey } from '../utils/apiKeys';
+import { useAiModelSelector } from '../hooks/useAiModelSelector';
+import ModelSelector from './ModelSelector';
 import ConfirmDialog from './ConfirmDialog';
 
 interface IndicatorDialogProps {
@@ -42,22 +36,6 @@ interface IndicatorDialogProps {
   onIndicatorCreated?: (indicator: UserIndicatorDefinition) => void;
   existingIndicatorIds?: string[];
   symbol?: string;
-}
-
-function getLocalApiKey(key: string): string {
-  try {
-    const savedKeys = localStorage.getItem('api_keys');
-    if (savedKeys) {
-      const keys = JSON.parse(savedKeys);
-      if (keys[key]) return keys[key];
-    }
-  } catch { /* ignore */ }
-  return '';
-}
-
-function hasAnyApiKey(): boolean {
-  return !!(getLocalApiKey('openrouter') || getLocalApiKey('gemini') ||
-    import.meta.env.VITE_OPENROUTER_API_KEY || import.meta.env.VITE_GEMINI_API_KEY);
 }
 
 export default function IndicatorDialog({
@@ -78,12 +56,9 @@ export default function IndicatorDialog({
   const [generationResult, setGenerationResult] = useState<IndicatorDialogResponse | null>(null);
   const [streamingCode, setStreamingCode] = useState('');
 
-  // Model selector state
-  const [models, setModels] = useState<OpenRouterModel[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<string>('');
-  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
-  const [modelFilter, setModelFilter] = useState('');
+  // 模型选择器 (加载/刷新/持久化/过滤)
+  const modelSelector = useAiModelSelector(isOpen);
+  const { selectedModel } = modelSelector;
 
   // Manage tab state
   const [selectedIndicator, setSelectedIndicator] = useState<StoredIndicator | null>(null);
@@ -92,47 +67,6 @@ export default function IndicatorDialog({
   const [isEditing, setIsEditing] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-
-  const modelDropdownRef = useRef<HTMLDivElement | null>(null);
-
-  // Load models on mount
-  useEffect(() => {
-    if (!isOpen) return;
-    let cancelled = false;
-    const load = async () => {
-      setModelsLoading(true);
-      try {
-        const list = await fetchOpenRouterFreeModels(getLocalApiKey('openrouter'));
-        if (cancelled) return;
-        setModels(list);
-        const stored = getStoredSelectedModel();
-        const initial = stored && list.some((m) => m.id === stored)
-          ? stored
-          : resolveSelectedModel(list);
-        setSelectedModel(initial);
-        if (initial) setStoredSelectedModel(initial);
-      } catch (err: any) {
-        if (cancelled) return;
-        console.error('Failed to load models:', err);
-      } finally {
-        if (!cancelled) setModelsLoading(false);
-      }
-    };
-    load();
-    return () => { cancelled = true; };
-  }, [isOpen]);
-
-  // Close dropdown on outside click
-  useEffect(() => {
-    if (!modelDropdownOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (modelDropdownRef.current && !modelDropdownRef.current.contains(e.target as Node)) {
-        setModelDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [modelDropdownOpen]);
 
   // Load stored indicators on mount
   useEffect(() => {
@@ -161,43 +95,6 @@ export default function IndicatorDialog({
     setStoredIndicators(getAllStoredIndicators());
     setStorageStats(getStorageStats());
   };
-
-  const handleSelectModel = (modelId: string) => {
-    setSelectedModel(modelId);
-    setStoredSelectedModel(modelId);
-    setModelDropdownOpen(false);
-  };
-
-  const handleRefreshModels = async () => {
-    setModelsLoading(true);
-    clearCachedModels();
-    try {
-      const list = await fetchOpenRouterFreeModels(getLocalApiKey('openrouter'));
-      setModels(list);
-      if (!list.some((m) => m.id === selectedModel)) {
-        const fallback = resolveSelectedModel(list);
-        setSelectedModel(fallback);
-        setStoredSelectedModel(fallback);
-      }
-    } catch (err: any) {
-      console.error('Failed to refresh models:', err);
-    } finally {
-      setModelsLoading(false);
-    }
-  };
-
-  const filteredModels = useMemo(() => {
-    const q = modelFilter.trim().toLowerCase();
-    if (!q) return models;
-    return models.filter(
-      (m) => m.id.toLowerCase().includes(q) || (m.name || '').toLowerCase().includes(q),
-    );
-  }, [models, modelFilter]);
-
-  const selectedModelMeta = useMemo(
-    () => models.find((m) => m.id === selectedModel),
-    [models, selectedModel],
-  );
 
   const handleGenerateIndicator = async () => {
     if (!userDescription.trim()) return;
@@ -433,7 +330,7 @@ export default function IndicatorDialog({
           {activeTab === 'create' && (
             <div className="space-y-5">
               {/* API Key Warning */}
-              {!hasAnyApiKey() && (
+              {!hasAnyAiApiKey() && (
                 <div className="p-3 bg-amber-950/20 border border-amber-900/30 rounded-lg flex items-start gap-3">
                   <Settings className="h-5 w-5 text-amber-400 mt-0.5 shrink-0" />
                   <div>
@@ -446,83 +343,7 @@ export default function IndicatorDialog({
               )}
 
               {/* Model Selector */}
-              <div>
-                <label className="block text-sm font-medium text-zinc-300 mb-2">
-                  AI 模型
-                </label>
-                <div className="relative" ref={modelDropdownRef}>
-                  <button
-                    type="button"
-                    onClick={() => setModelDropdownOpen((o) => !o)}
-                    className="flex items-center gap-2 px-4 py-2.5 bg-zinc-800 border border-zinc-700 hover:border-cyan-500/50 rounded-lg text-sm text-zinc-200 transition-all cursor-pointer w-full"
-                  >
-                    <Cpu className="h-4 w-4 text-zinc-500" />
-                    <span className="flex-1 text-left">
-                      {selectedModelMeta
-                        ? `${selectedModelMeta.id.split('/')[0]} / ${selectedModelMeta.id.split('/')[1]?.replace(':free', '')}`
-                        : modelsLoading
-                          ? '加载模型中...'
-                          : '选择 AI 模型'}
-                    </span>
-                    <ChevronDown className={`h-4 w-4 text-zinc-500 transition-transform ${modelDropdownOpen ? 'rotate-180' : ''}`} />
-                  </button>
-
-                  {modelDropdownOpen && (
-                    <div className="absolute z-50 left-0 right-0 mt-1.5 bg-zinc-950 border border-zinc-800 rounded-xl shadow-2xl shadow-black/60 overflow-hidden">
-                      <div className="p-2 border-b border-zinc-800 flex items-center gap-2">
-                        <Search className="h-3.5 w-3.5 text-zinc-500" />
-                        <input
-                          type="text"
-                          value={modelFilter}
-                          onChange={(e) => setModelFilter(e.target.value)}
-                          placeholder="搜索模型..."
-                          className="flex-1 bg-transparent text-xs font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none"
-                          autoFocus
-                        />
-                        <button
-                          type="button"
-                          onClick={handleRefreshModels}
-                          disabled={modelsLoading}
-                          className="text-zinc-500 hover:text-cyan-400 transition-colors disabled:opacity-50"
-                        >
-                          <RefreshCw className={`h-3.5 w-3.5 ${modelsLoading ? 'animate-spin' : ''}`} />
-                        </button>
-                      </div>
-                      <div className="max-h-56 overflow-y-auto">
-                        {modelsLoading && (
-                          <div className="px-3 py-4 text-xs text-zinc-500 font-mono text-center">加载中...</div>
-                        )}
-                        {!modelsLoading && filteredModels.length === 0 && (
-                          <div className="px-3 py-4 text-xs text-zinc-500 font-mono text-center">
-                            {modelFilter ? '没有匹配的模型' : '暂无可用的免费模型'}
-                          </div>
-                        )}
-                        {filteredModels.map((m) => {
-                          const active = m.id === selectedModel;
-                          return (
-                            <button
-                              key={m.id}
-                              type="button"
-                              onClick={() => handleSelectModel(m.id)}
-                              className={`w-full text-left px-3 py-2 text-xs font-mono transition-colors cursor-pointer flex items-center gap-2 ${
-                                active ? 'bg-cyan-500/10 text-cyan-400' : 'text-zinc-300 hover:bg-zinc-900'
-                              }`}
-                            >
-                              <span className="flex-1 min-w-0">
-                                <span className="block truncate">{m.id}</span>
-                                {m.name && m.name !== m.id && (
-                                  <span className="block text-[10px] text-zinc-600 truncate">{m.name}</span>
-                                )}
-                              </span>
-                              <span className="text-[10px] text-zinc-600 shrink-0">{formatPricingLabel(m.pricing)}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
+              <ModelSelector selector={modelSelector} />
 
               {/* Description Input */}
               <div>
@@ -540,7 +361,7 @@ export default function IndicatorDialog({
               {/* Generate Button */}
               <button
                 onClick={handleGenerateIndicator}
-                disabled={!userDescription.trim() || isGenerating || !selectedModel || !hasAnyApiKey()}
+                disabled={!userDescription.trim() || isGenerating || !selectedModel || !hasAnyAiApiKey()}
                 className="w-full px-4 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:from-zinc-700 disabled:to-zinc-700 disabled:text-zinc-500 text-white font-medium rounded-lg transition-all flex items-center justify-center gap-2"
               >
                 {isGenerating ? (

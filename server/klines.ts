@@ -20,6 +20,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Kline } from '../src/types/stock.ts';
 import { acquireTickFlowSlot } from '../src/utils/rateLimiter.ts';
+import { sleep } from '../src/utils/async.ts';
+import {
+  daysBetween,
+  expectedTradeDay,
+  extractRateLimitDelay,
+  isFresh,
+  mergeKlinesByDate,
+  parseTickflowColumns,
+  type KlinePeriod,
+} from '../src/utils/klineUtils.ts';
 import { fetchTencentKlines } from './tencentKlines.ts';
 
 const TICKFLOW_API_KEY = process.env.TICKFLOW_API_KEY || process.env.VITE_TICKFLOW_API_KEY || '';
@@ -28,8 +38,6 @@ const TICKFLOW_BASE_URL = TICKFLOW_API_KEY ? 'https://api.tickflow.org' : 'https
 const CACHE_DIR = process.env.KLINE_CACHE_DIR
   ? path.resolve(process.env.KLINE_CACHE_DIR)
   : path.resolve(import.meta.dirname, '..', '.cache', 'klines');
-
-export type KlinePeriod = '1d' | '1w';
 
 interface CacheFile {
   symbol: string;
@@ -48,38 +56,6 @@ export interface KlineQueryResult {
   cached: boolean;
   /** 本地缓存最后写入时间 (毫秒) */
   updatedAt: number;
-}
-
-// ---------------------------------------------------------------------------
-// 交易日 / 新鲜度
-// ---------------------------------------------------------------------------
-
-const CHINA_OFFSET_MS = 8 * 60 * 60 * 1000;
-const DAY_MS = 86400000;
-
-function daysBetween(from: string, to: string): number {
-  return Math.round((Date.parse(to) - Date.parse(from)) / DAY_MS);
-}
-
-/**
- * 预期最新交易日 (北京时间 YYYY-MM-DD, 忽略节假日):
- * 16:00 前当日日 K 尚未生成, 回退到上一工作日; 周末再回退到周五。
- */
-function expectedTradeDay(): string {
-  const d = new Date(Date.now() + CHINA_OFFSET_MS);
-  if (d.getUTCHours() < 16) d.setUTCDate(d.getUTCDate() - 1);
-  const dow = d.getUTCDay();
-  if (dow === 0) d.setUTCDate(d.getUTCDate() - 2);
-  else if (dow === 6) d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().slice(0, 10);
-}
-
-/** 缓存末根日期是否已覆盖预期最新交易日 */
-function isFresh(lastDate: string | undefined, period: KlinePeriod): boolean {
-  if (!lastDate) return false;
-  const expected = expectedTradeDay();
-  if (period === '1w') return daysBetween(lastDate, expected) <= 7;
-  return lastDate >= expected;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,17 +98,6 @@ function writeCache(symbol: string, period: KlinePeriod, adjust: string, klines:
 // TickFlow 请求
 // ---------------------------------------------------------------------------
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** 解析限流提示里的重试等待时长 (ms), 如 "请 1500ms 后重试" */
-function extractRateLimitDelay(text: string): number | null {
-  const ms = text.match(/请\s*(\d+)\s*ms\s*后重试/);
-  if (ms) return parseInt(ms[1], 10);
-  const sec = text.match(/请\s*(\d+(?:\.\d+)?)\s*秒?\s*后重试/);
-  if (sec) return Math.ceil(parseFloat(sec[1]) * 1000);
-  return null;
-}
-
 /** 调用 TickFlow 并解析列式返回为 Kline[] (与前端旧逻辑一致, 北京时间归一化日期) */
 async function fetchFromTickFlow(
   symbol: string,
@@ -170,21 +135,7 @@ async function fetchFromTickFlow(
       const length = data?.timestamp?.length || 0;
       if (!data || length === 0) throw new Error(`TickFlow 未返回 ${symbol} 的K线数据`);
 
-      const klines: Kline[] = [];
-      for (let i = 0; i < length; i++) {
-        const date = new Date(data.timestamp[i] + CHINA_OFFSET_MS);
-        const dateStr = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
-        klines.push({
-          date: dateStr,
-          open: parseFloat(data.open[i].toFixed(2)),
-          high: parseFloat(data.high[i].toFixed(2)),
-          low: parseFloat(data.low[i].toFixed(2)),
-          close: parseFloat(data.close[i].toFixed(2)),
-          volume: data.volume[i] || 0,
-          amount: data.amount[i] || 0,
-        });
-      }
-      return klines;
+      return parseTickflowColumns(data);
     }
 
     const errorText = await resp.text();
@@ -235,14 +186,6 @@ async function fetchKlines(
 // ---------------------------------------------------------------------------
 // 增量合并
 // ---------------------------------------------------------------------------
-
-/** 按日期合并: 新数据覆盖同日期旧数据, 返回按日期升序的完整序列 */
-function mergeKlines(prev: Kline[], next: Kline[]): Kline[] {
-  const byDate = new Map<string, Kline>();
-  for (const k of prev) byDate.set(k.date, k);
-  for (const k of next) byDate.set(k.date, k);
-  return [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-}
 
 /**
  * 计算本次需要向 TickFlow 拉取的 K 线条数。
@@ -298,7 +241,7 @@ export async function getKlines(
         `[klines] ${symbol} ${period}: ${PREFER_TICKFLOW ? 'TickFlow' : '腾讯'} · ${force ? '强制刷新' : prev.length ? `增量拉取 ${fetchCount} 根` : `首次全量 ${fetchCount} 根`}`,
       );
       const fresh = await fetchKlines(symbol, period, fetchCount, adjust);
-      const merged = mergeKlines(prev, fresh);
+      const merged = mergeKlinesByDate(prev, fresh);
       const updatedAt = writeCache(symbol, period, adjust, merged);
       return { klines: merged, updatedAt };
     })();

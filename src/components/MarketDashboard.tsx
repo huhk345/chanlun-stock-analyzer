@@ -46,7 +46,8 @@ import {
   formatCryptoPrice,
 } from '../utils/marketApi';
 import type { MarketId, MarketSessionInfo } from '../utils/marketApi';
-import { WatchItem, loadWatchlist, removeFromWatchlist, toTencentSymbol } from '../utils/watchlistStorage';
+import { WatchItem, loadWatchlist, removeFromWatchlist } from '../utils/watchlistStorage';
+import { toTencentSymbol } from '../utils/symbols';
 import { TYPE_STYLE } from './IndexAnalysis';
 
 interface MarketDashboardProps {
@@ -102,7 +103,7 @@ const COMM_VALID_IDS: string[] = COMM_CATALOG_CODES;
 const DEFAULT_COMM_ALL: string[] = [...DEFAULT_COMM_IDS, ...DEFAULT_CRYPTO_SYMBOLS];
 
 /** 读取自选 id 列表: 缺失/损坏回退默认; 空数组视为用户清空, 予以尊重 */
-export function loadIdSelection(key: string, valid: string[], fallback: string[]): string[] {
+function loadIdSelection(key: string, valid: string[], fallback: string[]): string[] {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return fallback;
@@ -117,20 +118,20 @@ export function loadIdSelection(key: string, valid: string[], fallback: string[]
   }
 }
 
-export function persistIdSelection(key: string, ids: string[]) {
+function persistIdSelection(key: string, ids: string[]) {
   try {
     localStorage.setItem(key, JSON.stringify(ids));
   } catch { /* ignore */ }
 }
 
 /** 按目录顺序整理自选 (布局稳定, 不随点击顺序漂移) */
-export function orderIdsByCatalog(ids: string[], valid: string[]): string[] {
+function orderIdsByCatalog(ids: string[], valid: string[]): string[] {
   const set = new Set(ids);
   return valid.filter((id) => set.has(id));
 }
 
 // 自选对话框条目: 左侧名称 + 右侧代码
-export interface MarketPickEntry { id: string; name: string; sub: string }
+interface MarketPickEntry { id: string; name: string; sub: string }
 export interface MarketPickGroup { label: string; items: MarketPickEntry[] }
 
 // 自选对话框分组: code -> 选择器条目 (保持目录顺序)

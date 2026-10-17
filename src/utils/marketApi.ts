@@ -50,7 +50,7 @@ export interface FlowItem {
   mainPercent: number; // 主力净流入占比 %
 }
 
-export interface LadderStock {
+interface LadderStock {
   code: string;
   name: string;
   lbc: number;     // 连板数
@@ -75,24 +75,61 @@ const EM_UT = '7eea3edcaed734bea9cbfc24409ed989';
 
 const INDEX_SYMBOLS = 'sh000001,sz399001,sz399006,sh000688,sh000300,sh000905';
 
-// 获取主要指数行情 (上证指数 / 深证成指 / 创业板指 / 科创50 / 沪深300 / 中证500)
-export async function fetchIndexQuotes(): Promise<IndexQuote[]> {
-  const resp = await fetch(`${TENCENT_QUOTE_URL}${INDEX_SYMBOLS}`);
+// 通用: 数字解析 (接口数字字段可能为 number 或 string)
+const num = (v: unknown) => (typeof v === 'number' ? v : parseFloat(String(v)) || 0);
+
+// 通用: 腾讯行情文本请求 (GBK 编码)
+async function fetchTencentQuoteText(symbols: string): Promise<string> {
+  const resp = await fetch(`${TENCENT_QUOTE_URL}${symbols}`);
   if (!resp.ok) throw new Error(`腾讯行情接口错误 (${resp.status})`);
 
   const buffer = await resp.arrayBuffer();
-  const text = new TextDecoder('gbk').decode(buffer);
+  return new TextDecoder('gbk').decode(buffer);
+}
 
-  const quotes: IndexQuote[] = [];
+// 通用: 解析腾讯行情文本为 [symbol, 字段数组] 列表
+function parseTencentQuoteText(text: string): Array<{ symbol: string; fields: string[] }> {
+  const rows: Array<{ symbol: string; fields: string[] }> = [];
   const re = /v_(s[hz]\d{6})="([^"]*)"/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
-    const d = m[2].split('~');
+    rows.push({ symbol: m[1], fields: m[2].split('~') });
+  }
+  return rows;
+}
+
+// 通用: 东财接口请求, 返回 data.diff 数组 (minLength 为最少条目数, 0 表示仅校验数组)
+async function fetchEmDiff(url: string, errMsg: string, emptyMsg: string, minLength = 0): Promise<any[]> {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`${errMsg} (${resp.status})`);
+
+  const json = await resp.json();
+  const diff = json?.data?.diff;
+  if (!Array.isArray(diff) || diff.length < minLength) throw new Error(emptyMsg);
+  return diff;
+}
+
+// 通用: secid 串 ('100.HSI,105.AAPL') -> code -> 完整 secid 映射
+function secidByCodeMap(secids: string): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const s of secids.split(',')) {
+    const dot = s.indexOf('.');
+    if (dot > 0) map.set(s.slice(dot + 1), s);
+  }
+  return map;
+}
+
+// 获取主要指数行情 (上证指数 / 深证成指 / 创业板指 / 科创50 / 沪深300 / 中证500)
+export async function fetchIndexQuotes(): Promise<IndexQuote[]> {
+  const text = await fetchTencentQuoteText(INDEX_SYMBOLS);
+
+  const quotes: IndexQuote[] = [];
+  for (const { symbol, fields: d } of parseTencentQuoteText(text)) {
     // 字段布局: [1]名称 [2]代码 [3]现价 [4]昨收 [5]今开 [30]时间
     //          [31]涨跌额 [32]涨跌% [33]最高 [34]最低 [36]成交量(手) [37]成交额(万)
     if (d.length < 38) continue;
     quotes.push({
-      symbol: m[1],
+      symbol,
       code: d[2],
       name: d[1],
       price: parseFloat(d[3]) || 0,
@@ -213,11 +250,7 @@ const US_PICK_ITEMS: [string, string][] = [
 ];
 
 function buildPickItems(pairs: [string, string][], secids: string, group: MarketQuoteGroup): MarketPickItem[] {
-  const secidByCode = new Map<string, string>();
-  for (const s of secids.split(',')) {
-    const dot = s.indexOf('.');
-    if (dot > 0) secidByCode.set(s.slice(dot + 1), s);
-  }
+  const secidByCode = secidByCodeMap(secids);
   return pairs.map(([code, label]) => ({ code, label, group, secid: secidByCode.get(code) || '' }))
     .filter((it) => it.secid !== '');
 }
@@ -269,21 +302,10 @@ export function marketGroupOf(code: string): MarketQuoteGroup | undefined {
 // 通用: 按东财 secid 批量获取报价 (字段 f2价格 f3涨跌% f4涨跌额 f12代码 f14名称 f18昨收)
 export async function fetchQuotesBySecids(secids: string, errMsg: string): Promise<GlobalIndexQuote[]> {
   const url = `${EM_DELAY_BASE}/api/qt/ulist.np/get?fltt=2&secids=${secids}&fields=f2,f3,f4,f12,f14,f18`;
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`${errMsg} (${resp.status})`);
-
-  const json = await resp.json();
-  const diff = json?.data?.diff;
-  if (!Array.isArray(diff) || diff.length === 0) throw new Error(`未获取到${errMsg}数据`);
+  const diff = await fetchEmDiff(url, errMsg, `未获取到${errMsg}数据`, 1);
 
   // 代码 -> 完整 secid 映射 (跳转分析页时需要)
-  const secidByCode = new Map<string, string>();
-  for (const s of secids.split(',')) {
-    const [mkt, code] = s.split('.');
-    if (code) secidByCode.set(code, s);
-  }
-
-  const num = (v: unknown) => (typeof v === 'number' ? v : parseFloat(String(v)) || 0);
+  const secidByCode = secidByCodeMap(secids);
   return diff.map((it: any) => ({
     code: String(it.f12 || ''),
     secid: secidByCode.get(String(it.f12 || '')) || '',
@@ -295,18 +317,6 @@ export async function fetchQuotesBySecids(secids: string, errMsg: string): Promi
   }));
 }
 
-export async function fetchGlobalIndexQuotes(): Promise<GlobalIndexQuote[]> {
-  return fetchQuotesBySecids(GLOBAL_INDEX_SECIDS, '全球指数');
-}
-
-export async function fetchTechIndexQuotes(): Promise<GlobalIndexQuote[]> {
-  return fetchQuotesBySecids(TECH_INDEX_SECIDS, '科技指数');
-}
-
-export async function fetchCommodityQuotes(): Promise<GlobalIndexQuote[]> {
-  return fetchQuotesBySecids(COMMODITY_SECIDS, '商品汇率');
-}
-
 // ---------------------------------------------------------------------------
 // 机构多空持仓: 股指期货(IF/IH/IC/IM)前20会员成交持仓排名 (中金所数据, 东方财富数据中心)
 // ---------------------------------------------------------------------------
@@ -314,7 +324,7 @@ export async function fetchCommodityQuotes(): Promise<GlobalIndexQuote[]> {
 const EM_DATACENTER_BASE = 'https://datacenter-web.eastmoney.com';
 const INDEX_FUTURES_PREFIXES = ['IF', 'IH', 'IC', 'IM'];
 
-export interface InstitutionPosition {
+interface InstitutionPosition {
   name: string;        // 会员简称 (机构席位)
   long: number;        // 今日多单
   short: number;       // 今日空单
@@ -431,7 +441,7 @@ export interface CryptoQuote {
   quoteVolume: number;   // 24h 成交额 (USDT)
 }
 
-export const CRYPTO_SYMBOLS = [
+const CRYPTO_SYMBOLS = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT',
   'ADAUSDT', 'AVAXUSDT', 'LINKUSDT', 'TRXUSDT', 'DOTUSDT', 'POLUSDT',
   'LTCUSDT', 'BCHUSDT', 'NEARUSDT', 'UNIUSDT', 'APTUSDT', 'ARBUSDT',
@@ -745,21 +755,14 @@ export function marketIdForIndexCode(code: string): MarketId | null {
 // 批量获取个股/ETF/指数实时或收盘行情 (腾讯行情, symbols 形如 'sh600519' / 'sz000001')
 export async function fetchStockQuotes(symbols: string[]): Promise<StockQuote[]> {
   if (symbols.length === 0) return [];
-  const resp = await fetch(`${TENCENT_QUOTE_URL}${symbols.join(',')}`);
-  if (!resp.ok) throw new Error(`腾讯行情接口错误 (${resp.status})`);
-
-  const buffer = await resp.arrayBuffer();
-  const text = new TextDecoder('gbk').decode(buffer);
+  const text = await fetchTencentQuoteText(symbols.join(','));
 
   const quotes: StockQuote[] = [];
-  const re = /v_(s[hz]\d{6})="([^"]*)"/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const d = m[2].split('~');
+  for (const { symbol, fields: d } of parseTencentQuoteText(text)) {
     // 字段布局与指数行情一致: [1]名称 [2]代码 [3]现价 [32]涨跌%
     if (d.length < 33) continue;
     quotes.push({
-      symbol: m[1],
+      symbol,
       code: d[2],
       name: d[1],
       price: parseFloat(d[3]) || 0,
@@ -776,15 +779,9 @@ export async function fetchMarketBreadthAndFlow(): Promise<{
   flow: MarketFlowToday;
 }> {
   const url = `${EM_DELAY_BASE}/api/qt/ulist.np/get?fltt=2&secids=1.000001,0.399001&fields=f104,f105,f106,f62,f66,f72,f78,f84`;
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`资金流向接口错误 (${resp.status})`);
-
-  const json = await resp.json();
-  const diff = json?.data?.diff;
-  if (!Array.isArray(diff) || diff.length < 2) throw new Error('未获取到市场资金数据');
+  const diff = await fetchEmDiff(url, '资金流向接口错误', '未获取到市场资金数据', 2);
 
   const [sh, sz] = diff;
-  const num = (v: unknown) => (typeof v === 'number' ? v : parseFloat(String(v)) || 0);
   return {
     breadth: {
       up: num(sh.f104) + num(sz.f104),
@@ -838,14 +835,8 @@ const FLOW_LIST_FIELDS = 'f12,f14,f2,f3,f62,f184';
 
 async function fetchFlowList(fs: string, po: 0 | 1, count: number): Promise<FlowItem[]> {
   const url = `${EM_DELAY_BASE}/api/qt/clist/get?fid=f62&po=${po}&pz=${count}&pn=1&np=1&fltt=2&invt=2&fs=${fs}&fields=${FLOW_LIST_FIELDS}`;
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`资金排行接口错误 (${resp.status})`);
+  const diff = await fetchEmDiff(url, '资金排行接口错误', '未获取到资金排行数据');
 
-  const json = await resp.json();
-  const diff = json?.data?.diff;
-  if (!Array.isArray(diff)) throw new Error('未获取到资金排行数据');
-
-  const num = (v: unknown) => (typeof v === 'number' ? v : parseFloat(String(v)) || 0);
   return diff.map((it: any) => ({
     code: String(it.f12 || ''),
     name: String(it.f14 || ''),
@@ -881,14 +872,8 @@ export interface HotSector {
 // f128 龙头名称 / f140 龙头代码 / f136 龙头涨跌幅
 export async function fetchHotSectors(count = 10): Promise<HotSector[]> {
   const url = `${EM_DELAY_BASE}/api/qt/clist/get?fid=f3&po=1&pz=${count}&pn=1&np=1&fltt=2&invt=2&fs=m:90+t:2&fields=f12,f14,f3,f62,f184,f128,f136,f140`;
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`板块行情接口错误 (${resp.status})`);
+  const diff = await fetchEmDiff(url, '板块行情接口错误', '未获取到板块数据');
 
-  const json = await resp.json();
-  const diff = json?.data?.diff;
-  if (!Array.isArray(diff)) throw new Error('未获取到板块数据');
-
-  const num = (v: unknown) => (typeof v === 'number' ? v : parseFloat(String(v)) || 0);
   return diff
     .map((it: any) => ({
       code: String(it.f12 || ''),

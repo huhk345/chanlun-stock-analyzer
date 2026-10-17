@@ -47,7 +47,7 @@ export function loadWatchlist(): WatchItem[] {
   return [];
 }
 
-export function saveWatchlist(items: WatchItem[]) {
+function saveWatchlist(items: WatchItem[]) {
   try {
     localStorage.setItem(WATCHLIST_KEY, JSON.stringify(items));
   } catch { /* ignore */ }
@@ -66,10 +66,4 @@ export function removeFromWatchlist(items: WatchItem[], symbolKey: string): Watc
   const next = items.filter(it => it.symbolKey !== symbolKey);
   saveWatchlist(next);
   return next;
-}
-
-/** '000001.SZ' -> 'sz000001' (腾讯行情代码) */
-export function toTencentSymbol(symbolKey: string): string {
-  const [code, ex] = symbolKey.split('.');
-  return `${(ex || 'SZ').toLowerCase()}${code}`;
 }

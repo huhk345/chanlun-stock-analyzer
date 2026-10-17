@@ -47,6 +47,3 @@ export async function acquireTickFlowSlot(
     await new Promise((resolve) => setTimeout(resolve, delay));
   }
 }
-
-/** Exposed for tests / manual tuning. */
-export const TICKFLOW_MAX_PER_MIN = DEFAULT_MAX_PER_MIN;

@@ -27,13 +27,12 @@ import {
   resolveOrderShares,
   buildStrategyParams,
 } from '../src/utils/strategyAdapter.ts';
+import { computeChanlunStructures } from '../src/utils/chanlun.ts';
 import {
-  mergeKlines,
-  findFractions,
-  calculateStrokes,
-  calculateSegments,
-  calculateHubs,
-} from '../src/utils/chanlun.ts';
+  nextTradeId,
+  sharpeFromEquityCurve,
+  maxDrawdownFromEquityCurve,
+} from '../src/utils/backtestUtils.ts';
 type Kline = import('../src/types/stock.ts').Kline;
 import type { BacktestTradeSnapshot, UserStrategyDefinition, BacktestPositionState } from '../src/types/strategy.ts';
 
@@ -75,20 +74,6 @@ interface PortfolioBacktestResult {
   }>;
   equityCurve: number[];
   dates: string[];
-}
-
-// ---------------------------------------------------------------------------
-// Helper: ChanLun snapshot builder
-// ---------------------------------------------------------------------------
-
-function buildChanLunCache(klines: readonly Kline[]) {
-  const mutableKlines = [...klines];
-  const merged = mergeKlines(mutableKlines);
-  const fractions = findFractions(merged, mutableKlines);
-  const strokes = calculateStrokes(fractions);
-  const segments = calculateSegments(strokes);
-  const hubs = calculateHubs(strokes);
-  return { mergedKlines: merged, fractions, strokes, segments, hubs };
 }
 
 // ---------------------------------------------------------------------------
@@ -207,9 +192,6 @@ function runMultiStockBacktest(
 
   const equityCurve: number[] = [];
   const equityCurveDates: string[] = [];
-  let peakEquity = initialCash;
-  let maxDrawdownPct = 0;
-  let tradeCounter = 0;
 
   for (const date of allDates) {
     const isWarmup = date < startDate;
@@ -217,13 +199,10 @@ function runMultiStockBacktest(
     // Compute current portfolio equity using today's price (or last close if not trading today)
     const currentEquity = calculatePortfolioEquity(cash, positions, date, stockDataMap, stockDateIndex);
 
-    // Track equity and drawdown during trading period
+    // Track equity during trading period
     if (!isWarmup) {
       equityCurve.push(currentEquity);
       equityCurveDates.push(date);
-      if (currentEquity > peakEquity) peakEquity = currentEquity;
-      const dd = ((peakEquity - currentEquity) / peakEquity) * 100;
-      if (dd > maxDrawdownPct) maxDrawdownPct = dd;
     }
 
     // --- 1. Process SELL signals first ---
@@ -237,7 +216,7 @@ function runMultiStockBacktest(
       const slice = klines.slice(0, klineIdx + 1);
 
       // Build ChanLun if strategy requires it
-      const chanlun = strategy.requiresChanLun !== false ? buildChanLunCache(slice) : undefined;
+      const chanlun = strategy.requiresChanLun !== false ? computeChanlunStructures(slice) : undefined;
 
       const positionState: BacktestPositionState = {
         shares: pos.shares,
@@ -298,7 +277,7 @@ function runMultiStockBacktest(
           const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
 
           const trade: BacktestTradeSnapshot = {
-            id: `trade-${Date.now()}-${++tradeCounter}`,
+            id: nextTradeId(),
             date,
             action: 'SELL',
             price: klines[klineIdx].close,
@@ -351,7 +330,7 @@ function runMultiStockBacktest(
         if (klineIdx === undefined) continue; // stock not trading today
 
         const slice = klines.slice(0, klineIdx + 1);
-        const chanlun = strategy.requiresChanLun !== false ? buildChanLunCache(slice) : undefined;
+        const chanlun = strategy.requiresChanLun !== false ? computeChanlunStructures(slice) : undefined;
 
         const positionState: BacktestPositionState = {
           shares: 0,
@@ -448,7 +427,7 @@ function runMultiStockBacktest(
             pos.shares = totalShares;
 
             const trade: BacktestTradeSnapshot = {
-              id: `trade-${Date.now()}-${++tradeCounter}`,
+              id: nextTradeId(),
               date,
               action: 'BUY',
               price: sig.price,
@@ -484,18 +463,9 @@ function runMultiStockBacktest(
   const winningTrades = sellTrades.filter((t) => (t.pnl ?? 0) > 0).length;
   const winRate = sellTrades.length > 0 ? (winningTrades / sellTrades.length) * 100 : 0;
 
-  // Sharpe ratio
-  let sharpeRatio = 0;
-  if (equityCurve.length > 1) {
-    const dailyReturns: number[] = [];
-    for (let i = 1; i < equityCurve.length; i++) {
-      dailyReturns.push(equityCurve[i - 1] > 0 ? (equityCurve[i] - equityCurve[i - 1]) / equityCurve[i - 1] : 0);
-    }
-    const mean = dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length;
-    const variance = dailyReturns.reduce((a, b) => a + (b - mean) ** 2, 0) / dailyReturns.length;
-    const std = Math.sqrt(variance);
-    sharpeRatio = std > 0 ? (mean / std) * Math.sqrt(252) : 0;
-  }
+  // Sharpe ratio & max drawdown
+  const sharpeRatio = sharpeFromEquityCurve(equityCurve);
+  const maxDrawdownPct = maxDrawdownFromEquityCurve(equityCurve, initialCash);
 
   // Buy & Hold comparison
   let buyHoldReturnPct = 0;

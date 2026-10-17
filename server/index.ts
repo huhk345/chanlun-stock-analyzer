@@ -1,32 +1,22 @@
 /**
- * 缠论买卖点 / 选股 Node 后端
+ * 缠论 Node 后端
  *
  * 前端把 K 线数据 POST 到这里, 由服务端完成:
  *   - 缠论结构计算 (合并K线/分型/笔/线段/中枢)
  *   - 三类买卖点识别 (一买/二买/三买 + 一卖/二卖/三卖)
- *   - 选股信号评估 (用策略 decide() 对最新 K 线打 BUY/SELL/HOLD)
  *   - K 线拉取: GET /api/klines 由服务端访问腾讯行情 (默认, 免 Key) 并以
  *     TickFlow 作兜底, 本地磁盘缓存 + 增量更新 (前端不再直连免费接口)
- *   - 买卖点扫描: WebSocket /ws —— 前端只下发扫描请求, 数据拉取、
+ *   - 买卖点扫描: WebSocket /ws 前端只下发扫描请求, 数据拉取、
  *     缠论计算、信号行生成与资金流补充全部在服务端完成, 结果增量推送回前端
  *
  * 启动: pnpm server   (默认端口 8899, 可用 PORT 覆盖)
  */
 import http from 'node:http';
 import type { Kline } from '../src/types/stock.ts';
-import type { StrategyParamValue, StoredStrategy, UserStrategyDefinition } from '../src/types/strategy.ts';
-import {
-  mergeKlines,
-  findFractions,
-  calculateStrokes,
-  calculateSegments,
-  calculateHubs,
-  calculateBSPoints,
-} from '../src/utils/chanlun.ts';
-import { evaluateScreenerSignal } from '../src/utils/screener.ts';
+import { computeStrokesAndBSPoints, runChanlunPipeline } from '../src/utils/chanlun.ts';
 import { loadStrategies } from '../src/strategies/user/index.ts';
-import { parseStrategyCode } from '../src/utils/strategyLoader.ts';
-import { getKlines, type KlinePeriod } from './klines.ts';
+import { getKlines } from './klines.ts';
+import type { KlinePeriod } from '../src/utils/klineUtils.ts';
 import { attachWebSocketServer } from './ws.ts';
 import { handleScanConnection, WS_PATH } from './scanSocket.ts';
 import { getCacheSnapshot } from './scan.ts';
@@ -93,47 +83,6 @@ function isKlineArray(v: unknown): v is Kline[] {
 }
 
 // ---------------------------------------------------------------------------
-// 缠论流水线
-// ---------------------------------------------------------------------------
-
-function analyzeChanlun(klines: Kline[]) {
-  const mergedKlines = mergeKlines(klines);
-  const fractions = findFractions(mergedKlines, klines);
-  const strokes = calculateStrokes(fractions);
-  const segments = calculateSegments(strokes);
-  const hubs = calculateHubs(strokes);
-  const bsPoints = calculateBSPoints(klines, strokes);
-  return { mergedKlines, fractions, strokes, segments, hubs, bsPoints };
-}
-
-// ---------------------------------------------------------------------------
-// 选股策略解析: 内建策略 id, 或 AI 创建策略的源码字符串
-// ---------------------------------------------------------------------------
-
-interface StrategyRequest {
-  strategyId?: unknown;
-  strategyCode?: unknown;
-}
-
-async function resolveStrategy(req: StrategyRequest): Promise<UserStrategyDefinition> {
-  if (typeof req.strategyCode === 'string' && req.strategyCode.trim()) {
-    return parseStrategyCode(req.strategyCode, {} as StoredStrategy);
-  }
-  if (typeof req.strategyId === 'string' && req.strategyId) {
-    const strategies = await loadStrategies();
-    const found = strategies.find((s) => s.id === req.strategyId);
-    if (found) return found;
-    throw Object.assign(new Error(`unknown strategyId: ${req.strategyId}`), { statusCode: 404 });
-  }
-  throw Object.assign(new Error('strategyId or strategyCode required'), { statusCode: 400 });
-}
-
-function asParams(v: unknown): Record<string, StrategyParamValue> | undefined {
-  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
-  return v as Record<string, StrategyParamValue>;
-}
-
-// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -188,7 +137,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
   if (req.method === 'POST' && path === '/api/chanlun/analyze') {
     const body = await readJson<{ klines?: unknown }>(req);
     if (!isKlineArray(body.klines)) throw Object.assign(new Error('klines: Kline[] required'), { statusCode: 400 });
-    sendJson(res, 200, analyzeChanlun(body.klines));
+    sendJson(res, 200, runChanlunPipeline(body.klines));
     return;
   }
 
@@ -196,34 +145,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
     const body = await readJson<{ klines?: unknown }>(req);
     if (!isKlineArray(body.klines)) throw Object.assign(new Error('klines: Kline[] required'), { statusCode: 400 });
     // 买卖点只依赖 笔 (笔内部不依赖 线段/中枢), 跳过两遍计算保持扫描轻量
-    const strokes = calculateStrokes(findFractions(mergeKlines(body.klines), body.klines));
-    sendJson(res, 200, { strokes, bsPoints: calculateBSPoints(body.klines, strokes) });
-    return;
-  }
-
-  if (req.method === 'POST' && path === '/api/screener/evaluate') {
-    const body = await readJson<{ symbol?: unknown; klines?: unknown } & StrategyRequest>(req);
-    if (!isKlineArray(body.klines)) throw Object.assign(new Error('klines: Kline[] required'), { statusCode: 400 });
-    if (typeof body.symbol !== 'string' || !body.symbol) {
-      throw Object.assign(new Error('symbol required'), { statusCode: 400 });
-    }
-    const strategy = await resolveStrategy(body);
-    sendJson(res, 200, evaluateScreenerSignal(strategy, body.klines, body.symbol, asParams((body as { customParams?: unknown }).customParams)));
-    return;
-  }
-
-  if (req.method === 'POST' && path === '/api/screener/batch') {
-    const body = await readJson<{ stocks?: unknown } & StrategyRequest>(req);
-    if (!Array.isArray(body.stocks)) throw Object.assign(new Error('stocks required'), { statusCode: 400 });
-    const strategy = await resolveStrategy(body);
-    const customParams = asParams((body as { customParams?: unknown }).customParams);
-    const results = (body.stocks as Array<{ symbol?: unknown; klines?: unknown }>).map((s) => {
-      if (typeof s.symbol !== 'string' || !isKlineArray(s.klines)) {
-        return { symbol: String(s.symbol ?? ''), action: 'HOLD', error: 'bad-entry' };
-      }
-      return evaluateScreenerSignal(strategy, s.klines, s.symbol, customParams);
-    });
-    sendJson(res, 200, { results });
+    sendJson(res, 200, computeStrokesAndBSPoints(body.klines));
     return;
   }
 

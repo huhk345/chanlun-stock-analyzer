@@ -9,11 +9,11 @@ import AboutView from './components/AboutView';
 import StockInfoPanel from './components/StockInfoPanel';
 import MarketDashboard from './components/MarketDashboard';
 import IndexAnalysis from './components/IndexAnalysis';
-import StockScreener from './components/StockScreener';
 import { SupabaseUser } from './utils/supabase';
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade, BSPoint } from './types/stock';
 import { analyzeChanlunWithFallback } from './utils/analysisApi';
-import { fetchStockData, fetchStockBasicInfo, resolveSymbol, KlineTimeframe } from './utils/api';
+import { fetchStockData, fetchStockBasicInfo, KlineTimeframe } from './utils/api';
+import { resolveSymbol } from './utils/symbols';
 
 interface ReductionPlan {
   title: string;
@@ -37,7 +37,7 @@ const CHAT_RAIL_MAX = 800;
 const CHAT_RAIL_DEFAULT = 420;
 const NAVBAR_HEIGHT = 56;
 
-type ViewMode = 'dashboard' | 'indexes' | 'screener' | 'analyzer';
+type ViewMode = 'dashboard' | 'indexes' | 'analyzer';
 
 // Parse the current location into app routing state.
 // Mirrors the initial-view logic: presence of ?code= implies the analyzer view.
@@ -51,8 +51,6 @@ function parseAppUrl(): { view: ViewMode; code: string; timeframe: KlineTimefram
     view = 'analyzer';
   } else if (rawView === 'indexes') {
     view = 'indexes';
-  } else if (rawView === 'screener') {
-    view = 'screener';
   }
   return { view, code, timeframe };
 }
@@ -72,9 +70,6 @@ function syncAppUrl(
     url.searchParams.delete('code');
   } else if (view === 'indexes') {
     url.searchParams.set('view', 'indexes');
-    url.searchParams.delete('code');
-  } else if (view === 'screener') {
-    url.searchParams.set('view', 'screener');
     url.searchParams.delete('code');
   } else {
     url.searchParams.set('view', 'analyzer');
@@ -459,12 +454,6 @@ export default function App() {
         </main>
       )}
 
-      {/* Main Container - Strategy screener view */}
-      {view === 'screener' && (
-        <main className="flex-1 w-full px-[10px] py-[10px] md:px-6 md:py-6 lg:px-8">
-          <StockScreener onSelectStock={handleSearch} />
-        </main>
-      )}
       {/* Main Container - Chart + Backtest scroll under the fixed right rail */}
       {view === 'analyzer' && (
       <main

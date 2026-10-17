@@ -21,15 +21,9 @@ import {
 import domtoimage from 'dom-to-image-more';
 import { Kline, Stroke, Segment, Hub, Fraction } from '../types/stock';
 import { chatWithAIStream, ChatMessage, KlineTimeframe } from '../utils/api';
-import {
-  clearCachedModels,
-  fetchOpenRouterFreeModels,
-  getStoredSelectedModel,
-  setStoredSelectedModel,
-  resolveSelectedModel,
-  formatPricingLabel,
-  OpenRouterModel,
-} from '../utils/openrouter';
+import { hasAnyAiApiKey } from '../utils/apiKeys';
+import { useAiModelSelector } from '../hooks/useAiModelSelector';
+import { formatPricingLabel } from '../utils/openrouter';
 import ConfirmDialog from './ConfirmDialog';
 
 interface GeminiAdvisorProps {
@@ -58,27 +52,6 @@ const SUGGESTED_QUESTIONS: { category: string; icon: string; text: string }[] = 
   { category: '对比', icon: '🧪', text: 'MACD / 均线 / 布林带 是否与缠论结构互相印证?' },
 ];
 
-function getApiKey(key: string): string {
-  try {
-    const savedKeys = localStorage.getItem('api_keys');
-    if (savedKeys) {
-      const keys = JSON.parse(savedKeys);
-      if (keys[key]) return keys[key];
-    }
-  } catch {
-    // ignore
-  }
-  return '';
-}
-
-function getOpenRouterApiKey(): string {
-  return getApiKey('openrouter') || import.meta.env.VITE_OPENROUTER_API_KEY || '';
-}
-
-function getGeminiApiKey(): string {
-  return getApiKey('gemini') || import.meta.env.VITE_GEMINI_API_KEY || '';
-}
-
 export default function GeminiAdvisor({
   symbol,
   klines,
@@ -89,12 +62,20 @@ export default function GeminiAdvisor({
   timeframe = 'daily',
   onClose,
 }: GeminiAdvisorProps) {
-  // Model catalog + selection
-  const [models, setModels] = useState<OpenRouterModel[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<string>('');
-  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
-  const [modelFilter, setModelFilter] = useState('');
+  // 模型选择器 (加载/刷新/持久化/过滤)
+  const {
+    selectedModel,
+    modelsLoading,
+    modelDropdownOpen,
+    setModelDropdownOpen,
+    modelFilter,
+    setModelFilter,
+    modelDropdownRef,
+    filteredModels,
+    selectedModelMeta,
+    handleSelectModel,
+    handleRefreshModels,
+  } = useAiModelSelector(true);
 
   // AI context controls
   const [recentWindow] = useState<number>(90);
@@ -112,49 +93,7 @@ export default function GeminiAdvisor({
   const [shareStatus, setShareStatus] = useState<'idle' | 'generating' | 'success' | 'error'>('idle');
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
-  const modelDropdownRef = useRef<HTMLDivElement | null>(null);
-
-  const hasApiKey = useMemo(() => Boolean(getOpenRouterApiKey()) || Boolean(getGeminiApiKey()), []);
-
-  // Fetch free OpenRouter models on mount (or whenever the key changes).
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      setModelsLoading(true);
-      try {
-        const list = await fetchOpenRouterFreeModels(getOpenRouterApiKey());
-        if (cancelled) return;
-        setModels(list);
-        const stored = getStoredSelectedModel();
-        const initial = stored && list.some((m) => m.id === stored)
-          ? stored
-          : resolveSelectedModel(list);
-        setSelectedModel(initial);
-        if (initial) setStoredSelectedModel(initial);
-      } catch (err: any) {
-        if (cancelled) return;
-        console.error('Failed to load models:', err);
-      } finally {
-        if (!cancelled) setModelsLoading(false);
-      }
-    };
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [hasApiKey]);
-
-  // Close dropdown on outside click.
-  useEffect(() => {
-    if (!modelDropdownOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (modelDropdownRef.current && !modelDropdownRef.current.contains(e.target as Node)) {
-        setModelDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [modelDropdownOpen]);
+  const hasApiKey = useMemo(hasAnyAiApiKey, []);
 
   // Auto-scroll the chat window to the latest message.
   useEffect(() => {
@@ -170,30 +109,6 @@ export default function GeminiAdvisor({
     setChatError('');
     setStreamingContent('');
   }, [symbol]);
-
-  const handleSelectModel = (modelId: string) => {
-    setSelectedModel(modelId);
-    setStoredSelectedModel(modelId);
-    setModelDropdownOpen(false);
-  };
-
-  const handleRefreshModels = async () => {
-    setModelsLoading(true);
-    clearCachedModels();
-    try {
-      const list = await fetchOpenRouterFreeModels(getOpenRouterApiKey());
-      setModels(list);
-      if (!list.some((m) => m.id === selectedModel)) {
-        const fallback = resolveSelectedModel(list);
-        setSelectedModel(fallback);
-        setStoredSelectedModel(fallback);
-      }
-    } catch (err: any) {
-      console.error('Failed to refresh models:', err);
-    } finally {
-      setModelsLoading(false);
-    }
-  };
 
   // -------------------------------------------------------------------------
   // Chat handlers
@@ -366,19 +281,6 @@ export default function GeminiAdvisor({
     }
     setTimeout(() => setShareStatus('idle'), 2000);
   }, [symbol]);
-
-  const filteredModels = useMemo(() => {
-    const q = modelFilter.trim().toLowerCase();
-    if (!q) return models;
-    return models.filter(
-      (m) => m.id.toLowerCase().includes(q) || (m.name || '').toLowerCase().includes(q),
-    );
-  }, [models, modelFilter]);
-
-  const selectedModelMeta = useMemo(
-    () => models.find((m) => m.id === selectedModel),
-    [models, selectedModel],
-  );
 
   const renderFormattedReport = useCallback((rawText: string, isImage = false) => {
     if (!rawText) return null;

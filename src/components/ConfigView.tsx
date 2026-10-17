@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Settings, Key, CheckCircle2, AlertTriangle, Eye, EyeOff, X } from 'lucide-react';
+import { getApiKey } from '../utils/apiKeys';
 
 interface ConfigViewProps {
   isOpen: boolean;
@@ -31,14 +32,12 @@ export default function ConfigView({ isOpen, onClose }: ConfigViewProps) {
 
   // Load keys from localStorage on mount
   useEffect(() => {
-    const savedKeys = localStorage.getItem('api_keys');
-    if (savedKeys) {
-      try {
-        setApiKeys(JSON.parse(savedKeys));
-      } catch (e) {
-        console.error('Failed to parse saved API keys');
-      }
-    }
+    setApiKeys({
+      tickflow: getApiKey('tickflow'),
+      gemini: getApiKey('gemini'),
+      openrouter: getApiKey('openrouter'),
+      twelvedata: getApiKey('twelvedata'),
+    });
   }, []);
 
   const handleSave = () => {

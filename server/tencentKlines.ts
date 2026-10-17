@@ -28,7 +28,9 @@
  * 因此本地缓存 (.cache/klines/) 可直接复用, 无需清空重建。
  */
 import type { Kline } from '../src/types/stock.ts';
-import type { KlinePeriod } from './klines.ts';
+import { sleep } from '../src/utils/async.ts';
+import { mergeKlinesByDate, sanitizeKlines, type KlinePeriod } from '../src/utils/klineUtils.ts';
+import { toTencentSymbol } from '../src/utils/symbols.ts';
 
 interface TencentHost {
   base: string;
@@ -59,8 +61,6 @@ const HOST_COOLDOWN_MS = 120_000;
  * 可用 TENCENT_RPS 环境变量覆盖。
  */
 const RPS = Math.max(1, parseFloat(process.env.TENCENT_RPS || '') || 15);
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** A 股成交量单位是"手", 1 手 = 100 股 */
 const SHARES_PER_LOT = 100;
@@ -106,24 +106,8 @@ async function acquireToken(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// symbol / 参数转换
+// 参数转换
 // ---------------------------------------------------------------------------
-
-/**
- * symbolKey -> 腾讯代码: '000001.SZ' -> 'sz000001', '600519.SH' -> 'sh600519'。
- * 非 A 股代码 (hk00700 / usAAPL.OQ 等) 原样返回, 由腾讯自行识别。
- * 注意必须按后缀判定交易所: 000001.SZ 是平安银行, 000001.SH 才是上证指数。
- */
-export function toTencentSymbol(symbol: string): string {
-  const dot = symbol.lastIndexOf('.');
-  if (dot < 0) return symbol;
-  const code = symbol.slice(0, dot);
-  const market = symbol.slice(dot + 1).toUpperCase();
-  if (market === 'SH') return `sh${code}`;
-  if (market === 'SZ') return `sz${code}`;
-  if (market === 'BJ') return `bj${code}`;
-  return symbol;
-}
 
 /** 复权口径 -> 腾讯 param 末位后缀 (forward/qfq = 前复权) */
 function adjustSuffix(adjust: string): string {
@@ -136,15 +120,6 @@ function adjustSuffix(adjust: string): string {
 /** 周期 -> 腾讯粒度参数 */
 function granularityOf(period: KlinePeriod): string {
   return period === '1w' ? 'week' : 'day';
-}
-
-/** 修正个别数据源 high/low 与 open/close 交叉的脏数据 */
-function sanitize(klines: Kline[]): Kline[] {
-  return klines.map((k) => ({
-    ...k,
-    high: Math.max(k.open, k.high, k.low, k.close),
-    low: Math.min(k.open, k.high, k.low, k.close),
-  }));
 }
 
 /**
@@ -176,7 +151,7 @@ function parseRows(rows: unknown): Kline[] {
       amount: realAmount > 0 ? realAmount * AMOUNT_UNIT : close * volume * SHARES_PER_LOT,
     });
   }
-  return sanitize(out);
+  return sanitizeKlines(out);
 }
 
 /** 不可重试的错误: 请求本身有问题 (代码非法 / 上游确实无数据), 重试只是浪费时间 */
@@ -277,14 +252,6 @@ async function requestKlines(txSymbol: string, period: KlinePeriod, count: numbe
   throw lastError ?? new Error(`获取 ${txSymbol} K线失败`);
 }
 
-/** 按日期升序去重合并 (新数据覆盖同日期旧数据) */
-function mergeByDate(prev: Kline[], next: Kline[]): Kline[] {
-  const byDate = new Map<string, Kline>();
-  for (const k of prev) byDate.set(k.date, k);
-  for (const k of next) byDate.set(k.date, k);
-  return [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-}
-
 /**
  * 拉取 K 线 (腾讯)。
  *
@@ -316,7 +283,7 @@ export async function fetchTencentKlines(
       if (err instanceof FatalTencentError) break; // 上游没有更早的数据了
       throw err;
     }
-    const merged = mergeByDate(collected, next);
+    const merged = mergeKlinesByDate(collected, next);
     if (merged.length === collected.length) break; // 没有新数据, 避免死循环
     collected = merged;
   }
