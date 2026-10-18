@@ -1,4 +1,5 @@
-node_modules/
+# no trailing slash: also ignores a node_modules symlink (e.g. in git worktrees)
+node_modules
 package-lock.json
 build/
 dist/
