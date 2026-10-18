@@ -132,7 +132,7 @@ export function toTencentSymbol(symbol: string): string {
   if (dot < 0) return symbol;
   const code = symbol.slice(0, dot);
   const market = symbol.slice(dot + 1).toUpperCase();
-  if (market === 'SH') return `sh${code}`;
+  if (market === 'SH' || market === 'SS') return `sh${code}`;
   if (market === 'SZ') return `sz${code}`;
   if (market === 'BJ') return `bj${code}`;
   return symbol;

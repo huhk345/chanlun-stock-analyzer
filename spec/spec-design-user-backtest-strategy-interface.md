@@ -599,8 +599,8 @@ export interface BacktestStepState {
   positionBefore: BacktestPositionState;
   /** Position state after applying the current step's decision */
   positionAfter: BacktestPositionState;
-  /** Trade executed at this step (if any) */
-  tradeExecuted: BacktestTradeSnapshot | null;
+  /** Trades executed at this step (盘中止损先行, 随后是 BUY/SELL 决策成交; 均为当根收盘价口径) */
+  tradesExecuted: BacktestTradeSnapshot[];
   /** Indicator values at the current step */
   indicatorSnapshot: Readonly<IndicatorCache> | null;
   /** ChanLun analysis at the current step */
@@ -637,6 +637,8 @@ export type BacktestStepper = {
   runAll(): RunBacktestOutput;
   /** Get the current step state without advancing */
   getCurrentState(): BacktestStepState;
+  /** Get all trades executed so far (完整成交账本, 与批量回测同口径) */
+  getTrades(): BacktestTrade[];
   /** Whether the stepper has been initialized */
   isStarted: boolean;
 };

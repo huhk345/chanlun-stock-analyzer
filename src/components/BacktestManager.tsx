@@ -203,6 +203,14 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
     }
   };
 
+  const stepperRef = useRef<ReturnType<typeof createBacktestStepper> | null>(null);
+
+  // 单步运行中的全部成交 (页面「全部成交」账本)
+  const [ledgerTrades, setLedgerTrades] = useState<BacktestTrade[]>([]);
+  const syncLedger = useCallback(() => {
+    setLedgerTrades(stepperRef.current ? stepperRef.current.getTrades() : []);
+  }, []);
+
   const handleStartStepper = () => {
     if (!selectedStrategy) return;
     setStepperMode(true);
@@ -228,15 +236,15 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
 
     // Store stepper ref for later use
     stepperRef.current = stepper;
+    syncLedger();
   };
-
-  const stepperRef = useRef<ReturnType<typeof createBacktestStepper> | null>(null);
 
   const handleStepForward = () => {
     if (!stepperRef.current) return;
     const state = stepperRef.current.stepForward();
     setStepState(state);
     setJumpToIndex(String(state.currentStepIndex));
+    syncLedger();
   };
 
   const handleStepBackward = () => {
@@ -244,6 +252,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
     const state = stepperRef.current.stepBackward();
     setStepState(state);
     setJumpToIndex(String(state.currentStepIndex));
+    syncLedger();
   };
 
   const handleJumpTo = () => {
@@ -253,6 +262,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
     const state = stepperRef.current.jumpTo(index);
     setStepState(state);
     setJumpToIndex(String(state.currentStepIndex));
+    syncLedger();
   };
 
   const handleRunAll = () => {
@@ -263,12 +273,14 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
     onBacktestResult?.(result.trades);
     setStepperMode(false);
     setStepState(null);
+    syncLedger();
   };
 
   const handleResetStepper = () => {
     stepperRef.current = null;
     setStepperMode(false);
     setStepState(null);
+    setLedgerTrades([]);
     onBacktestResult?.([]);
     setJumpToIndex('0');
   };
@@ -636,7 +648,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
                   </div>
 
                   <div className="p-3 bg-zinc-900 rounded-xl border border-zinc-800/80">
-                    <span className="text-[10px] text-zinc-500 font-mono uppercase">策略决策</span>
+                    <span className="text-[10px] text-zinc-500 font-mono uppercase">策略决策 (收盘评估 · 收盘价成交)</span>
                     <div className="mt-1">
                       {stepState.decision ? (
                         <div className="space-y-1">
@@ -704,23 +716,27 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
                 </div>
               </div>
 
-              {stepState.tradeExecuted && (
+              {stepState.tradesExecuted.length > 0 && (
                 <div className="p-3 bg-zinc-900 rounded-xl border border-zinc-800/80">
-                  <span className="text-[10px] text-zinc-500 font-mono uppercase">成交记录</span>
-                  <div className="mt-1 flex items-center gap-3 text-xs font-mono">
-                    <span className={`px-2 py-0.5 rounded text-[11px] font-extrabold ${
-                      stepState.tradeExecuted.action === 'BUY'
-                        ? 'bg-blue-950/30 text-blue-400 border border-blue-900/20'
-                        : 'bg-red-950/30 text-red-400 border border-red-900/20'
-                    }`}>
-                      {stepState.tradeExecuted.action}
-                    </span>
-                    <span className="text-zinc-400">{stepState.tradeExecuted.date}</span>
-                    <span className="text-zinc-300">¥{fmt(stepState.tradeExecuted.price)} × {stepState.tradeExecuted.shares}</span>
-                    <span className="text-zinc-500">= ¥{fmt(stepState.tradeExecuted.value)}</span>
-                    {stepState.tradeExecuted.reason && (
-                      <span className="text-zinc-500 font-sans text-[11px]">({stepState.tradeExecuted.reason})</span>
-                    )}
+                  <span className="text-[10px] text-zinc-500 font-mono uppercase">成交记录 (当根收盘价 / 盘中止损)</span>
+                  <div className="mt-1 space-y-1">
+                    {stepState.tradesExecuted.map((t, i) => (
+                      <div key={`step-trade-${t.id}-${i}`} className="flex items-center gap-3 text-xs font-mono flex-wrap">
+                        <span className={`px-2 py-0.5 rounded text-[11px] font-extrabold ${
+                          t.action === 'BUY'
+                            ? 'bg-blue-950/30 text-blue-400 border border-blue-900/20'
+                            : 'bg-red-950/30 text-red-400 border border-red-900/20'
+                        }`}>
+                          {t.action}
+                        </span>
+                        <span className="text-zinc-400">{t.date}</span>
+                        <span className="text-zinc-300">¥{fmt(t.price)} × {t.shares}</span>
+                        <span className="text-zinc-500">= ¥{fmt(t.value)}</span>
+                        {t.reason && (
+                          <span className="text-zinc-500 font-sans text-[11px]">({t.reason})</span>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -733,6 +749,35 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
                       <span className="text-amber-400">{d.message}</span>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {ledgerTrades.length > 0 && (
+                <div className="p-3 bg-zinc-900 rounded-xl border border-zinc-800/80">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-zinc-500 font-mono uppercase">全部成交 ({ledgerTrades.length})</span>
+                    <span className="text-[10px] text-zinc-600 font-sans">本次运行至今的完整账本</span>
+                  </div>
+                  <div className="mt-2 max-h-44 overflow-y-auto space-y-1 pr-1">
+                    {ledgerTrades.map((t, i) => (
+                      <div key={`led-${t.id}-${i}`} className="flex items-center gap-2 text-[11px] font-mono">
+                        <span className="text-zinc-500 w-20 shrink-0">{t.date}</span>
+                        <span className={`w-8 shrink-0 text-center rounded text-[10px] font-extrabold ${
+                          t.type === 'BUY' ? 'bg-blue-950/30 text-blue-400' : 'bg-red-950/30 text-red-400'
+                        }`}>{t.type === 'BUY' ? '买' : '卖'}</span>
+                        <span className="text-zinc-300 shrink-0">¥{fmt(t.price)} × {t.shares}</span>
+                        <span className="text-zinc-500 shrink-0">= ¥{fmt(t.value)}</span>
+                        {t.pnl !== undefined && (
+                          <span className={`shrink-0 ${t.pnl >= 0 ? 'text-blue-400' : 'text-red-400'}`}>
+                            {t.pnl >= 0 ? '+' : ''}¥{fmt(t.pnl)}
+                          </span>
+                        )}
+                        <span className="text-zinc-600 font-sans truncate" title={t.reason ?? t.signalType}>
+                          {t.reason ?? t.signalType}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 

@@ -1,4 +1,4 @@
-import type { Kline, Stroke, Segment, Hub, Fraction } from './stock';
+import type { Kline, Stroke, Segment, Hub, Fraction, BacktestTrade } from './stock';
 
 // ---------------------------------------------------------------------------
 // Strategy timeframe & parameter types
@@ -186,6 +186,8 @@ export interface BacktestDiagnostic {
 export interface RunBacktestOutput {
   result: import('./stock').BacktestResult;
   diagnostics: readonly BacktestDiagnostic[];
+  /** 每日收盘时的权益曲线 (用于绘制权益曲线图 / 计算回撤) */
+  equityCurve?: number[];
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +261,8 @@ export interface BacktestStepState {
   accountAfter: BacktestAccountState;
   positionBefore: BacktestPositionState;
   positionAfter: BacktestPositionState;
-  tradeExecuted: BacktestTradeSnapshot | null;
+  /** 当根 K 线产生的全部成交 (盘中止损先行, 随后是 BUY/SELL 决策的成交) */
+  tradesExecuted: BacktestTradeSnapshot[];
   indicatorSnapshot: Readonly<IndicatorCache> | null;
   chanlunSnapshot: Readonly<ChanLunCache> | null;
   diagnostics: readonly BacktestDiagnostic[];
@@ -287,5 +290,7 @@ export type BacktestStepper = {
   jumpTo(index: number): BacktestStepState;
   runAll(): RunBacktestOutput;
   getCurrentState(): BacktestStepState;
+  /** 当前已成交的全部交易 (与批量回测 runBacktest 同一账本) */
+  getTrades(): BacktestTrade[];
   isStarted: boolean;
 };

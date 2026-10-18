@@ -1,127 +1,39 @@
-import type { Kline, BacktestTrade, BacktestResult } from '../types/stock';
+import type { BacktestTrade, BacktestResult } from '../types/stock';
 import type {
   RunBacktestInput,
   RunBacktestOutput,
   BacktestDiagnostic,
-  BacktestAccountState,
-  BacktestPositionState,
   UserStrategyInput,
   UserStrategyDecision,
 } from '../types/strategy';
-import { buildStrategyParams, validateDecision, resolveOrderShares, calcAStockFees, isLimitUp, isLimitDown } from './strategyAdapter';
+import { buildStrategyParams, validateDecision } from './strategyAdapter';
 import { computeIndicatorValues } from './indicatorAdapter';
 import { loadStoredIndicators } from './indicatorLoader';
 import { computeChanlunStructures } from './chanlun';
 import {
-  nextTradeId,
   tradesToSnapshots,
   sharpeFromEquityCurve,
   maxDrawdownFromEquityCurve,
 } from './backtestUtils';
+import {
+  createInitialAccount,
+  createInitialPosition,
+  executeDecisionAtClose,
+  executeProtectiveStop,
+} from './backtestExecution';
 
 // ---------------------------------------------------------------------------
-// Helper: create initial account state
+// 兼容导出: 账户/持仓状态工具已迁移到 backtestExecution.ts (单步回测共用),
+// 这里继续转发, 避免既有导入路径失效。
 // ---------------------------------------------------------------------------
 
-export function createInitialAccount(initialCash: number, currency: string): BacktestAccountState {
-  return {
-    initialCash,
-    cash: initialCash,
-    equity: initialCash,
-    currency,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Helper: create initial position state
-// ---------------------------------------------------------------------------
-
-export function createInitialPosition(): BacktestPositionState {
-  return {
-    shares: 0,
-    averageCost: 0,
-    marketValue: 0,
-    unrealizedPnl: 0,
-    unrealizedPnlPercent: 0,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Helper: update account equity after a trade
-// ---------------------------------------------------------------------------
-
-export function updateAccountAfterTrade(
-  account: BacktestAccountState,
-  position: BacktestPositionState,
-  currentPrice: number,
-): BacktestAccountState {
-  const marketValue = position.shares * currentPrice;
-  const equity = account.cash + marketValue;
-  return {
-    ...account,
-    equity,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Helper: update position after a BUY
-// ---------------------------------------------------------------------------
-
-export function updatePositionAfterBuy(
-  position: BacktestPositionState,
-  shares: number,
-  price: number,
-): BacktestPositionState {
-  const totalCost = position.averageCost * position.shares + price * shares;
-  const totalShares = position.shares + shares;
-  const averageCost = totalShares > 0 ? totalCost / totalShares : 0;
-  const marketValue = totalShares * price;
-  const unrealizedPnl = marketValue - totalCost;
-  const unrealizedPnlPercent = totalCost > 0 ? (unrealizedPnl / totalCost) * 100 : 0;
-
-  return {
-    shares: totalShares,
-    averageCost,
-    marketValue,
-    unrealizedPnl,
-    unrealizedPnlPercent,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Helper: update position after a SELL
-// ---------------------------------------------------------------------------
-
-export function updatePositionAfterSell(
-  position: BacktestPositionState,
-  shares: number,
-  price: number,
-): { position: BacktestPositionState; realizedPnl: number } {
-  const sellValue = shares * price;
-  const costBasis = shares * position.averageCost;
-  const realizedPnl = sellValue - costBasis;
-
-  const remainingShares = position.shares - shares;
-  const marketValue = remainingShares * price;
-  const remainingCost = remainingShares * position.averageCost;
-  const unrealizedPnl = marketValue - remainingCost;
-  const unrealizedPnlPercent = remainingCost > 0 ? (unrealizedPnl / remainingCost) * 100 : 0;
-
-  return {
-    position: {
-      shares: remainingShares,
-      averageCost: position.averageCost,
-      marketValue,
-      unrealizedPnl,
-      unrealizedPnlPercent,
-    },
-    realizedPnl,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Main: runBacktest
-// ---------------------------------------------------------------------------
+export {
+  createInitialAccount,
+  createInitialPosition,
+  updateAccountAfterTrade,
+  updatePositionAfterBuy,
+  updatePositionAfterSell,
+} from './backtestExecution';
 
 export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
   const {
@@ -193,55 +105,34 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
   // Track daily equity for Sharpe ratio
   const equityCurve: number[] = [];
 
-  // Iterate from oldest (index 0) to newest
+  // 迭代方向: 从最旧到最新; 信号当根收盘价成交 (全程不使用未来数据)
   for (let i = 0; i < klines.length; i++) {
     const currentKline = klines[i];
     const currentPrice = currentKline.close;
+    const prevClose = i > 0 ? klines[i - 1].close : null;
 
-    // Record equity at this step
-    const currentEquity = account.cash + position.shares * currentPrice;
-    equityCurve.push(currentEquity);
-
-    // --- Stop-loss check (before strategy decision) ---
+    // --- 1) 固定止损 (盘中止损单) ---
+    // 在当日买入成交之前执行, 结构上不会卖出当日买入的股份 → 天然满足 T+1
     if (stopLossPercent !== undefined && position.shares > 0) {
-      const stopPrice = position.averageCost * (1 - stopLossPercent / 100);
-      if (currentPrice < stopPrice) {
-        // Force sell all shares
-        const sellShares = position.shares;
-        const sellValue = sellShares * currentPrice;
-        const { position: newPosition, realizedPnl } = updatePositionAfterSell(position, sellShares, currentPrice);
-        account = { ...account, cash: account.cash + sellValue };
-        account = updateAccountAfterTrade(account, newPosition, currentPrice);
-        position = newPosition;
-
-        const pnlPercent = position.averageCost > 0
-          ? (realizedPnl / (sellShares * position.averageCost)) * 100
-          : 0;
-
-        trades.push({
-          id: nextTradeId(),
-          type: 'SELL',
-          signalType: 'stop-loss',
-          reason: `触发固定止损 ${stopLossPercent}%`,
-          price: currentPrice,
-          date: currentKline.date,
-          shares: sellShares,
-          value: sellValue,
-          pnl: realizedPnl,
-          pnlPercent,
-        });
-
-        diagnostics.push({
-          date: currentKline.date,
-          level: 'warning',
-          message: `Stop-loss triggered at ${currentPrice.toFixed(2)} (threshold ${stopPrice.toFixed(2)})`,
-        });
-
-        // Continue to next kline after stop-loss
-        continue;
-      }
+      const exec = executeProtectiveStop({
+        bar: currentKline,
+        prevClose,
+        symbol,
+        stopLossPercent,
+        sellableShares: position.shares,
+        account,
+        position,
+        commissionRate,
+        minCommission,
+      });
+      account = exec.account;
+      position = exec.position;
+      totalFees += exec.fee;
+      if (exec.trade) trades.push(exec.trade);
+      diagnostics.push(...exec.diagnostics);
     }
 
+    // --- 2) 策略决策: 只用截止当根的数据 (klines.slice(0, i + 1)); 决策以当根收盘价成交 ---
     // --- Build strategy input ---
     const klinesSlice = klines.slice(0, i + 1);
     const strategyInput: UserStrategyInput = {
@@ -319,110 +210,32 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
           message: `Invalid decision: ${errMsg}`,
         });
       }
-      // Skip execution for invalid decision
-      continue;
+      // 无效决策按 HOLD 处理 (不产生交易)
+      decision = { action: 'HOLD' };
     }
 
-    // --- HOLD → nothing to do ---
-    if (decision.action === 'HOLD') {
-      continue;
-    }
-
-    // --- BUY or SELL ---
-    const { shares, actualValue, warnings } = resolveOrderShares(
-      decision,
-      account,
-      position,
-      currentPrice,
-    );
-
-    for (const w of warnings) {
-      diagnostics.push({ date: currentKline.date, level: 'warning', message: w });
-    }
-
-    if (shares <= 0) {
-      continue;
-    }
-
-    // --- Limit up/down checks ---
-    if (decision.action === 'BUY' && isLimitUp(currentKline, klines, symbol)) {
-      diagnostics.push({
-        date: currentKline.date,
-        level: 'warning',
-        message: `Buy blocked: stock is at 涨停 (limit-up) at ${currentPrice.toFixed(2)}`,
+    // --- 3) BUY / SELL → 以当根收盘价立即成交 (尾盘/收盘竞价模型) ---
+    if (decision.action !== 'HOLD') {
+      const exec = executeDecisionAtClose({
+        decision,
+        bar: currentKline,
+        prevClose,
+        symbol,
+        account,
+        position,
+        commissionRate,
+        minCommission,
+        strategyLabel: strategy.id || strategy.name,
       });
-      continue;
+      account = exec.account;
+      position = exec.position;
+      totalFees += exec.fee;
+      if (exec.trade) trades.push(exec.trade);
+      diagnostics.push(...exec.diagnostics);
     }
 
-    if (decision.action === 'SELL' && isLimitDown(currentKline, klines, symbol)) {
-      diagnostics.push({
-        date: currentKline.date,
-        level: 'warning',
-        message: `Sell blocked: stock is at 跌停 (limit-down) at ${currentPrice.toFixed(2)}`,
-      });
-      continue;
-    }
-
-    // Execute fill at current close price
-    if (decision.action === 'BUY') {
-      const cost = shares * currentPrice;
-      // Clamp: no negative cash
-      if (cost > account.cash) {
-        continue;
-      }
-
-      const fee = calcAStockFees(cost, true, commissionRate, minCommission);
-      totalFees += fee;
-
-      position = updatePositionAfterBuy(position, shares, currentPrice);
-      account = { ...account, cash: account.cash - cost - fee };
-      account = updateAccountAfterTrade(account, position, currentPrice);
-
-      trades.push({
-        id: nextTradeId(),
-        type: 'BUY',
-        signalType: strategy.id || strategy.name,
-        reason: decision.reason,
-        confidence: decision.confidence,
-        price: currentPrice,
-        date: currentKline.date,
-        shares,
-        value: cost,
-        fee,
-      });
-    } else if (decision.action === 'SELL') {
-      // Clamp: no negative shares (long-only)
-      const sellShares = Math.min(shares, position.shares);
-      if (sellShares <= 0) continue;
-
-      const sellValue = sellShares * currentPrice;
-      const fee = calcAStockFees(sellValue, false, commissionRate, minCommission);
-      totalFees += fee;
-
-      const { position: newPosition, realizedPnl } = updatePositionAfterSell(position, sellShares, currentPrice);
-      account = { ...account, cash: account.cash + sellValue - fee };
-      account = updateAccountAfterTrade(account, newPosition, currentPrice);
-      position = newPosition;
-
-      const pnlPercent = position.averageCost > 0
-        ? (realizedPnl / (sellShares * position.averageCost)) * 100
-        : 0;
-
-      trades.push({
-        id: nextTradeId(),
-        type: 'SELL',
-        signalType: strategy.id || strategy.name,
-        reason: decision.reason,
-        confidence: decision.confidence,
-        price: currentPrice,
-        date: currentKline.date,
-        shares: sellShares,
-        value: sellValue,
-        fee,
-        pnl: realizedPnl,
-        pnlPercent,
-      });
-    }
+    // --- 4) 记录当日收盘权益 (当日全部成交之后) ---
+    equityCurve.push(account.cash + position.shares * currentPrice);
   }
 
   // --- Calculate final result ---
@@ -465,5 +278,5 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
     createdAt: new Date().toISOString(),
   };
 
-  return { result, diagnostics };
+  return { result, diagnostics, equityCurve };
 }

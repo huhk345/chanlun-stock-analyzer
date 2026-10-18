@@ -11,22 +11,17 @@ import type {
   UserStrategyInput,
   UserStrategyDecision,
 } from '../types/strategy';
-import { buildStrategyParams, validateDecision, resolveOrderShares, calcAStockFees, isLimitUp, isLimitDown } from './strategyAdapter';
+import { buildStrategyParams, validateDecision } from './strategyAdapter';
 import { computeIndicatorValues } from './indicatorAdapter';
 import { loadStoredIndicators } from './indicatorLoader';
 import {
   createInitialAccount,
   createInitialPosition,
-  updateAccountAfterTrade,
-  updatePositionAfterBuy,
-  updatePositionAfterSell,
-} from './backtestRunner';
+  executeDecisionAtClose,
+  executeProtectiveStop,
+} from './backtestExecution';
 import { computeChanlunStructures } from './chanlun';
-import {
-  nextTradeId,
-  tradesToSnapshots,
-  sharpeFromReturns,
-} from './backtestUtils';
+import { tradesToSnapshots, sharpeFromReturns } from './backtestUtils';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -44,8 +39,22 @@ function cloneTrades(trades: BacktestTrade[]): BacktestTrade[] {
   return trades.map((t) => ({ ...t }));
 }
 
+function tradeToStepSnapshot(trade: BacktestTrade): BacktestTradeSnapshot {
+  return {
+    id: trade.id,
+    date: trade.date,
+    action: trade.type,
+    price: trade.price,
+    shares: trade.shares,
+    value: trade.value,
+    fee: trade.fee,
+    reason: trade.reason ?? trade.signalType,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Saved state for backward navigation
+// history[i] = 「处理第 i 根 K 线之前」的完整状态
 // ---------------------------------------------------------------------------
 
 interface SavedState {
@@ -54,12 +63,22 @@ interface SavedState {
   position: BacktestPositionState;
   trades: BacktestTrade[];
   strategyStopped: boolean;
+  consecutiveErrors: number;
+  hasDecidedOnce: boolean;
   diagnostics: BacktestDiagnostic[];
   totalFees: number;
 }
 
 // ---------------------------------------------------------------------------
 // Factory: createBacktestStepper
+//
+// 成交模型与 runBacktest 完全一致 (见 backtestExecution.ts 顶部说明):
+//   1) 策略只用截止当根的数据决策, 并以【当根收盘价】成交 (尾盘/收盘竞价模型);
+//   2) 涨停收盘无法按收盘价买 / 跌停收盘无法按收盘价卖;
+//   3) 固定止损 = 盘中止损单 (跳空按开盘, 一字跌停顺延);
+//   4) T+1: 当日买入当日不可卖 (盘中止损在当日买入成交之前执行)。
+// 因此: 第 i 步展示的 decision 与 tradesExecuted 都是「当根收盘」这一时点的
+// 决策与成交 (止损先于买入执行, tradesExecuted 可能同时含止损与买卖成交)。
 // ---------------------------------------------------------------------------
 
 export function createBacktestStepper(input: BacktestStepperInput): BacktestStepper {
@@ -106,12 +125,28 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
   let lastStepState: BacktestStepState | null = null;
 
   // -----------------------------------------------------------------------
+  // 重置到初始状态
+  // -----------------------------------------------------------------------
+
+  function resetToInitialState(): void {
+    account = createInitialAccount(initialCash, currency);
+    position = createInitialPosition();
+    trades = [];
+    strategyStopped = false;
+    consecutiveErrors = 0;
+    hasDecidedOnce = false;
+    diagnostics = [];
+    totalFees = 0;
+    lastStepState = null;
+  }
+
+  // -----------------------------------------------------------------------
   // Core: process one kline at the given index, return BacktestStepState
   // -----------------------------------------------------------------------
 
   function processStep(i: number): BacktestStepState {
     const currentKline = klines[i];
-    const currentPrice = currentKline.close;
+    const prevClose = i > 0 ? klines[i - 1].close : null;
 
     // Snapshot "before" state
     const accountBefore = cloneAccount(account);
@@ -119,81 +154,33 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
 
     let decision: UserStrategyDecision | null = null;
     const stepDiagnostics: BacktestDiagnostic[] = [];
-    let tradeExecuted: BacktestTradeSnapshot | null = null;
+    const tradesExecuted: BacktestTradeSnapshot[] = [];
 
-    // --- Stop-loss check ---
-    let stopLossTriggered = false;
+    // --- 1) 固定止损 (盘中止损单) ---
+    // 在当日买入成交之前执行, 结构上不会卖出当日买入的股份 → 天然满足 T+1
     if (stopLossPercent !== undefined && position.shares > 0) {
-      const stopPrice = position.averageCost * (1 - stopLossPercent / 100);
-      if (currentPrice < stopPrice) {
-        stopLossTriggered = true;
-        const sellShares = position.shares;
-        const sellValue = sellShares * currentPrice;
-        const fee = calcAStockFees(sellValue, false, commissionRate, minCommission);
-        totalFees += fee;
-        const { position: newPosition, realizedPnl } = updatePositionAfterSell(position, sellShares, currentPrice);
-        account = { ...account, cash: account.cash + sellValue - fee };
-        account = updateAccountAfterTrade(account, newPosition, currentPrice);
-        position = newPosition;
-
-        const pnlPercent = position.averageCost > 0
-          ? (realizedPnl / (sellShares * position.averageCost)) * 100
-          : 0;
-
-        const trade: BacktestTrade = {
-          id: nextTradeId(),
-          type: 'SELL',
-          signalType: 'stop-loss',
-          reason: `触发固定止损 ${stopLossPercent}%`,
-          price: currentPrice,
-          date: currentKline.date,
-          shares: sellShares,
-          value: sellValue,
-          fee,
-          pnl: realizedPnl,
-          pnlPercent,
-        };
-        trades.push(trade);
-        tradeExecuted = {
-          id: trade.id,
-          date: trade.date,
-          action: trade.type,
-          price: trade.price,
-          shares: trade.shares,
-          value: trade.value,
-          reason: trade.reason ?? trade.signalType,
-        };
-
-        stepDiagnostics.push({
-          date: currentKline.date,
-          level: 'warning',
-          message: `Stop-loss triggered at ${currentPrice.toFixed(2)} (threshold ${stopPrice.toFixed(2)})`,
-        });
-
-        diagnostics.push(...stepDiagnostics);
-
-        const accountAfter = cloneAccount(account);
-        const positionAfter = clonePosition(position);
-
-        return {
-          currentStepIndex: i,
-          totalSteps: klines.length,
-          currentKline,
-          decision: { action: 'SELL', reason: 'stop-loss' },
-          accountBefore,
-          accountAfter,
-          positionBefore,
-          positionAfter,
-          tradeExecuted,
-          indicatorSnapshot: null,
-          chanlunSnapshot: null,
-          diagnostics: stepDiagnostics,
-          isFinished: i === klines.length - 1,
-        };
+      const exec = executeProtectiveStop({
+        bar: currentKline,
+        prevClose,
+        symbol,
+        stopLossPercent,
+        sellableShares: position.shares,
+        account,
+        position,
+        commissionRate,
+        minCommission,
+      });
+      account = exec.account;
+      position = exec.position;
+      totalFees += exec.fee;
+      if (exec.trade) {
+        trades.push(exec.trade);
+        tradesExecuted.push(tradeToStepSnapshot(exec.trade));
       }
+      stepDiagnostics.push(...exec.diagnostics);
     }
 
-    // --- Build strategy input ---
+    // --- 2) 策略决策: 只用截止当根的数据; 决策以当根收盘价成交 ---
     const klinesSlice = klines.slice(0, i + 1);
     const strategyInput: UserStrategyInput = {
       symbol,
@@ -262,106 +249,27 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
       decision = { action: 'HOLD' };
     }
 
-    // --- Execute decision ---
+    // --- 3) BUY / SELL → 以当根收盘价立即成交 (尾盘/收盘竞价模型) ---
     if (decision.action !== 'HOLD') {
-      const { shares, warnings } = resolveOrderShares(decision, account, position, currentPrice);
-
-      for (const w of warnings) {
-        stepDiagnostics.push({ date: currentKline.date, level: 'warning', message: w });
+      const exec = executeDecisionAtClose({
+        decision,
+        bar: currentKline,
+        prevClose,
+        symbol,
+        account,
+        position,
+        commissionRate,
+        minCommission,
+        strategyLabel: strategy.id || strategy.name,
+      });
+      account = exec.account;
+      position = exec.position;
+      totalFees += exec.fee;
+      if (exec.trade) {
+        trades.push(exec.trade);
+        tradesExecuted.push(tradeToStepSnapshot(exec.trade));
       }
-
-      if (shares > 0) {
-        // --- Limit up/down checks ---
-        if (decision.action === 'BUY' && isLimitUp(currentKline, klines, symbol)) {
-          stepDiagnostics.push({
-            date: currentKline.date,
-            level: 'warning',
-            message: `Buy blocked: stock is at 涨停 (limit-up) at ${currentPrice.toFixed(2)}`,
-          });
-        } else if (decision.action === 'SELL' && isLimitDown(currentKline, klines, symbol)) {
-          stepDiagnostics.push({
-            date: currentKline.date,
-            level: 'warning',
-            message: `Sell blocked: stock is at 跌停 (limit-down) at ${currentPrice.toFixed(2)}`,
-          });
-        } else if (decision.action === 'BUY') {
-          const cost = shares * currentPrice;
-          if (cost <= account.cash) {
-            const fee = calcAStockFees(cost, true, commissionRate, minCommission);
-            totalFees += fee;
-
-            position = updatePositionAfterBuy(position, shares, currentPrice);
-            account = { ...account, cash: account.cash - cost - fee };
-            account = updateAccountAfterTrade(account, position, currentPrice);
-
-            const trade: BacktestTrade = {
-              id: nextTradeId(),
-              type: 'BUY',
-              signalType: strategy.id || strategy.name,
-              reason: decision.reason,
-              confidence: decision.confidence,
-              price: currentPrice,
-              date: currentKline.date,
-              shares,
-              value: cost,
-              fee,
-            };
-            trades.push(trade);
-            tradeExecuted = {
-              id: trade.id,
-              date: trade.date,
-              action: trade.type,
-              price: trade.price,
-              shares: trade.shares,
-              value: trade.value,
-              fee: trade.fee,
-              reason: trade.reason ?? trade.signalType,
-            };
-          }
-        } else if (decision.action === 'SELL') {
-          const sellShares = Math.min(shares, position.shares);
-          if (sellShares > 0) {
-            const sellValue = sellShares * currentPrice;
-            const fee = calcAStockFees(sellValue, false, commissionRate, minCommission);
-            totalFees += fee;
-
-            const { position: newPosition, realizedPnl } = updatePositionAfterSell(position, sellShares, currentPrice);
-            account = { ...account, cash: account.cash + sellValue - fee };
-            account = updateAccountAfterTrade(account, newPosition, currentPrice);
-            position = newPosition;
-
-            const pnlPercent = position.averageCost > 0
-              ? (realizedPnl / (sellShares * position.averageCost)) * 100
-              : 0;
-
-            const trade: BacktestTrade = {
-              id: nextTradeId(),
-              type: 'SELL',
-              signalType: strategy.id || strategy.name,
-              reason: decision.reason,
-              confidence: decision.confidence,
-              price: currentPrice,
-              date: currentKline.date,
-              shares: sellShares,
-              value: sellValue,
-              fee,
-              pnl: realizedPnl,
-              pnlPercent,
-            };
-            trades.push(trade);
-            tradeExecuted = {
-              id: trade.id,
-              date: trade.date,
-              action: trade.type,
-              price: trade.price,
-              shares: trade.shares,
-              value: trade.value,
-              fee: trade.fee,
-              reason: trade.reason ?? trade.signalType,
-            };
-          }
-        }
-      }
+      stepDiagnostics.push(...exec.diagnostics);
     }
 
     diagnostics.push(...stepDiagnostics);
@@ -378,7 +286,7 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
       accountAfter,
       positionBefore,
       positionAfter,
-      tradeExecuted,
+      tradesExecuted,
       indicatorSnapshot: null,
       chanlunSnapshot: null,
       diagnostics: stepDiagnostics,
@@ -397,6 +305,8 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
       position: clonePosition(position),
       trades: cloneTrades(trades),
       strategyStopped,
+      consecutiveErrors,
+      hasDecidedOnce,
       diagnostics: [...diagnostics],
       totalFees,
     };
@@ -408,6 +318,8 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
     position = clonePosition(saved.position);
     trades = cloneTrades(saved.trades);
     strategyStopped = saved.strategyStopped;
+    consecutiveErrors = saved.consecutiveErrors;
+    hasDecidedOnce = saved.hasDecidedOnce;
     diagnostics = [...saved.diagnostics];
     totalFees = saved.totalFees;
   }
@@ -462,8 +374,12 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
     },
 
     start(): BacktestStepState {
+      // (重新)开始: 回到初始状态
+      resetToInitialState();
+      history = [];
+      isStarted = true;
+
       if (klines.length === 0) {
-        isStarted = true;
         currentIndex = -1;
         const emptyState: BacktestStepState = {
           currentStepIndex: -1,
@@ -474,7 +390,7 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
           accountAfter: cloneAccount(account),
           positionBefore: clonePosition(position),
           positionAfter: clonePosition(position),
-          tradeExecuted: null,
+          tradesExecuted: [],
           indicatorSnapshot: null,
           chanlunSnapshot: null,
           diagnostics: [{ level: 'warning', message: 'No K-line data provided.' }],
@@ -484,10 +400,9 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
         return emptyState;
       }
 
-      // Save initial state for potential backward navigation
-      history = [];
       currentIndex = 0;
-      isStarted = true;
+      // 第 0 步之前的状态 (用于回退)
+      history[0] = saveState(0);
 
       const state = processStep(0);
       lastStepState = state;
@@ -504,33 +419,27 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
         return lastStepState!;
       }
 
-      // Save current state before advancing
-      history.push(saveState(currentIndex));
-      currentIndex++;
+      const nextIndex = currentIndex + 1;
+      // 记录「处理第 nextIndex 根之前」的状态, 用于回退
+      history[nextIndex] = saveState(nextIndex);
+      currentIndex = nextIndex;
 
-      const state = processStep(currentIndex);
+      const state = processStep(nextIndex);
       lastStepState = state;
       return state;
     },
 
     stepBackward(): BacktestStepState {
-      if (history.length === 0) {
+      const target = currentIndex - 1;
+      if (!isStarted || target < 0 || !history[target]) {
         // No history to go back to
         return lastStepState!;
       }
 
-      const saved = history.pop()!;
-      restoreState(saved);
-      currentIndex = saved.stepIndex;
-
-      // Re-process the step to get the step state (without re-executing trades,
-      // since we restored the state before the step)
-      // Actually, we need to return the step state for the current index.
-      // The saved state is the state *before* the step at saved.stepIndex was processed.
-      // After restoring, we are at the state before step saved.stepIndex was processed,
-      // but currentIndex is set to saved.stepIndex.
-      // We need to re-process this step to get the BacktestStepState.
-      const state = processStep(currentIndex);
+      // history[target] = 处理第 target 根之前的状态; 恢复后重放该根, 得到该步界面状态
+      restoreState(history[target]);
+      currentIndex = target;
+      const state = processStep(target);
       lastStepState = state;
       return state;
     },
@@ -540,66 +449,37 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
         return lastStepState!;
       }
 
-      // Check if we have this exact index in history
-      const historyIdx = history.findIndex((s) => s.stepIndex === index);
-      if (historyIdx !== -1) {
-        // Restore from history — the saved state at historyIdx is the state
-        // *before* step index was processed. Discard any history after it.
-        const saved = history[historyIdx];
-        // Remove all entries after historyIdx (they represent later steps)
-        history = history.slice(0, historyIdx);
-        restoreState(saved);
+      if (!isStarted) {
+        this.start();
+      }
+
+      if (index === currentIndex) {
+        return lastStepState!;
+      }
+
+      // 回退: 命中历史, 恢复后重放目标根
+      if (index < currentIndex && history[index]) {
+        restoreState(history[index]);
         currentIndex = index;
-        const state = processStep(currentIndex);
+        const state = processStep(index);
         lastStepState = state;
         return state;
       }
 
-      // Not in history — replay from beginning
-      account = createInitialAccount(initialCash, currency);
-      position = createInitialPosition();
-      trades = [];
-      strategyStopped = false;
-      diagnostics = [];
-      history = [];
-      currentIndex = -1;
-      isStarted = true;
-
-      // Replay up to and including the target index
-      for (let i = 0; i <= index; i++) {
-        if (i < index) {
-          // Save state before each intermediate step
-          history.push(saveState(i));
-        }
-        currentIndex = i;
-        processStep(i);
+      // 前进 (或历史缺失时兜底): 从头/当前位置重放到目标 index
+      if (index < currentIndex) {
+        resetToInitialState();
+        history = [];
+        currentIndex = -1;
       }
 
-      // Now re-process the target step to get the BacktestStepState
-      // (processStep already ran it above, but we need the return value)
-      // Restore to state just before target index
-      const preTargetState = saveState(index);
-      // Actually, we need to save the state *before* the target step.
-      // Let's redo this more carefully.
-
-      // Reset and replay again, this time capturing the step state
-      account = createInitialAccount(initialCash, currency);
-      position = createInitialPosition();
-      trades = [];
-      strategyStopped = false;
-      diagnostics = [];
-      history = [];
-
-      for (let i = 0; i < index; i++) {
-        history.push(saveState(i));
+      for (let i = currentIndex + 1; i <= index; i++) {
+        history[i] = saveState(i);
         currentIndex = i;
-        processStep(i);
+        lastStepState = processStep(i);
       }
 
-      currentIndex = index;
-      const state = processStep(index);
-      lastStepState = state;
-      return state;
+      return lastStepState!;
     },
 
     runAll(): RunBacktestOutput {
@@ -609,9 +489,10 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
 
       // Run remaining steps
       while (currentIndex < klines.length - 1) {
-        history.push(saveState(currentIndex));
-        currentIndex++;
-        processStep(currentIndex);
+        const nextIndex = currentIndex + 1;
+        history[nextIndex] = saveState(nextIndex);
+        currentIndex = nextIndex;
+        processStep(nextIndex);
       }
 
       const result = buildResult();
@@ -633,7 +514,7 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
           accountAfter: cloneAccount(account),
           positionBefore: clonePosition(position),
           positionAfter: clonePosition(position),
-          tradeExecuted: null,
+          tradesExecuted: [],
           indicatorSnapshot: null,
           chanlunSnapshot: null,
           diagnostics: [],
@@ -641,6 +522,11 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
         };
       }
       return lastStepState;
+    },
+
+    /** 本次运行到当前步骤为止的全部成交 (克隆, 供页面展示全部成交账本) */
+    getTrades(): BacktestTrade[] {
+      return cloneTrades(trades);
     },
   };
 

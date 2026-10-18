@@ -20,6 +20,10 @@ import type { KlinePeriod } from '../src/utils/klineUtils.ts';
 import { attachWebSocketServer } from './ws.ts';
 import { handleScanConnection, WS_PATH } from './scanSocket.ts';
 import { getCacheSnapshot } from './scan.ts';
+import { runServerBacktest, type ServerBacktestInput } from './backtest.ts';
+import { beginProgress, getProgress, isProgressId, updateProgress } from './backtestProgress.ts';
+import { getPoolBacktestJob, requestPoolBacktest } from './poolBacktest.ts';
+import type { PoolBacktestInput } from '../src/types/poolBacktest.ts';
 
 const PORT = Number(process.env.PORT || 8899);
 
@@ -146,6 +150,104 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
     if (!isKlineArray(body.klines)) throw Object.assign(new Error('klines: Kline[] required'), { statusCode: 400 });
     // 买卖点只依赖 笔 (笔内部不依赖 线段/中枢), 跳过两遍计算保持扫描轻量
     sendJson(res, 200, computeStrokesAndBSPoints(body.klines));
+    return;
+  }
+
+  // 单标的回测: 请求体可携带 progressId, 配合 GET /api/backtest/progress/:id
+  // 轮询阶段进度 (拉取 K 线 / 运行回测), 请求本身仍是同步的
+  if (req.method === 'POST' && path === '/api/backtest/run') {
+    const body = await readJson<ServerBacktestInput & { progressId?: unknown }>(req);
+    const progressId = isProgressId(body.progressId) ? body.progressId : null;
+    if (progressId) beginProgress(progressId);
+    try {
+      const output = await runServerBacktest(
+        body,
+        progressId ? (update) => updateProgress(progressId, update) : undefined,
+      );
+      if (progressId) {
+        updateProgress(progressId, {
+          phase: 'done',
+          message: `回测完成 (${output.klinesCount} 根 K 线)`,
+          klines: output.klinesCount,
+        });
+      }
+      sendJson(res, 200, output);
+    } catch (err) {
+      if (progressId) {
+        updateProgress(progressId, {
+          phase: 'error',
+          message: '回测失败',
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      const status = typeof err?.statusCode === 'number' ? err.statusCode : 400;
+      sendJson(res, status, { error: err?.message ?? String(err) });
+    }
+    return;
+  }
+
+  // 单标的回测进度轮询 (内存条目, 过期自动清理)
+  if (req.method === 'GET' && path.startsWith('/api/backtest/progress/')) {
+    const progressId = path.slice('/api/backtest/progress/'.length);
+    const progress = isProgressId(progressId) ? getProgress(progressId) : null;
+    if (!progress) {
+      sendJson(res, 404, { error: '进度不存在或已过期' });
+      return;
+    }
+    sendJson(res, 200, progress);
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // 选股池组合回测 (server/poolBacktest.ts)
+  //   POST /api/backtest/pool                    发起任务
+  //   GET  /api/backtest/pool/:id                轮询进度 / 最终报告
+  //   GET  /api/backtest/pool/:id/symbol/:symbol 单只标的明细
+  //   GET  /api/backtest/pool/:id/trades         全池逐笔成交 (按日期)
+  //   POST /api/backtest/pool/:id/cancel         中断任务
+  // -------------------------------------------------------------------------
+  if (req.method === 'POST' && path === '/api/backtest/pool') {
+    const body = await readJson<PoolBacktestInput>(req);
+    try {
+      const { job, attached } = await requestPoolBacktest(body);
+      sendJson(res, attached ? 200 : 202, { jobId: job.id, attached, job: job.view() });
+    } catch (err) {
+      const status = typeof err?.statusCode === 'number' ? err.statusCode : 400;
+      sendJson(res, status, { error: err?.message ?? String(err), jobId: err?.jobId });
+    }
+    return;
+  }
+
+  if (path.startsWith('/api/backtest/pool/')) {
+    const rest = path.slice('/api/backtest/pool/'.length).split('/');
+    const job = getPoolBacktestJob(rest[0]);
+    if (!job) {
+      sendJson(res, 404, { error: '任务不存在或已过期' });
+      return;
+    }
+    if (req.method === 'POST' && rest[1] === 'cancel') {
+      job.cancel();
+      sendJson(res, 200, job.view());
+      return;
+    }
+    if (req.method === 'GET' && rest[1] === 'symbol' && rest[2]) {
+      const detail = job.symbolDetail(decodeURIComponent(rest[2]));
+      if (!detail) {
+        sendJson(res, 404, { error: `任务中不存在标的 ${rest[2]} 的结果` });
+        return;
+      }
+      sendJson(res, 200, detail);
+      return;
+    }
+    if (req.method === 'GET' && rest[1] === 'trades') {
+      sendJson(res, 200, job.allTrades());
+      return;
+    }
+    if (req.method === 'GET' && rest.length === 1) {
+      sendJson(res, 200, job.view());
+      return;
+    }
+    sendJson(res, 405, { error: 'method not allowed' });
     return;
   }
 

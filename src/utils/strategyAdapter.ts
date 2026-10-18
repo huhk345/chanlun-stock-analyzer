@@ -64,24 +64,49 @@ function getLimitDownPrice(prevClose: number, ratio: number): number {
 }
 
 /**
- * Check if the stock is at 涨停 (limit-up) — cannot buy.
+ * A 股涨停价 (相对前收盘价, 四舍五入到分)。
+ * 成交判定要用「执行时点可见」的价格: 执行日开盘价 >= 涨停价 → 无法买入。
+ */
+export function limitUpPrice(prevClose: number, symbol: string = ''): number {
+  return getLimitUpPrice(prevClose, getStockLimitRatio(symbol));
+}
+
+/** A 股跌停价 (相对前收盘价, 四舍五入到分)。开盘价 <= 跌停价 → 无法卖出。 */
+export function limitDownPrice(prevClose: number, symbol: string = ''): number {
+  return getLimitDownPrice(prevClose, getStockLimitRatio(symbol));
+}
+
+/**
+ * 找 currentKline 在 klines 中的下标, 用于取「前一根收盘价」。
+ * 若调用方传入的是全量数组且 currentKline 位于中间, 仍取它自己的前一根 ——
+ * 旧实现固定取数组倒数第二根, 传全量数组时会取到未来日期的收盘价。
+ */
+function indexOfKline(currentKline: Kline, klines: readonly Kline[]): number {
+  const idx = klines.lastIndexOf(currentKline);
+  return idx >= 0 ? idx : klines.length - 1;
+}
+
+/**
+ * Check if the stock closed at 涨停 (limit-up) — cannot buy at close.
+ * 前收盘 = currentKline 在 klines 中的前一根 (调用方需保证 currentKline 包含在 klines 内)。
  */
 export function isLimitUp(currentKline: Kline, klines: readonly Kline[], symbol: string = ''): boolean {
-  if (klines.length < 2) return false;
-  const prevClose = klines[klines.length - 2].close;
-  const ratio = getStockLimitRatio(symbol);
-  const limitUp = getLimitUpPrice(prevClose, ratio);
+  const i = indexOfKline(currentKline, klines);
+  if (i < 1) return false;
+  const prevClose = klines[i - 1].close;
+  const limitUp = getLimitUpPrice(prevClose, getStockLimitRatio(symbol));
   return currentKline.close >= limitUp;
 }
 
 /**
- * Check if the stock is at 跌停 (limit-down) — cannot sell.
+ * Check if the stock closed at 跌停 (limit-down) — cannot sell at close.
+ * 前收盘 = currentKline 在 klines 中的前一根 (调用方需保证 currentKline 包含在 klines 内)。
  */
 export function isLimitDown(currentKline: Kline, klines: readonly Kline[], symbol: string = ''): boolean {
-  if (klines.length < 2) return false;
-  const prevClose = klines[klines.length - 2].close;
-  const ratio = getStockLimitRatio(symbol);
-  const limitDown = getLimitDownPrice(prevClose, ratio);
+  const i = indexOfKline(currentKline, klines);
+  if (i < 1) return false;
+  const prevClose = klines[i - 1].close;
+  const limitDown = getLimitDownPrice(prevClose, getStockLimitRatio(symbol));
   return currentKline.close <= limitDown;
 }
 

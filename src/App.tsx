@@ -9,6 +9,7 @@ import AboutView from './components/AboutView';
 import StockInfoPanel from './components/StockInfoPanel';
 import MarketDashboard from './components/MarketDashboard';
 import IndexAnalysis from './components/IndexAnalysis';
+import SimulationView from './components/SimulationView';
 import { SupabaseUser } from './utils/supabase';
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade, BSPoint } from './types/stock';
 import { analyzeChanlunWithFallback } from './utils/analysisApi';
@@ -37,7 +38,7 @@ const CHAT_RAIL_MAX = 800;
 const CHAT_RAIL_DEFAULT = 420;
 const NAVBAR_HEIGHT = 56;
 
-type ViewMode = 'dashboard' | 'indexes' | 'analyzer';
+type ViewMode = 'dashboard' | 'indexes' | 'analyzer' | 'simulation';
 
 // Parse the current location into app routing state.
 // Mirrors the initial-view logic: presence of ?code= implies the analyzer view.
@@ -51,6 +52,8 @@ function parseAppUrl(): { view: ViewMode; code: string; timeframe: KlineTimefram
     view = 'analyzer';
   } else if (rawView === 'indexes') {
     view = 'indexes';
+  } else if (rawView === 'simulation') {
+    view = 'simulation';
   }
   return { view, code, timeframe };
 }
@@ -75,6 +78,19 @@ function syncAppUrl(
     url.searchParams.set('view', 'analyzer');
     if (symbol) url.searchParams.set('code', symbol);
   }
+  if (timeframe === 'weekly') url.searchParams.set('tf', 'weekly');
+  else url.searchParams.delete('tf');
+  const next = url.toString();
+  if (next === window.location.href) return;
+  if (mode === 'push') window.history.pushState({}, '', next);
+  else window.history.replaceState({}, '', next);
+}
+
+// Simulation view: keep the symbol/code in the URL so backtests can target it
+function syncSimulationUrl(symbol: string, timeframe: KlineTimeframe, mode: 'push' | 'replace') {
+  const url = new URL(window.location.href);
+  url.searchParams.set('view', 'simulation');
+  if (symbol) url.searchParams.set('code', symbol);
   if (timeframe === 'weekly') url.searchParams.set('tf', 'weekly');
   else url.searchParams.delete('tf');
   const next = url.toString();
@@ -305,9 +321,13 @@ export default function App() {
   };
 
   const handleViewChange = (nextView: ViewMode) => {
-    if (nextView === viewRef.current && nextView !== 'analyzer') return;
+    if (nextView === viewRef.current && nextView !== 'analyzer' && nextView !== 'simulation') return;
     setView(nextView);
-    syncAppUrl(nextView, symbolRef.current, timeframeRef.current, 'push');
+    if (nextView === 'simulation') {
+      syncSimulationUrl(symbolRef.current, timeframeRef.current, 'push');
+    } else {
+      syncAppUrl(nextView, symbolRef.current, timeframeRef.current, 'push');
+    }
 
     // First entry into the analyzer loads the current symbol
     if (nextView === 'analyzer' && klines.length === 0 && !isLoading) {
@@ -543,6 +563,13 @@ export default function App() {
         )}
 
       </main>
+      )}
+
+      {/* Main Container - Strategy Simulation view */}
+      {view === 'simulation' && (
+        <main className="flex-1 w-full px-[10px] py-[10px] md:px-6 md:py-6 lg:px-8">
+          <SimulationView symbol={symbol} klines={klines} />
+        </main>
       )}
 
       {/* Fixed AI Right Rail - always-on-top side panel (desktop only, analyzer view) */}

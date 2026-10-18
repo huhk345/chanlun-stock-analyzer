@@ -100,3 +100,16 @@ html {
     -webkit-tap-highlight-color: transparent;
   }
 }
+
+/* 进度条不可量化阶段的滑动高光 (单标的回测: 拉取 K 线 / 运行引擎) */
+@keyframes progress-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+.progress-slide {
+  animation: progress-slide 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}

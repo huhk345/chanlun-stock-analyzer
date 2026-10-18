@@ -22,8 +22,8 @@ import { loadStrategies } from '../src/strategies/user/index.ts';
 import { runBacktest } from '../src/utils/backtestRunner.ts';
 import {
   calcAStockFees,
-  isLimitUp,
-  isLimitDown,
+  limitUpPrice,
+  limitDownPrice,
   resolveOrderShares,
   buildStrategyParams,
 } from '../src/utils/strategyAdapter.ts';
@@ -193,19 +193,18 @@ function runMultiStockBacktest(
   const equityCurve: number[] = [];
   const equityCurveDates: string[] = [];
 
+  // 信号当根收盘产生, 并以【当根收盘价】立即成交 (原版口径: 尾盘/收盘竞价模型)。
+  // 策略输入始终只含截止当根的数据, 不使用任何未来 K 线。
+  const soldToday = new Set<string>();
+
   for (const date of allDates) {
     const isWarmup = date < startDate;
+    soldToday.clear();
 
-    // Compute current portfolio equity using today's price (or last close if not trading today)
-    const currentEquity = calculatePortfolioEquity(cash, positions, date, stockDataMap, stockDateIndex);
+    // 当日决策用的账户权益 (按各标的最新可见收盘价市值)
+    const markEquity = calculatePortfolioEquity(cash, positions, date, stockDataMap, stockDateIndex);
 
-    // Track equity during trading period
-    if (!isWarmup) {
-      equityCurve.push(currentEquity);
-      equityCurveDates.push(date);
-    }
-
-    // --- 1. Process SELL signals first ---
+    // --- 2. 持仓卖出信号 (收盘决策 → 当根收盘价成交) ---
     for (const [symbol, pos] of positions.entries()) {
       if (pos.shares <= 0) continue;
       const dateMap = stockDateIndex.get(symbol)!;
@@ -235,7 +234,7 @@ function runMultiStockBacktest(
         account: {
           initialCash,
           cash,
-          equity: currentEquity,
+          equity: markEquity,
           currency: 'CNY',
         },
         position: positionState,
@@ -255,71 +254,68 @@ function runMultiStockBacktest(
       }
 
       if (!isWarmup && decision && decision.action === 'SELL') {
-        const { shares: sellShares, actualValue } = resolveOrderShares(
-          decision,
-          strategyInput.account,
-          positionState,
-          klines[klineIdx].close,
-        );
+        const bar = klines[klineIdx];
+        const prevClose = klineIdx > 0 ? klines[klineIdx - 1].close : null;
+        const sellPrice = bar.close;
 
-        if (sellShares > 0) {
-          if (isLimitDown(klines[klineIdx], klines, symbol)) {
-            // Blocked by limit-down
-            continue;
-          }
-
-          const fee = calcAStockFees(actualValue, false);
-          totalFees += fee;
-          cash += actualValue - fee;
-
-          const costBasis = sellShares * pos.averageCost;
-          const pnl = actualValue - costBasis - fee;
-          const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
-
-          const trade: BacktestTradeSnapshot = {
-            id: nextTradeId(),
-            date,
-            action: 'SELL',
-            price: klines[klineIdx].close,
-            shares: sellShares,
-            value: actualValue,
-            fee,
-            reason: decision.reason,
-          };
-          pos.trades.push(trade);
-
-          allTrades.push({
-            date,
-            symbol,
-            action: 'SELL',
-            price: klines[klineIdx].close,
-            shares: sellShares,
-            value: actualValue,
-            fee,
-            pnl,
-            pnlPct,
-            reason: decision.reason,
-          });
-
-          pos.shares -= sellShares;
-          if (pos.shares <= 0) {
-            pos.shares = 0;
-            pos.averageCost = 0;
-          }
+        // 收盘封跌停 → 无法按收盘价卖出 (收盘时点可见信息)
+        if (prevClose !== null && sellPrice <= limitDownPrice(prevClose, symbol)) {
+          console.warn(`  [跌停拦截] ${symbol} ${date} 收盘跌停, 无法按收盘价卖出, 交易作废`);
+          continue;
         }
+
+        const mockAccount = { initialCash, cash, equity: markEquity, currency: 'CNY' };
+        const { shares: sellShares, actualValue } = resolveOrderShares(decision, mockAccount, positionState, sellPrice);
+        if (sellShares <= 0) continue;
+
+        const fee = calcAStockFees(actualValue, false);
+        totalFees += fee;
+        cash += actualValue - fee;
+
+        const costBasis = sellShares * pos.averageCost;
+        const pnl = actualValue - costBasis - fee;
+        const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
+
+        const trade: BacktestTradeSnapshot = {
+          id: nextTradeId(),
+          date,
+          action: 'SELL',
+          price: sellPrice,
+          shares: sellShares,
+          value: actualValue,
+          fee,
+          reason: decision.reason,
+        };
+        pos.trades.push(trade);
+
+        allTrades.push({
+          date,
+          symbol,
+          action: 'SELL',
+          price: sellPrice,
+          shares: sellShares,
+          value: actualValue,
+          fee,
+          pnl,
+          pnlPct,
+          reason: decision.reason,
+        });
+
+        pos.shares -= sellShares;
+        if (pos.shares <= 0) {
+          pos.shares = 0;
+          pos.averageCost = 0;
+        }
+        soldToday.add(symbol);
       }
     }
 
-    // --- 2. Collect BUY signals ---
-    const buySignals: Array<{
-      symbol: string;
-      decision: any;
-      price: number;
-      klineIdx: number;
-    }> = [];
-
+    // --- 3. 买入信号: 收盘决策 → 当根收盘价成交 (等权分配可用资金) ---
     if (!isWarmup) {
+      const buySignals: Array<{ symbol: string; klineIdx: number; decision: any }> = [];
+
       for (const [symbol, klines] of stockDataMap.entries()) {
+        if (soldToday.has(symbol)) continue; // 当日刚卖出, 同一收盘不重复入场
         const existingPos = positions.get(symbol);
         if (existingPos && existingPos.shares > 0) continue; // skip if already holding
 
@@ -349,7 +345,7 @@ function runMultiStockBacktest(
           account: {
             initialCash,
             cash,
-            equity: currentEquity,
+            equity: markEquity,
             currency: 'CNY',
           },
           position: positionState,
@@ -369,89 +365,83 @@ function runMultiStockBacktest(
         }
 
         if (decision && decision.action === 'BUY') {
-          buySignals.push({
-            symbol,
-            decision,
-            price: klines[klineIdx].close,
-            klineIdx,
-          });
+          buySignals.push({ symbol, klineIdx, decision });
+        }
+      }
+
+      // 以当根收盘价成交; 可用资金按当日买入信号等权分配
+      if (buySignals.length > 0 && cash > 0) {
+        const allocPerStock = cash / buySignals.length;
+
+        for (const { symbol, klineIdx, decision } of buySignals) {
+          const klines = stockDataMap.get(symbol)!;
+          const bar = klines[klineIdx];
+          const prevClose = klineIdx > 0 ? klines[klineIdx - 1].close : null;
+          const buyPrice = bar.close;
+
+          // 收盘封涨停 → 无法按收盘价买入 (收盘时点可见信息)
+          if (prevClose !== null && buyPrice >= limitUpPrice(prevClose, symbol)) {
+            console.warn(`  [涨停拦截] ${symbol} ${date} 收盘涨停, 无法按收盘价买入, 交易作废`);
+            continue;
+          }
+
+          const positionState: BacktestPositionState = {
+            shares: 0,
+            averageCost: 0,
+            marketValue: 0,
+            unrealizedPnl: 0,
+            unrealizedPnlPercent: 0,
+          };
+
+          const mockAccount = { initialCash, cash: allocPerStock, equity: cash, currency: 'CNY' };
+          const { shares: buyShares, actualValue } = resolveOrderShares(decision, mockAccount, positionState, buyPrice);
+
+          if (buyShares > 0) {
+            const fee = calcAStockFees(actualValue, true);
+            if (actualValue + fee <= cash) {
+              cash -= actualValue + fee;
+              totalFees += fee;
+
+              const pos = positions.get(symbol) ?? { symbol, shares: 0, averageCost: 0, trades: [] };
+              const totalCost = pos.averageCost * pos.shares + actualValue;
+              const totalShares = pos.shares + buyShares;
+              pos.averageCost = totalShares > 0 ? totalCost / totalShares : 0;
+              pos.shares = totalShares;
+
+              const trade: BacktestTradeSnapshot = {
+                id: nextTradeId(),
+                date,
+                action: 'BUY',
+                price: buyPrice,
+                shares: buyShares,
+                value: actualValue,
+                fee,
+                reason: decision.reason,
+              };
+              pos.trades.push(trade);
+              positions.set(symbol, pos);
+
+              allTrades.push({
+                date,
+                symbol,
+                action: 'BUY',
+                price: buyPrice,
+                shares: buyShares,
+                value: actualValue,
+                fee,
+                reason: decision.reason,
+              });
+            }
+          }
         }
       }
     }
 
-    // --- 3. Execute BUY signals with equal allocation ---
-    if (buySignals.length > 0 && cash > 0) {
-      const allocPerStock = cash / buySignals.length;
-
-      for (const sig of buySignals) {
-        const klines = stockDataMap.get(sig.symbol)!;
-        const currentKline = klines[sig.klineIdx];
-
-        if (isLimitUp(currentKline, klines, sig.symbol)) {
-          // Blocked by limit-up
-          continue;
-        }
-
-        const positionState: BacktestPositionState = {
-          shares: 0,
-          averageCost: 0,
-          marketValue: 0,
-          unrealizedPnl: 0,
-          unrealizedPnlPercent: 0,
-        };
-
-        // Resolve order size based on allocated cash
-        const mockAccount = {
-          initialCash,
-          cash: allocPerStock,
-          equity: currentEquity,
-          currency: 'CNY',
-        };
-
-        const { shares: buyShares, actualValue } = resolveOrderShares(
-          sig.decision,
-          mockAccount,
-          positionState,
-          sig.price,
-        );
-
-        if (buyShares > 0) {
-          const fee = calcAStockFees(actualValue, true);
-          if (actualValue + fee <= cash) {
-            cash -= actualValue + fee;
-
-            const pos = positions.get(sig.symbol) ?? { symbol: sig.symbol, shares: 0, averageCost: 0, trades: [] };
-            const totalCost = pos.averageCost * pos.shares + actualValue;
-            const totalShares = pos.shares + buyShares;
-            pos.averageCost = totalShares > 0 ? totalCost / totalShares : 0;
-            pos.shares = totalShares;
-
-            const trade: BacktestTradeSnapshot = {
-              id: nextTradeId(),
-              date,
-              action: 'BUY',
-              price: sig.price,
-              shares: buyShares,
-              value: actualValue,
-              fee,
-              reason: sig.decision.reason,
-            };
-            pos.trades.push(trade);
-            positions.set(sig.symbol, pos);
-
-            allTrades.push({
-              date,
-              symbol: sig.symbol,
-              action: 'BUY',
-              price: sig.price,
-              shares: buyShares,
-              value: actualValue,
-              fee,
-              reason: sig.decision.reason,
-            });
-          }
-        }
-      }
+    // --- 4. 记录当日收盘权益 (当日全部成交之后) ---
+    const currentEquity = calculatePortfolioEquity(cash, positions, date, stockDataMap, stockDateIndex);
+    if (!isWarmup) {
+      equityCurve.push(currentEquity);
+      equityCurveDates.push(date);
     }
   }
 
@@ -695,21 +685,42 @@ async function main() {
     console.log(`解析完成: ${stockDataMap.size} 个股票`);
   } else if (stat.isDirectory()) {
     const files = fs.readdirSync(dataPath).filter((f) => f.endsWith('.csv'));
-    console.log(`在目录下发现 ${files.length} 个合并 CSV 文件.`);
+    console.log(`在目录下发现 ${files.length} 个 CSV 文件.`);
     for (const file of files) {
       try {
         const raw = fs.readFileSync(path.join(dataPath, file), 'utf-8');
         const lines = raw.trim().split('\n');
-        console.log(`  - ${file}: ${lines.length - 1} 条记录`);
-        for (let i = 1; i < lines.length; i++) {
-          const values = lines[i].split(',');
-          if (values.length < 7) continue;
-          const symbol = values[0];
-          const kline = parseKlineRecord(values.slice(1));
-          if (!kline) continue;
-          const arr = stockDataMap.get(symbol);
-          if (arr) arr.push(kline);
-          else stockDataMap.set(symbol, [kline]);
+        if (lines.length < 2) continue;
+
+        // 识别两种目录内格式:
+        //   1) 个股文件: 首列是日期 (YYYY-MM-DD), 股票代码取自文件名 (默认数据布局)
+        //   2) 合并文件: 首列是股票代码, 其后是日期/OHLC...
+        const firstFields = lines[1].split(',');
+        const isPerStockFile = /^\d{4}-\d{2}-\d{2}$/.test(firstFields[0] ?? '');
+
+        if (isPerStockFile) {
+          const symbol = file.replace(/\.csv$/i, '');
+          const arr: Kline[] = [];
+          for (let i = 1; i < lines.length; i++) {
+            const kline = parseKlineRecord(lines[i].split(','));
+            if (kline) arr.push(kline);
+          }
+          if (arr.length > 0) {
+            console.log(`  - ${file} → ${symbol}: ${arr.length} 条记录`);
+            stockDataMap.set(symbol, arr);
+          }
+        } else {
+          console.log(`  - ${file}: ${lines.length - 1} 条记录`);
+          for (let i = 1; i < lines.length; i++) {
+            const values = lines[i].split(',');
+            if (values.length < 7) continue;
+            const symbol = values[0];
+            const kline = parseKlineRecord(values.slice(1));
+            if (!kline) continue;
+            const arr = stockDataMap.get(symbol);
+            if (arr) arr.push(kline);
+            else stockDataMap.set(symbol, [kline]);
+          }
         }
       } catch (err: any) {
         console.warn(`警告: 无法加载文件 ${file}: ${err.message}`);
