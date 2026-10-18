@@ -93,6 +93,11 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
    ```
    Endpoints: `GET /api/health`, `GET /api/strategies`, `POST /api/chanlun/analyze`, `POST /api/chanlun/bspoints`, `POST /api/screener/evaluate`, `POST /api/screener/batch`. The Vite dev server proxies `/api` to it; the frontend falls back to local computation when the backend is unavailable. Override the base URL with `VITE_ANALYSIS_API_URL`.
 
+**Troubleshooting:** an error like `Cannot find module '.../node_modules/.pnpm/vite.../dist/node/chunks/dep-*.js'` means `node_modules` was checked out as a (possibly self-referential) symlink, which breaks module resolution. `node_modules` is never tracked; remove the bad link and reinstall:
+```bash
+rm -rf node_modules && pnpm install
+```
+
 ### Usage
 
 1. Enter a stock code (e.g., `600519` for Kweichow Moutai) in the search bar
@@ -192,6 +197,11 @@ pnpm exec tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
    ```
 
 5. 在浏览器中打开 [http://localhost:8888](http://localhost:8888)
+
+**疑难排查:** 出现 `Cannot find module '.../node_modules/.pnpm/vite.../dist/node/chunks/dep-*.js'` 报错，通常是因为 `node_modules` 被检出成了（可能自引用的）符号链接，导致模块解析失败。仓库不跟踪 `node_modules`；删除坏链接后重装即可:
+```bash
+rm -rf node_modules && pnpm install
+```
 
 ### 使用方法
 
