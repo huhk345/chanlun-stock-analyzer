@@ -1275,7 +1275,7 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
   );
 
   return (
-    <div className="mx-auto w-full max-w-[1560px] pb-40 md:pb-32">
+    <div className="mx-auto w-full max-w-[1560px]">
 
       {/* ================= 页头 (紧凑单行) ================= */}
       <section className="relative overflow-hidden rounded-2xl border border-zinc-800/80 bg-gradient-to-br from-zinc-900/90 via-zinc-900/40 to-zinc-950 px-4 py-3">
@@ -1688,10 +1688,9 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
 
           </div>
 
-          {/* 运行栏: 固定视口底部, 无论滚到哪都能直接点击运行。
-              xl 起双栏布局时收窄到左栏(回测控制台)宽度并贴齐其左下角,
-              不再横跨结果区; 窄屏仍是整行通栏。 */}
-          <div className="fixed inset-x-[10px] bottom-[10px] z-30 mx-auto flex max-w-[1560px] flex-col gap-2.5 rounded-2xl border border-zinc-800/80 bg-zinc-950/95 p-3.5 shadow-2xl shadow-black/50 backdrop-blur-sm md:inset-x-6 md:bottom-6 md:flex-row md:items-center md:justify-between lg:inset-x-8 xl:left-[max(2rem,calc((100%_-_1560px)/2))] xl:right-auto xl:mx-0 xl:w-[400px] xl:flex-col xl:items-stretch">
+          {/* 运行栏: 常驻左栏底部。xl 吸顶布局下固定在侧栏底部, 滚动结果区也无需回滚即可运行;
+              窄屏单列布局下紧随设置区之后。 */}
+          <div className="flex shrink-0 flex-col gap-2.5 rounded-2xl border border-zinc-800/80 bg-zinc-900/30 p-3.5">
             <p className="text-[10px] leading-relaxed text-zinc-500">
             {mode === 'single' ? (
               <>
@@ -1723,7 +1722,7 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
             <button
               onClick={() => void (mode === 'single' ? handleRunSingle() : handleRunPool())}
               disabled={mode === 'single' ? !singleCanRun : !poolCanRun}
-              className="flex w-full shrink-0 items-center justify-center gap-2 rounded-xl bg-blue-500 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-blue-500/10 transition hover:bg-blue-400 active:bg-blue-600 disabled:opacity-50 cursor-pointer md:w-auto xl:w-full"
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-500 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-blue-500/10 transition hover:bg-blue-400 active:bg-blue-600 disabled:opacity-50 cursor-pointer"
             >
             {mode === 'single' && singleLoading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
