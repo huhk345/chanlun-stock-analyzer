@@ -1,26 +1,27 @@
-import type { BacktestTrade, BacktestResult } from '../types/stock';
+import type { BacktestTrade, BacktestResult } from '../../src/types/stock.ts';
 import type {
   RunBacktestInput,
   RunBacktestOutput,
   BacktestDiagnostic,
+  StrategySignalRecord,
+  StrategyScoreRecord,
   UserStrategyInput,
   UserStrategyDecision,
-} from '../types/strategy';
-import { buildStrategyParams, validateDecision } from './strategyAdapter';
-import { computeIndicatorValues } from './indicatorAdapter';
-import { loadStoredIndicators } from './indicatorLoader';
-import { computeChanlunStructures } from './chanlun';
+} from '../../src/types/strategy.ts';
+import { buildStrategyParams, validateDecision } from './strategyAdapter.ts';
+import { computeIndicatorValues } from './indicatorValues.ts';
+import { computeChanlunStructures } from '../../src/utils/chanlun.ts';
 import {
   tradesToSnapshots,
   sharpeFromEquityCurve,
   maxDrawdownFromEquityCurve,
-} from './backtestUtils';
+} from './backtestUtils.ts';
 import {
   createInitialAccount,
   createInitialPosition,
   executeDecisionAtClose,
   executeProtectiveStop,
-} from './backtestExecution';
+} from './backtestExecution.ts';
 
 // ---------------------------------------------------------------------------
 // 兼容导出: 账户/持仓状态工具已迁移到 backtestExecution.ts (单步回测共用),
@@ -33,7 +34,7 @@ export {
   updateAccountAfterTrade,
   updatePositionAfterBuy,
   updatePositionAfterSell,
-} from './backtestExecution';
+} from './backtestExecution.ts';
 
 export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
   const {
@@ -48,7 +49,14 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
     strategy,
     params: customParams,
     selectedIndicatorIds,
+    recordSignals = false,
+    resume,
   } = input;
+
+  /** 逐日 BUY/SELL 信号 (不含 HOLD); 组合模拟据此在独立组合层撮合 */
+  const signals: StrategySignalRecord[] = resume && recordSignals ? [...resume.signals] : [];
+  /** 逐日吸引力分数 (含 HOLD 日), 组合层轮动时用于比较持仓与候选 */
+  const dailyScores: StrategyScoreRecord[] = resume && recordSignals ? [...resume.scores] : [];
 
   const diagnostics: BacktestDiagnostic[] = [];
 
@@ -77,28 +85,32 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
         createdAt: now,
       },
       diagnostics,
+      signals: recordSignals ? [] : undefined,
+      dailyScores: recordSignals ? [] : undefined,
     };
   }
 
   // Build strategy params
   const params = buildStrategyParams(strategy, customParams as Record<string, unknown> | undefined);
 
-  // Load indicator definitions once (outside the loop)
-  const loadedIndicators = loadStoredIndicators();
+  // 指标定义由调用方注入 (服务端从请求携带的指标代码解析), 引擎本身不碰任何存储
+  const loadedIndicators = input.indicators ?? [];
   const selectedIndicators = selectedIndicatorIds
     ? loadedIndicators.filter(d => selectedIndicatorIds.includes(d.id))
     : [];
 
-  // Initialise state
-  let account = createInitialAccount(initialCash, currency);
-  let position = createInitialPosition();
-  const trades: BacktestTrade[] = [];
+  // Initialise state (增量续算时从前缀末端状态恢复)
+  let account = resume ? { ...resume.account } : createInitialAccount(initialCash, currency);
+  let position = resume ? { ...resume.position } : createInitialPosition();
+  const trades: BacktestTrade[] = resume ? resume.trades.map((t) => ({ ...t })) : [];
+  /** 前缀区间已复用的 K 线根数; 这些根不再调用策略 */
+  const resumeBars = resume ? Math.min(Math.max(resume.barCount, 0), klines.length) : 0;
   /** 策略连续异常达到该次数后才判定为「不可用」, 之前按 HOLD 降级继续跑 */
   const MAX_CONSECUTIVE_ERRORS = 5;
   let strategyStopped = false;
   let consecutiveErrors = 0;
   /** 是否已成功评估过至少一次 (用于区分「数据不足」与「策略真的坏了」) */
-  let hasDecidedOnce = false;
+  let hasDecidedOnce = resumeBars > 0;
   let totalErrorDiagnostics = 0;
   let totalFees = 0;
 
@@ -109,6 +121,13 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
   for (let i = 0; i < klines.length; i++) {
     const currentKline = klines[i];
     const currentPrice = currentKline.close;
+
+    // --- 0) 增量续算: 前缀 K 线直接沿用缓存信号与末端状态, 不再重算 ---
+    if (i < resumeBars) {
+      equityCurve.push(account.cash + position.shares * currentPrice);
+      continue;
+    }
+
     const prevClose = i > 0 ? klines[i - 1].close : null;
 
     // --- 1) 固定止损 (盘中止损单) ---
@@ -214,6 +233,22 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
       decision = { action: 'HOLD' };
     }
 
+    // --- 记录策略信号 (在成交拦截之前, 保持策略原始观点) ---
+    if (recordSignals && decision.action !== 'HOLD') {
+      signals.push({
+        date: currentKline.date,
+        action: decision.action,
+        reason: decision.reason,
+        confidence: decision.confidence,
+        price: currentPrice,
+      });
+    }
+
+    // --- 记录逐日吸引力分数: 含 HOLD 日, 供组合层比较「持仓 vs 候选」 ---
+    if (recordSignals && typeof decision.score === 'number' && Number.isFinite(decision.score)) {
+      dailyScores.push({ date: currentKline.date, score: decision.score });
+    }
+
     // --- 3) BUY / SELL → 以当根收盘价立即成交 (尾盘/收盘竞价模型) ---
     if (decision.action !== 'HOLD') {
       const exec = executeDecisionAtClose({
@@ -278,5 +313,12 @@ export function runBacktest(input: RunBacktestInput): RunBacktestOutput {
     createdAt: new Date().toISOString(),
   };
 
-  return { result, diagnostics, equityCurve };
+  return {
+    result,
+    diagnostics,
+    equityCurve,
+    signals: recordSignals ? signals : undefined,
+    dailyScores: recordSignals ? dailyScores : undefined,
+    finalState: recordSignals ? { account, position, trades } : undefined,
+  };
 }

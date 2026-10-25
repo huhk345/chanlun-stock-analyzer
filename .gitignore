@@ -11,12 +11,14 @@ coverage/
 .antigravitycli
 script/
 reports/
-data/
-src/strategies/user/
+/data/
+# 用户自建策略落在服务端数据目录 (根 /data/ 已忽略, 这里显式列出避免误解)
+data/user-strategies/
 data-test/
 data-validate/
 autoresearch/
 .cache/
+.venv/
 
 
 doc/

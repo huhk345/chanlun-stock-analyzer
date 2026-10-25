@@ -1,11 +1,13 @@
 /**
- * 策略回测服务端入口: 从腾讯行情拉取 K 线, 运行用户策略回测, 返回完整明细。
+ * 策略回测服务端入口: 从腾讯行情拉取 K 线, 运行服务端策略回测, 返回完整明细。
  *
  * 设计目标:
- *   - 用户输入: 标的 + 策略 + 资金/费率等参数
+ *   - 用户输入: 标的 + 策略 id + 资金/费率等参数
  *   - 数据源: 腾讯 fqkline (免 Key, 服务端可用), 本地缓存 + 增量更新
- *   - 引擎: src/utils/backtestRunner.runBacktest (沪深 A 股长仓模式; 信号当日收盘价成交 (尾盘模型), 杜绝未来数据;
- *     佣金+印花税+过户费; 涨跌停按收盘价拦截; 固定止损为盘中止损单, T+1 当日买入不可卖)
+ *   - 引擎: server/engine/backtestRunner.runBacktest (沪深 A 股长仓模式; 信号当日收盘价成交
+ *     (尾盘模型), 杜绝未来数据; 佣金+印花税+过户费; 涨跌停按收盘价拦截;
+ *     固定止损为盘中止损单, T+1 当日买入不可卖)
+ *   - 策略: server/strategies (内置) + data/user-strategies (用户自建), 均由服务端编译执行
  *   - 输出: 回测报告 + 逐笔成交 + 权益曲线, 供前端展示或脚本调用
  *
  * 启动后端: pnpm server   (默认 http://localhost:8899)
@@ -18,14 +20,11 @@
  * 请求期间轮询 GET /api/backtest/progress/:progressId 获取阶段进度, 见 runServerBacktest 的 onProgress 参数。
  */
 
-import { installLocalStorageShim } from './localStorageShim.ts';
-// 回测引擎间接依赖 localStorage (用户指标/策略本地存储), 必须在调用 runBacktest 前安装 shim
-installLocalStorageShim();
-
-import { runBacktest } from '../src/utils/backtestRunner.ts';
+import { runBacktest } from './engine/backtestRunner.ts';
+import { resolveIndicatorDefinitions, type IndicatorCodeInput } from './engine/indicatorResolve.ts';
 import { getKlines } from './klines.ts';
 import type { KlinePeriod } from '../src/utils/klineUtils.ts';
-import { loadStrategies } from '../src/strategies/user/index.ts';
+import { loadStrategies } from './strategies/index.ts';
 import type {
   UserStrategyDefinition,
   BacktestDiagnostic,
@@ -41,7 +40,7 @@ export interface ServerBacktestInput {
   symbol: string;
   /** K 线周期: '1d' | '1w', 默认 '1d' */
   period?: KlinePeriod;
-  /** 目标拉取根数, 默认 500 (腾讯单次最多 800, 超出自动翻页) */
+  /** 兼容参数: 数据窗口固定为 2023-01-01 至今, 该值不再截断窗口 */
   count?: number;
   /** 复权口径: 'forward' | 'backward' | '', 默认 'forward' */
   adjust?: string;
@@ -63,6 +62,11 @@ export interface ServerBacktestInput {
   params?: Record<string, unknown>;
   /** 选中的指标 ID */
   selectedIndicatorIds?: readonly string[];
+  /**
+   * 选中指标的代码 (指标定义保存在浏览器侧, 回测在服务端执行时随请求上传)。
+   * 只在 selectedIndicatorIds 非空时需要。
+   */
+  indicatorCodes?: readonly IndicatorCodeInput[];
   /** 回测区间起始日 (YYYY-MM-DD), 可选 */
   rangeStart?: string;
   /** 回测区间结束日 (YYYY-MM-DD), 可选 */
@@ -101,6 +105,53 @@ export interface BacktestProgressUpdate {
 export type BacktestProgressReporter = (update: BacktestProgressUpdate) => void;
 
 // ---------------------------------------------------------------------------
+// 数据准备 (回测 / 单步回测共用)
+// ---------------------------------------------------------------------------
+
+export interface BacktestKlineQuery {
+  symbol: string;
+  period?: KlinePeriod;
+  count?: number;
+  adjust?: string;
+  force?: boolean;
+  rangeStart?: string;
+  rangeEnd?: string;
+}
+
+/**
+ * 拉取 K 线并按区间过滤 —— runServerBacktest 与 stepper 会话共用同一口径,
+ * 保证「一次性回测」和「逐步回测」看到的 K 线完全一致。
+ */
+export async function fetchBacktestKlines(
+  query: BacktestKlineQuery,
+  onProgress?: BacktestProgressReporter,
+): Promise<{ klines: Kline[]; cached: boolean }> {
+  const { symbol, period = '1d', count = 500, adjust = 'forward', force = false } = query;
+
+  onProgress?.({
+    phase: 'fetching',
+    message: `正在拉取 ${symbol} 的${period === '1w' ? '周线' : '日线'} (2023-01-01 至今, ${adjust === 'backward' ? '后复权' : adjust === '' ? '不复权' : '前复权'})…`,
+  });
+
+  const result = await getKlines(symbol, period, count, adjust, force);
+  let klines = result.klines;
+
+  if (query.rangeStart || query.rangeEnd) {
+    klines = klines.filter(
+      (k) =>
+        (!query.rangeStart || k.date >= query.rangeStart) &&
+        (!query.rangeEnd || k.date <= query.rangeEnd),
+    );
+  }
+
+  if (klines.length === 0) {
+    throw new Error(`没有可用的 K 线数据 (symbol=${symbol}, period=${period})`);
+  }
+
+  return { klines, cached: result.cached };
+}
+
+// ---------------------------------------------------------------------------
 // 主流程
 // ---------------------------------------------------------------------------
 
@@ -111,9 +162,7 @@ export async function runServerBacktest(
   const {
     symbol,
     period = '1d',
-    count = 500,
     adjust = 'forward',
-    force = false,
     initialCash = 100_000,
     currency = 'CNY',
     commissionRate = 0.00025,
@@ -122,6 +171,7 @@ export async function runServerBacktest(
     strategyId,
     params,
     selectedIndicatorIds,
+    indicatorCodes,
     rangeStart,
     rangeEnd,
   } = input;
@@ -130,25 +180,9 @@ export async function runServerBacktest(
   if (!strategyId) throw new Error('strategyId is required');
 
   // 1. 从腾讯行情拉取 K 线 (失败自动回退 TickFlow, 见 server/klines.ts)
-  onProgress?.({
-    phase: 'fetching',
-    message: `正在拉取 ${symbol} 的 ${count} 根${period === '1w' ? '周线' : '日线'} (${adjust === 'backward' ? '后复权' : adjust === '' ? '不复权' : '前复权'})…`,
-  });
-  const query = await getKlines(symbol, period, count, adjust, force);
-  let klines = query.klines;
+  const { klines, cached } = await fetchBacktestKlines(input, onProgress);
 
-  // 2. 区间过滤
-  if (rangeStart || rangeEnd) {
-    klines = klines.filter(
-      (k) => (!rangeStart || k.date >= rangeStart) && (!rangeEnd || k.date <= rangeEnd),
-    );
-  }
-
-  if (klines.length === 0) {
-    throw new Error(`没有可用的 K 线数据 (symbol=${symbol}, period=${period})`);
-  }
-
-  // 3. 解析策略 (内建策略通过 import.meta.glob / fs 自动发现)
+  // 2. 解析策略 (内置 + 用户自建, 均由服务端编译)
   const strategies = await loadStrategies();
   const strategy = strategies.find((s) => s.id === strategyId);
   if (!strategy) {
@@ -156,12 +190,17 @@ export async function runServerBacktest(
     throw new Error(`策略未找到: ${strategyId}. 可用策略: ${available}`);
   }
 
+  // 3. 解析选中指标 (浏览器上传的代码, 服务端沙箱编译)
+  const indicators = selectedIndicatorIds?.length
+    ? resolveIndicatorDefinitions(indicatorCodes).definitions
+    : [];
+
   // 4. 运行回测
   onProgress?.({
     phase: 'computing',
-    message: `K 线就绪 (${klines.length} 根, ${query.cached ? '本地缓存' : '行情源'}), 正在运行「${strategy.name}」回测…`,
+    message: `K 线就绪 (${klines.length} 根, ${cached ? '本地缓存' : '行情源'}), 正在运行「${strategy.name}」回测…`,
     klines: klines.length,
-    source: query.cached ? 'cache' : 'network',
+    source: cached ? 'cache' : 'network',
   });
   const runResult = runBacktest({
     klines,
@@ -175,6 +214,7 @@ export async function runServerBacktest(
     strategy,
     params,
     selectedIndicatorIds,
+    indicators,
   });
 
   const equityCurve = (runResult.equityCurve ?? []) as number[];

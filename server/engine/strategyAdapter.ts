@@ -1,4 +1,4 @@
-import type { Kline } from '../types/stock';
+import type { Kline } from '../../src/types/stock.ts';
 import type {
   UserStrategyDefinition,
   UserStrategyDecision,
@@ -7,7 +7,7 @@ import type {
   BacktestAccountState,
   BacktestPositionState,
   StrategyParamValue,
-} from '../types/strategy';
+} from '../../src/types/strategy.ts';
 
 // ---------------------------------------------------------------------------
 // A-Share fee calculation (佣金 + 印花税 + 过户费)

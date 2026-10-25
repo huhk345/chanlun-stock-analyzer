@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { createChart, createSeriesMarkers, CandlestickSeries, LineSeries, HistogramSeries, IChartApi, ISeriesApi, ISeriesMarkersPluginApi, CandlestickData, LineData, HistogramData, Time, ColorType, CrosshairMode } from 'lightweight-charts';
+import { createChart, createSeriesMarkers, CandlestickSeries, LineSeries, HistogramSeries, IChartApi, ISeriesApi, ISeriesMarkersPluginApi, CandlestickData, LineData, HistogramData, SeriesMarker, Time, ColorType, CrosshairMode } from 'lightweight-charts';
 import { AlertCircle, TrendingUp, TrendingDown, Briefcase, User, ChevronRight, AlertTriangle, ExternalLink, FileText, Plus } from 'lucide-react';
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade, BSPoint } from '../types/stock';
 import type { KlineTimeframe } from '../utils/api';
@@ -629,7 +629,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
     const klineMap = new Map<string, Kline>();
     for (const k of klines) klineMap.set(k.date, k);
 
-    const markers = backtestTrades.map(t => {
+    const markers: SeriesMarker<Time>[] = backtestTrades.map((t): SeriesMarker<Time> => {
       const k = klineMap.get(t.date);
       if (!k) {
         return {
@@ -655,6 +655,8 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
       };
     });
 
+    // lightweight-charts 要求标记按时间升序
+    markers.sort((a, b) => String(a.time).localeCompare(String(b.time)));
     tradeMarkersPluginRef.current.setMarkers(markers);
   }, [backtestTrades, klines, showTradeSignals]);
 

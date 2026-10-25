@@ -18,21 +18,21 @@ if (typeof globalThis.localStorage === 'undefined') {
   };
 }
 
-import { loadStrategies } from '../src/strategies/user/index.ts';
-import { runBacktest } from '../src/utils/backtestRunner.ts';
+import { loadStrategies } from '../server/strategies/index.ts';
+import { runBacktest } from '../server/engine/backtestRunner.ts';
 import {
   calcAStockFees,
   limitUpPrice,
   limitDownPrice,
   resolveOrderShares,
   buildStrategyParams,
-} from '../src/utils/strategyAdapter.ts';
+} from '../server/engine/strategyAdapter.ts';
 import { computeChanlunStructures } from '../src/utils/chanlun.ts';
 import {
   nextTradeId,
   sharpeFromEquityCurve,
   maxDrawdownFromEquityCurve,
-} from '../src/utils/backtestUtils.ts';
+} from '../server/engine/backtestUtils.ts';
 type Kline = import('../src/types/stock.ts').Kline;
 import type { BacktestTradeSnapshot, UserStrategyDefinition, BacktestPositionState } from '../src/types/strategy.ts';
 

@@ -20,15 +20,15 @@
  * 上述(2)(3)(4)都只使用成交时点已经发生的价格 (收盘价/开盘价/最低价/前收盘)。
  */
 
-import type { Kline, BacktestTrade } from '../types/stock';
+import type { Kline, BacktestTrade } from '../../src/types/stock.ts';
 import type {
   BacktestAccountState,
   BacktestPositionState,
   BacktestDiagnostic,
   UserStrategyDecision,
-} from '../types/strategy';
-import { calcAStockFees, limitDownPrice, limitUpPrice, resolveOrderShares } from './strategyAdapter';
-import { nextTradeId } from './backtestUtils';
+} from '../../src/types/strategy.ts';
+import { calcAStockFees, limitDownPrice, limitUpPrice, resolveOrderShares } from './strategyAdapter.ts';
+import { nextTradeId } from './backtestUtils.ts';
 
 // ---------------------------------------------------------------------------
 // 账户 / 持仓状态工具 (runBacktest 与 createBacktestStepper 共用)

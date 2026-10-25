@@ -27,14 +27,12 @@
  *      - 期末现金 + 持仓市值 == 期末权益 == 权益曲线最后一根。
  */
 
-import { installLocalStorageShim } from '../server/localStorageShim.ts';
 
 // 回测引擎间接依赖 localStorage (用户指标本地存储), Node.js 下先安装空 shim
-installLocalStorageShim();
 
-import { runBacktest } from '../src/utils/backtestRunner.ts';
-import { createBacktestStepper } from '../src/utils/backtestStepper.ts';
-import { loadStrategies } from '../src/strategies/user/index.ts';
+import { runBacktest } from '../server/engine/backtestRunner.ts';
+import { createBacktestStepper } from '../server/engine/backtestStepper.ts';
+import { loadStrategies } from '../server/strategies/index.ts';
 import { getKlines } from '../server/klines.ts';
 import type { Kline, BacktestTrade } from '../src/types/stock.ts';
 import type { UserStrategyDefinition, UserStrategyDecision } from '../src/types/strategy.ts';

@@ -533,6 +533,17 @@ const BS_LABELS: Record<BSPointType, string> = {
 /** 一类买卖点检测窗口，对齐 cxt_first_buy_V221126 的 [21..5] 奇数序列 */
 const BS1_WINDOWS = [21, 19, 17, 15, 13, 11, 9, 7, 5];
 
+export interface BSPointOptions {
+  /**
+   * 只在"已确认"的笔上判定买卖点：该笔之后必须已经存在下一笔。
+   *
+   * 最后一笔的终点分型仍可能被后续 K 线改写（笔会延伸），据此产生的买卖点
+   * 会在之后重算同一段历史时消失。开启后只输出不会再被改写的点，
+   * 与看板用完整数据算出的买卖点保持一致。
+   */
+  confirmedOnly?: boolean;
+}
+
 /**
  * 计算缠论三类买卖点：
  * - B1/S1：趋势背驰（checkFirstBuy/checkFirstSell，窗口滑动）；
@@ -541,10 +552,12 @@ const BS1_WINDOWS = [21, 19, 17, 15, 13, 11, 9, 7, 5];
  *
  * 返回按 originalIndex 升序的买卖点列表。
  */
-export function calculateBSPoints(klines: Kline[], strokes: Stroke[]): BSPoint[] {
+export function calculateBSPoints(klines: Kline[], strokes: Stroke[], options: BSPointOptions = {}): BSPoint[] {
   const points: BSPoint[] = [];
   const n = strokes.length;
   if (klines.length === 0 || n < 5) return points;
+  // confirmedOnly 时最后一笔不算，只保留之后存在下一笔、终点已冻结的笔。
+  const maxStrokeIndex = options.confirmedOnly ? n - 2 : n - 1;
 
   const seen = new Set<string>();
   const lastFiredAt = new Map<BSPointType, number>();
@@ -571,7 +584,7 @@ export function calculateBSPoints(klines: Kline[], strokes: Stroke[]): BSPoint[]
   };
 
   // ---- B1/S1：一类买卖点（趋势背驰），窗口从大到小取首个命中 ----
-  for (let e = 4; e < n; e++) {
+  for (let e = 4; e <= maxStrokeIndex; e++) {
     for (const w of BS1_WINDOWS) {
       const start = e - w + 1;
       if (start < 0) continue;
@@ -590,13 +603,13 @@ export function calculateBSPoints(klines: Kline[], strokes: Stroke[]): BSPoint[]
   // ---- B2/S2：二类买卖点（一买/一卖后回调不创新低/新高）----
   for (const p of [...points]) {
     const k = p.strokeIndex;
-    if (p.type === 'B1' && k + 2 < n) {
+    if (p.type === 'B1' && k + 2 <= maxStrokeIndex) {
       const pullback = strokes[k + 2];
       if (pullback.direction === 'down' && strokeLow(pullback) > strokeLow(strokes[k])) {
         pushPoint('B2', k + 2, 1);
       }
     }
-    if (p.type === 'S1' && k + 2 < n) {
+    if (p.type === 'S1' && k + 2 <= maxStrokeIndex) {
       const rally = strokes[k + 2];
       if (rally.direction === 'up' && strokeHigh(rally) < strokeHigh(strokes[k])) {
         pushPoint('S2', k + 2, 1);
@@ -605,7 +618,7 @@ export function calculateBSPoints(klines: Kline[], strokes: Stroke[]): BSPoint[]
   }
 
   // ---- B3/S3：三类买卖点（中枢离开后回抽不回区间），对齐 cxt_third_bs_V230318 ----
-  for (let e = 4; e < n; e++) {
+  for (let e = 4; e <= maxStrokeIndex; e++) {
     const b1 = strokes[e - 4];
     const b3 = strokes[e - 2];
     const b5 = strokes[e];

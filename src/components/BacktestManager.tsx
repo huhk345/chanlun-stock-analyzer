@@ -2,13 +2,27 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Play, ShieldAlert, CheckCircle, Download, ChevronLeft, ChevronRight, SkipForward, RotateCcw, Wand2, ChevronDown } from 'lucide-react';
 import { Kline, BacktestResult, BacktestTrade } from '../types/stock';
-import { SupabaseUser } from '../utils/supabase';
-import type { UserStrategyDefinition, BacktestStepState, IndicatorSelectionState, BacktestDiagnostic, StrategyParamValue } from '../types/strategy';
-import { userStrategies } from '../strategies/user';
-import { loadStoredStrategies } from '../utils/strategyLoader';
-import { buildStrategyParams } from '../utils/strategyAdapter';
-import { runBacktest } from '../utils/backtestRunner';
-import { createBacktestStepper } from '../utils/backtestStepper';
+import type { SupabaseUser } from '../utils/supabase';
+import type {
+  BacktestStepState,
+  IndicatorSelectionState,
+  BacktestDiagnostic,
+  StrategyParamValue,
+  StrategySummary,
+} from '../types/strategy';
+import { ensureLocalStrategyMigration, fetchStrategySummaries } from '../utils/strategyApi';
+import { csvCell, downloadCsv } from '../utils/download';
+import { getAllStoredIndicators } from '../utils/indicatorStorage';
+import {
+  runBacktest as runBacktestApi,
+  createStepperSession,
+  stepStepperSession,
+  runAllStepperSession,
+  getStepperTrades,
+  closeStepperSession,
+  type BacktestIndicatorCode,
+  type BacktestRunRequest,
+} from '../utils/backtestApi';
 import StrategyDialog from './StrategyDialog';
 
 interface BacktestManagerProps {
@@ -16,6 +30,13 @@ interface BacktestManagerProps {
   symbol: string;
   currentUser: SupabaseUser | null;
   onBacktestResult?: (trades: BacktestTrade[]) => void;
+}
+
+/** 策略参数默认值 (策略元数据里声明的 defaultValue) */
+function defaultParamsOf(strategy: StrategySummary | null): Record<string, StrategyParamValue> {
+  const params: Record<string, StrategyParamValue> = {};
+  for (const param of strategy?.params ?? []) params[param.key] = param.defaultValue;
+  return params;
 }
 
 export default function BacktestManager({ klines, symbol, currentUser, onBacktestResult }: BacktestManagerProps) {
@@ -28,9 +49,10 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Strategy selection
+  // Strategy selection (元数据来自服务端, 策略代码只在服务端执行)
   const [selectedStrategyId, setSelectedStrategyId] = useState<string>('');
-  const [allStrategies, setAllStrategies] = useState<UserStrategyDefinition[]>([]);
+  const [allStrategies, setAllStrategies] = useState<StrategySummary[]>([]);
+  const [strategyError, setStrategyError] = useState<string>('');
 
   // Indicator selection
   const [indicatorSelection, setIndicatorSelection] = useState<IndicatorSelectionState>({
@@ -42,9 +64,10 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
   // Strategy params (策略参数: 买卖逻辑的阈值)
   const [customParams, setCustomParams] = useState<Record<string, StrategyParamValue>>({});
 
-  // Day-by-day stepper
+  // Day-by-day stepper (服务端会话)
   const [stepperMode, setStepperMode] = useState(false);
   const [stepState, setStepState] = useState<BacktestStepState | null>(null);
+  const [stepperBusy, setStepperBusy] = useState(false);
   const [diagnostics, setDiagnostics] = useState<BacktestDiagnostic[]>([]);
 
   // Strategy dropdown
@@ -89,18 +112,26 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
   // Jump-to index input
   const [jumpToIndex, setJumpToIndex] = useState<string>('');
 
-  // Load strategies on mount
-  useEffect(() => {
-    const stored = loadStoredStrategies();
-    const combined = [...userStrategies, ...stored];
-    setAllStrategies(combined);
-
-    // Default selection: first strategy with defaultSelected, or first strategy
-    const defaultStrategy = combined.find((s) => s.defaultSelected) ?? combined[0];
-    if (defaultStrategy) {
-      setSelectedStrategyId(defaultStrategy.id);
+  // Load strategies from backend (内置 + 自建, 由服务端合并)
+  const loadStrategies = useCallback(async () => {
+    try {
+      // 旧版本地策略先搬到服务端 (只做一次), 再拉注册表
+      await ensureLocalStrategyMigration();
+      const list = await fetchStrategySummaries();
+      setAllStrategies(list);
+      setStrategyError('');
+      setSelectedStrategyId((prev) => {
+        if (prev && list.some((s) => s.id === prev)) return prev;
+        return (list.find((s) => s.defaultSelected) ?? list[0])?.id ?? '';
+      });
+    } catch (err) {
+      setStrategyError(err instanceof Error ? err.message : '策略列表加载失败');
     }
   }, []);
+
+  useEffect(() => {
+    void loadStrategies();
+  }, [loadStrategies]);
 
   // When strategy changes, reset indicator selection & backtest state
   useEffect(() => {
@@ -117,7 +148,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
       selectedIndicatorIds: defaultIds,
       indicatorParams: {},
     });
-    setCustomParams(buildStrategyParams(strategy));
+    setCustomParams(defaultParamsOf(strategy));
     setBacktest(null);
     setStepState(null);
     setStepperMode(false);
@@ -170,29 +201,68 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
     });
   }, []);
 
-  const handleRunBacktest = () => {
-    if (!selectedStrategy) return;
+  /**
+   * 选中指标的定义在浏览器侧维护 (图表要用), 回测在服务端执行,
+   * 因此把指标代码随请求一起上传, 由服务端沙箱编译。
+   */
+  const selectedIndicatorCodes = useCallback((): BacktestIndicatorCode[] => {
+    const ids = indicatorSelection.selectedIndicatorIds;
+    if (ids.length === 0) return [];
+    const stored = getAllStoredIndicators();
+    return stored
+      .filter((item) => ids.includes(item.id))
+      .map((item) => ({ id: item.id, code: item.code }));
+  }, [indicatorSelection.selectedIndicatorIds]);
+
+  /** 回测请求体 (一次性回测与逐步回测同口径) */
+  const buildRequest = useCallback((): BacktestRunRequest | null => {
+    if (!selectedStrategy) return null;
+    const body: BacktestRunRequest = {
+      symbol,
+      strategyId: selectedStrategy.id,
+      initialCash: initialCapital,
+      currency: 'CNY',
+      commissionRate: commissionRateWan / 10000,
+      params: customParams,
+      selectedIndicatorIds: indicatorSelection.selectedIndicatorIds,
+      indicatorCodes: selectedIndicatorCodes(),
+    };
+    if (rangeStart) body.rangeStart = rangeStart;
+    if (rangeEnd) body.rangeEnd = rangeEnd;
+    return body;
+  }, [
+    selectedStrategy,
+    symbol,
+    initialCapital,
+    commissionRateWan,
+    customParams,
+    indicatorSelection.selectedIndicatorIds,
+    selectedIndicatorCodes,
+    rangeStart,
+    rangeEnd,
+  ]);
+
+  /** 服务端逐步回测会话 id (策略/引擎状态都在服务端) */
+  const sessionIdRef = useRef<string | null>(null);
+
+  const handleRunBacktest = async () => {
+    const body = buildRequest();
+    if (!body) return;
     setLoading(true);
     setStepperMode(false);
     setStepState(null);
 
-    try {
-      const commissionRate = commissionRateWan / 10000;
-      const { result, diagnostics: diags } = runBacktest({
-        klines: filteredKlines,
-        symbol,
-        userId: currentUser?.id || 'anonymous',
-        initialCash: initialCapital,
-        currency: 'CNY',
-        commissionRate,
-        strategy: selectedStrategy,
-        params: customParams,
-        selectedIndicatorIds: indicatorSelection.selectedIndicatorIds,
-      });
+    // 一次性回测与逐步回测互斥: 先关掉可能存在的会话
+    if (sessionIdRef.current) {
+      void closeStepperSession(sessionIdRef.current);
+      sessionIdRef.current = null;
+    }
 
-      setBacktest(result);
-      setDiagnostics([...diags]);
-      onBacktestResult?.(result.trades);
+    try {
+      const detail = await runBacktestApi(body);
+      setBacktest(detail.result);
+      setDiagnostics([...detail.diagnostics]);
+      onBacktestResult?.(detail.result.trades);
     } catch (err) {
       setDiagnostics([{
         level: 'error',
@@ -203,81 +273,107 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
     }
   };
 
-  const stepperRef = useRef<ReturnType<typeof createBacktestStepper> | null>(null);
-
   // 单步运行中的全部成交 (页面「全部成交」账本)
   const [ledgerTrades, setLedgerTrades] = useState<BacktestTrade[]>([]);
-  const syncLedger = useCallback(() => {
-    setLedgerTrades(stepperRef.current ? stepperRef.current.getTrades() : []);
+  const syncLedger = useCallback(async () => {
+    const sessionId = sessionIdRef.current;
+    if (!sessionId) {
+      setLedgerTrades([]);
+      return;
+    }
+    try {
+      setLedgerTrades(await getStepperTrades(sessionId));
+    } catch {
+      /* 账本拉取失败不影响单步操作 */
+    }
   }, []);
 
-  const handleStartStepper = () => {
-    if (!selectedStrategy) return;
+  const handleStartStepper = async () => {
+    const body = buildRequest();
+    if (!body) return;
     setStepperMode(true);
     setBacktest(null);
     setDiagnostics([]);
+    setStepperBusy(true);
 
-    const commissionRate = commissionRateWan / 10000;
-    const stepper = createBacktestStepper({
-      klines: filteredKlines,
-      symbol,
-      userId: currentUser?.id || 'anonymous',
-      initialCash: initialCapital,
-      currency: 'CNY',
-      commissionRate,
-      strategy: selectedStrategy,
-      params: customParams,
-      selectedIndicatorIds: indicatorSelection.selectedIndicatorIds,
-    });
-
-    const initialState = stepper.start();
-    setStepState(initialState);
-    setJumpToIndex('0');
-
-    // Store stepper ref for later use
-    stepperRef.current = stepper;
-    syncLedger();
+    try {
+      if (sessionIdRef.current) await closeStepperSession(sessionIdRef.current);
+      const view = await createStepperSession(body);
+      sessionIdRef.current = view.sessionId;
+      setStepState(view.state);
+      setJumpToIndex('0');
+      await syncLedger();
+    } catch (err) {
+      setStepperMode(false);
+      setDiagnostics([{
+        level: 'error',
+        message: `逐步回测初始化失败: ${err instanceof Error ? err.message : String(err)}`,
+      }]);
+    } finally {
+      setStepperBusy(false);
+    }
   };
 
-  const handleStepForward = () => {
-    if (!stepperRef.current) return;
-    const state = stepperRef.current.stepForward();
-    setStepState(state);
-    setJumpToIndex(String(state.currentStepIndex));
-    syncLedger();
+  const stepSession = async (
+    action: 'forward' | 'backward' | 'jump',
+    index?: number,
+  ) => {
+    const sessionId = sessionIdRef.current;
+    if (!sessionId || stepperBusy) return;
+    setStepperBusy(true);
+    try {
+      const view = await stepStepperSession(sessionId, action, index);
+      setStepState(view.state);
+      setJumpToIndex(String(view.state.currentStepIndex));
+      await syncLedger();
+    } catch (err) {
+      setDiagnostics((prev) => [...prev, {
+        level: 'error',
+        message: `单步执行失败: ${err instanceof Error ? err.message : String(err)}`,
+      }]);
+    } finally {
+      setStepperBusy(false);
+    }
   };
 
-  const handleStepBackward = () => {
-    if (!stepperRef.current) return;
-    const state = stepperRef.current.stepBackward();
-    setStepState(state);
-    setJumpToIndex(String(state.currentStepIndex));
-    syncLedger();
-  };
+  const handleStepForward = () => void stepSession('forward');
+  const handleStepBackward = () => void stepSession('backward');
 
   const handleJumpTo = () => {
-    if (!stepperRef.current) return;
     const index = parseInt(jumpToIndex, 10);
     if (isNaN(index)) return;
-    const state = stepperRef.current.jumpTo(index);
-    setStepState(state);
-    setJumpToIndex(String(state.currentStepIndex));
-    syncLedger();
+    void stepSession('jump', index);
   };
 
-  const handleRunAll = () => {
-    if (!stepperRef.current) return;
-    const { result, diagnostics: diags } = stepperRef.current.runAll();
-    setBacktest(result);
-    setDiagnostics([...diags]);
-    onBacktestResult?.(result.trades);
-    setStepperMode(false);
-    setStepState(null);
-    syncLedger();
+  const handleRunAll = async () => {
+    const sessionId = sessionIdRef.current;
+    if (!sessionId) return;
+    setStepperBusy(true);
+    try {
+      const output = await runAllStepperSession(sessionId);
+      setBacktest(output.result);
+      setDiagnostics([...output.diagnostics]);
+      onBacktestResult?.(output.result.trades);
+      setStepperMode(false);
+      setStepState(null);
+      // 账本留在本地状态, 服务端会话用完即关 (结果已经拿到)
+      setLedgerTrades(output.trades);
+      sessionIdRef.current = null;
+      void closeStepperSession(sessionId);
+    } catch (err) {
+      setDiagnostics((prev) => [...prev, {
+        level: 'error',
+        message: `运行全部失败: ${err instanceof Error ? err.message : String(err)}`,
+      }]);
+    } finally {
+      setStepperBusy(false);
+    }
   };
 
   const handleResetStepper = () => {
-    stepperRef.current = null;
+    const sessionId = sessionIdRef.current;
+    sessionIdRef.current = null;
+    if (sessionId) void closeStepperSession(sessionId);
     setStepperMode(false);
     setStepState(null);
     setLedgerTrades([]);
@@ -285,16 +381,21 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
     setJumpToIndex('0');
   };
 
+  // 离开页面时结束服务端会话 (避免服务端为已关闭的页面保留 K 线与引擎状态)
+  useEffect(() => () => {
+    const sessionId = sessionIdRef.current;
+    if (sessionId) void closeStepperSession(sessionId);
+  }, []);
+
   const handleExportCSV = () => {
     if (!backtest) return;
-    const rows = [['日期', '方向', '信号来源', '信号依据', '置信度', '执行价格', '交易股数', '交易金额', '费用', '盈亏', '盈亏率']];
+    const rows: (string | number)[][] = [['日期', '方向', '信号来源', '信号依据', '置信度', '执行价格', '交易股数', '交易金额', '费用', '盈亏', '盈亏率']];
     for (const t of backtest.trades) {
-      const reason = String(t.reason ?? t.signalType).replace(/"/g, '""');
       rows.push([
         t.date,
         t.type === 'BUY' ? '买入' : '卖出',
         t.signalType,
-        `"${reason}"`,
+        csvCell(String(t.reason ?? t.signalType)),
         t.confidence !== undefined ? String(t.confidence) : '',
         String(t.price),
         String(t.shares),
@@ -304,36 +405,21 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
         t.pnlPercent !== undefined ? String(t.pnlPercent) : '',
       ]);
     }
-    const csv = rows.map((r) => r.join(',')).join('\n');
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${symbol}_backtest_${backtest.startDate}_${backtest.endDate}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadCsv(`${symbol}_backtest_${backtest.startDate}_${backtest.endDate}.csv`, rows);
   };
 
-  const handleStrategyCreated = (strategy: UserStrategyDefinition) => {
-    setAllStrategies((prev) => [...prev, strategy]);
-    setSelectedStrategyId(strategy.id);
+  const handleStrategyCreated = (strategyId: string) => {
+    setSelectedStrategyId(strategyId);
     setStrategyDialogOpen(false);
+    void loadStrategies();
   };
 
   const handleStrategySaved = () => {
-    const stored = loadStoredStrategies();
-    const combined = [...userStrategies, ...stored];
-    setAllStrategies(combined);
+    void loadStrategies();
   };
 
   const handleStrategyDeleted = () => {
-    const stored = loadStoredStrategies();
-    const combined = [...userStrategies, ...stored];
-    setAllStrategies(combined);
-    setSelectedStrategyId((prev) => {
-      if (combined.some((s) => s.id === prev)) return prev;
-      return combined[0]?.id ?? '';
-    });
+    void loadStrategies();
   };
 
   const fmt = (n: number) => n.toFixed(2);
@@ -419,6 +505,9 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
               </div>
               {selectedStrategy?.description && (
                 <p className="text-[11px] text-zinc-500 font-sans mt-1.5">{selectedStrategy.description}</p>
+              )}
+              {strategyError && (
+                <p className="text-[11px] text-red-400 font-sans mt-1.5">策略列表加载失败: {strategyError}</p>
               )}
             </div>
 
@@ -536,6 +625,27 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
                           onChange={(e) => setCustomParams((prev) => ({ ...prev, [p.key]: e.target.checked }))}
                           className="mt-1 h-4 w-4 rounded border-zinc-600 text-blue-500"
                         />
+                      ) : p.type === 'string' ? (
+                        (p.options?.length ?? 0) > 0 ? (
+                          <select
+                            value={String(customParams[p.key] ?? p.defaultValue)}
+                            onChange={(e) => setCustomParams((prev) => ({ ...prev, [p.key]: e.target.value }))}
+                            className="mt-1 w-full bg-transparent text-xs font-mono text-zinc-100 focus:outline-none cursor-pointer"
+                          >
+                            {p.options!.map((opt) => (
+                              <option key={opt} value={opt} className="bg-zinc-900">
+                                {opt}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            type="text"
+                            value={String(customParams[p.key] ?? p.defaultValue)}
+                            onChange={(e) => setCustomParams((prev) => ({ ...prev, [p.key]: e.target.value }))}
+                            className="mt-1 w-full bg-transparent text-xs font-mono text-zinc-100 focus:outline-none"
+                          />
+                        )
                       ) : (
                         <input
                           type="number"
@@ -589,7 +699,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
               <div className="flex items-center gap-2 flex-wrap">
                 <button
                   onClick={handleStepBackward}
-                  disabled={stepState.currentStepIndex <= 0}
+                  disabled={stepperBusy || stepState.currentStepIndex <= 0}
                   className="p-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg border border-zinc-700 cursor-pointer transition-all disabled:opacity-30"
                   title="上一步"
                 >
@@ -598,7 +708,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
 
                 <button
                   onClick={handleStepForward}
-                  disabled={stepState.isFinished}
+                  disabled={stepperBusy || stepState.isFinished}
                   className="p-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg border border-zinc-700 cursor-pointer transition-all disabled:opacity-30"
                   title="下一步"
                 >
@@ -626,7 +736,8 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
 
                 <button
                   onClick={handleRunAll}
-                  className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-blue-500 hover:bg-blue-400 text-white rounded-lg cursor-pointer transition-all"
+                  disabled={stepperBusy}
+                  className="ml-auto disabled:opacity-50 flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-blue-500 hover:bg-blue-400 text-white rounded-lg cursor-pointer transition-all"
                   id="btn-stepper-run-all"
                 >
                   <SkipForward className="h-3.5 w-3.5" />
@@ -856,7 +967,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
                   {!stepperMode && (
                     <button
                       onClick={handleStartStepper}
-                      disabled={filteredKlines.length === 0 || !selectedStrategy}
+                      disabled={stepperBusy || filteredKlines.length === 0 || !selectedStrategy}
                       className="shrink-0 px-3 py-1.5 font-semibold text-xs rounded-lg bg-zinc-800 text-zinc-100 hover:bg-zinc-700 border border-zinc-700 cursor-pointer transition-all flex items-center gap-1.5"
                       id="btn-start-stepper"
                       title="逐步回测"

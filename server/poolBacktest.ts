@@ -14,15 +14,12 @@
  * 正在运行的同参数任务上; 完成后结果在内存中保留一段时间, 供前端反复查看。
  */
 
-import { installLocalStorageShim } from './localStorageShim.ts';
-// 回测引擎间接依赖 localStorage (用户指标/策略本地存储), 必须在调用 runBacktest 前安装 shim
-installLocalStorageShim();
 
-import { runBacktest } from '../src/utils/backtestRunner.ts';
-import { sharpeFromEquityCurve, maxDrawdownFromEquityCurve } from '../src/utils/backtestUtils.ts';
+import { runBacktest } from './engine/backtestRunner.ts';
+import { sharpeFromEquityCurve, maxDrawdownFromEquityCurve } from './engine/backtestUtils.ts';
 import { getKlines } from './klines.ts';
 import { buildUniverse, loadStockMeta, type StockMeta } from './universe.ts';
-import { loadStrategies } from '../src/strategies/user/index.ts';
+import { loadStrategies } from './strategies/index.ts';
 import type { KlinePeriod } from '../src/utils/klineUtils.ts';
 import type { BacktestResult, Kline } from '../src/types/stock.ts';
 import type { BacktestDiagnostic, UserStrategyDefinition } from '../src/types/strategy.ts';
@@ -49,7 +46,7 @@ import type {
  * 与扫描使用同一限速器, 这里取 8 与扫描保持一致, 控制内存/连接并发。
  */
 const CONCURRENCY = 8;
-/** 池模式默认拉取根数 (400 根 ≈ 1.6 年日线, 与扫描缓存对齐, 命中率高) */
+/** 池模式兼容拉取根数; 实际窗口固定为 2023-01-01 至今 */
 const DEFAULT_COUNT = 400;
 /** 单只标的名义本金 */
 const DEFAULT_PER_SYMBOL_CASH = 100_000;

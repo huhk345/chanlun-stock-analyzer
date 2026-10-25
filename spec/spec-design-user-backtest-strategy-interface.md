@@ -9,6 +9,8 @@ tags: [design, backtest, strategy, trading-signals, ai-assisted-development]
 
 # Introduction
 
+> **路径变更 (2026-10)**: 策略与回测引擎已整体迁到服务端 —— 策略定义在 `server/strategies/`, 回测引擎在 `server/engine/`, 用户自建策略持久化在 `data/user-strategies/`; 浏览器只通过 `/api/strategies` 与 `/api/backtest/*` 访问, 不再持有策略代码或回测逻辑。下文出现的 `src/strategies/user/`、`src/utils/backtest*.ts` 均指迁移前的旧路径。
+
 This specification defines a stable TypeScript interface for user-defined backtest strategies in the ChanLun Stock Analyzer project. The goal is to let a user or AI assistant implement one pure strategy function with fixed input parameters and a fixed return shape. The backtest runner can then execute that function over historical K-line data and convert returned buy or sell decisions into simulated trades.
 
 ## 1. Purpose & Scope

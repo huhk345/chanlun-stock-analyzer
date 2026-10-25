@@ -293,6 +293,15 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
     return (minutes >= 570 && minutes <= 690) || (minutes >= 780 && minutes <= 900);
   };
 
+  const routeFor = (nextView: ViewMode) => {
+    if (nextView === 'analyzer' || nextView === 'simulation') {
+      return activeSymbol
+        ? `/${nextView}/${encodeURIComponent(activeSymbol)}`
+        : `/${nextView}`;
+    }
+    return `/${nextView}`;
+  };
+
   return (
     <nav className="sticky top-0 z-50 text-zinc-100 bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 border-b border-zinc-800/80 shadow-[0_1px_0_0_rgba(59,130,246,0.08),0_4px_24px_-8px_rgba(0,0,0,0.6)] backdrop-blur-xl">
       <div className="w-full h-14 flex items-center">
@@ -328,9 +337,12 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
             single 56px row never overflows on ~360px viewports (scroll up to switch). */}
         {onViewChange && !(isMobile && isScrolled && stockBasicInfo) && (
           <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-zinc-900/70 border border-zinc-800/60 shrink-0 ml-1 md:ml-3">
-            <button
-              type="button"
-              onClick={() => onViewChange('dashboard')}
+            <a
+              href={routeFor('dashboard')}
+              onClick={(e) => {
+                e.preventDefault();
+                onViewChange('dashboard');
+              }}
               className={`flex items-center gap-1.5 h-8 px-2 md:px-3 rounded-md text-xs font-medium transition-all cursor-pointer ${
                 view === 'dashboard'
                   ? 'bg-blue-500/15 text-blue-400 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.3)]'
@@ -340,10 +352,13 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
             >
               <LayoutDashboard className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">总览</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => onViewChange('indexes')}
+            </a>
+            <a
+              href={routeFor('indexes')}
+              onClick={(e) => {
+                e.preventDefault();
+                onViewChange('indexes');
+              }}
               className={`flex items-center gap-1.5 h-8 px-2 md:px-3 rounded-md text-xs font-medium transition-all cursor-pointer ${
                 view === 'indexes'
                   ? 'bg-blue-500/15 text-blue-400 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.3)]'
@@ -353,10 +368,13 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
             >
               <ChartCandlestick className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">缠论买卖点</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => onViewChange('analyzer')}
+            </a>
+            <a
+              href={routeFor('analyzer')}
+              onClick={(e) => {
+                e.preventDefault();
+                onViewChange('analyzer');
+              }}
               className={`flex items-center gap-1.5 h-8 px-2 md:px-3 rounded-md text-xs font-medium transition-all cursor-pointer ${
                 view === 'analyzer'
                   ? 'bg-blue-500/15 text-blue-400 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.3)]'
@@ -366,10 +384,13 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
             >
               <LineChart className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">个股分析</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => onViewChange('simulation')}
+            </a>
+            <a
+              href={routeFor('simulation')}
+              onClick={(e) => {
+                e.preventDefault();
+                onViewChange('simulation');
+              }}
               className={`flex items-center gap-1.5 h-8 px-2 md:px-3 rounded-md text-xs font-medium transition-all cursor-pointer ${
                 view === 'simulation'
                   ? 'bg-blue-500/15 text-blue-400 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.3)]'
@@ -379,7 +400,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
             >
               <Play className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">策略模拟</span>
-            </button>
+            </a>
           </div>
         )}
 

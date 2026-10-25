@@ -3,8 +3,8 @@
  *   - 年化夏普比率 / 最大回撤
  *   - 交易 ID 生成 / BacktestTrade -> BacktestTradeSnapshot 转换
  */
-import type { BacktestTrade } from '../types/stock';
-import type { BacktestTradeSnapshot } from '../types/strategy';
+import type { BacktestTrade } from '../../src/types/stock.ts';
+import type { BacktestTradeSnapshot } from '../../src/types/strategy.ts';
 
 // ---------------------------------------------------------------------------
 // 统计指标

@@ -8,23 +8,20 @@ import Prism from 'prismjs';
 import 'prismjs/components/prism-javascript';
 import 'prismjs/themes/prism-tomorrow.css';
 import type {
-  UserStrategyDefinition,
   StoredStrategy,
   StrategyDialogResponse,
   ChatEntry,
 } from '../types/strategy';
 import {
-  getAllStoredStrategies,
-  saveStoredStrategy,
-  deleteStoredStrategy,
-  exportStoredStrategies,
-  importStoredStrategies,
-  getStrategyStorageStats,
-} from '../utils/strategyStorage';
-import {
+  deleteUserStrategy,
+  exportUserStrategies,
+  fetchUserStrategies,
+  importUserStrategies,
+  ensureLocalStrategyMigration,
+  saveUserStrategy,
+  strategyStoreStats,
   validateStrategyCode,
-  loadStoredStrategyById,
-} from '../utils/strategyLoader';
+} from '../utils/strategyApi';
 import {
   generateStrategyCode,
   extractCodeFromResponse,
@@ -37,7 +34,8 @@ import ConfirmDialog from './ConfirmDialog';
 interface StrategyDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  onStrategyCreated?: (strategy: UserStrategyDefinition) => void;
+  /** 新建策略成功后回调 (参数为策略 id, 服务端已落库) */
+  onStrategyCreated?: (strategyId: string) => void;
   /** Called when an existing strategy is saved after editing */
   onStrategySaved?: () => void;
   /** Called when a strategy is deleted */
@@ -59,7 +57,7 @@ export default function StrategyDialog({
 }: StrategyDialogProps) {
   const [activeTab, setActiveTab] = useState<'create' | 'manage'>('create');
   const [storedStrategies, setStoredStrategies] = useState<StoredStrategy[]>([]);
-  const [storageStats, setStorageStats] = useState(getStrategyStorageStats());
+  const [storageStats, setStorageStats] = useState(strategyStoreStats([]));
 
   // Create tab state
   const [userDescription, setUserDescription] = useState('');
@@ -139,9 +137,18 @@ export default function StrategyDialog({
     }
   }, [isOpen]);
 
-  const loadStrategies = () => {
-    setStoredStrategies(getAllStoredStrategies());
-    setStorageStats(getStrategyStorageStats());
+  const loadStrategies = async () => {
+    try {
+      await ensureLocalStrategyMigration();
+      const list = await fetchUserStrategies();
+      setStoredStrategies(list);
+      setStorageStats(strategyStoreStats(list));
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: err instanceof Error ? err.message : '策略列表加载失败',
+      });
+    }
   };
 
   const handleGenerateStrategy = async () => {
@@ -236,10 +243,19 @@ export default function StrategyDialog({
     setDeleteConfirmId(id);
   };
 
-  const confirmDeleteStrategy = () => {
+  const confirmDeleteStrategy = async () => {
     if (!deleteConfirmId) return;
-    deleteStoredStrategy(deleteConfirmId);
-    loadStrategies();
+    try {
+      await deleteUserStrategy(deleteConfirmId);
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: err instanceof Error ? err.message : '删除策略失败',
+      });
+      setDeleteConfirmId(null);
+      return;
+    }
+    await loadStrategies();
     if (viewingStrategy?.id === deleteConfirmId) {
       setViewingStrategy(null);
     }
@@ -266,7 +282,7 @@ export default function StrategyDialog({
     setViewingStrategy(strategy);
   };
 
-  const handleSaveFromDetail = () => {
+  const handleSaveFromDetail = async () => {
     if (!viewingStrategy || selectedChatIndex < 0) return;
     const updatedHistory = chatHistory.map((entry, i) =>
       i === selectedChatIndex ? { ...entry, code: detailEditCode } : entry
@@ -277,8 +293,7 @@ export default function StrategyDialog({
       alert(`代码验证失败:\n${validation.errors.join('\n')}`);
       return;
     }
-    const existingStrategies = getAllStoredStrategies();
-    const isNew = !existingStrategies.some((s) => s.id === viewingStrategy.id) || viewingStrategy.id.startsWith('temp-');
+    const isNew = !storedStrategies.some((s) => s.id === viewingStrategy.id) || viewingStrategy.id.startsWith('temp-');
     if (isNew) {
       const idMatch = latestCode.match(/id:\s*['"]([^'"]+)['"]/);
       const nameMatch = latestCode.match(/name:\s*['"]([^'"]+)['"]/);
@@ -288,7 +303,7 @@ export default function StrategyDialog({
       }
       const id = idMatch[1];
       const name = nameMatch[1];
-      if (existingStrategies.some((s) => s.id === id) || existingStrategyIds.includes(id)) {
+      if (storedStrategies.some((s) => s.id === id) || existingStrategyIds.includes(id)) {
         alert(`策略 ID "${id}" 已存在，请修改代码中的 ID。`);
         return;
       }
@@ -303,10 +318,10 @@ export default function StrategyDialog({
           updatedAt: new Date().toISOString(),
           chatHistory: updatedHistory,
         };
-        saveStoredStrategy(stored);
-        const definition = loadStoredStrategyById(id);
-        if (definition) onStrategyCreated?.(definition);
-        loadStrategies();
+        // 服务端会做沙箱编译, 编译不过会直接抛错
+        await saveUserStrategy(stored);
+        onStrategyCreated?.(id);
+        await loadStrategies();
         onClose();
       } catch (error) {
         alert(error instanceof Error ? error.message : '保存策略失败');
@@ -319,8 +334,8 @@ export default function StrategyDialog({
           chatHistory: updatedHistory,
           updatedAt: new Date().toISOString(),
         };
-        saveStoredStrategy(updated);
-        loadStrategies();
+        await saveUserStrategy(updated);
+        await loadStrategies();
         onStrategySaved?.();
         onClose();
       } catch (error) {
@@ -373,9 +388,10 @@ export default function StrategyDialog({
         chatHistory: finalHistory,
         updatedAt: new Date().toISOString(),
       };
-      saveStoredStrategy(updated);
+      // 临时策略 (temp-*) 还没落库, 生成完成后再保存
+      if (!updated.id.startsWith('temp-')) await saveUserStrategy(updated);
       setViewingStrategy(updated);
-      loadStrategies();
+      await loadStrategies();
       onStrategySaved?.();
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'AI 重新生成失败';
@@ -443,9 +459,10 @@ export default function StrategyDialog({
         chatHistory: finalHistory,
         updatedAt: new Date().toISOString(),
       };
-      saveStoredStrategy(updated);
+      // 临时策略 (temp-*) 还没落库, 生成完成后再保存
+      if (!updated.id.startsWith('temp-')) await saveUserStrategy(updated);
       setViewingStrategy(updated);
-      loadStrategies();
+      await loadStrategies();
       onStrategySaved?.();
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'AI 重新生成失败';
@@ -458,8 +475,14 @@ export default function StrategyDialog({
     }
   };
 
-  const handleExport = () => {
-    const json = exportStoredStrategies();
+  const handleExport = async () => {
+    let json: string;
+    try {
+      json = await exportUserStrategies();
+    } catch (err) {
+      setNotification({ type: 'error', message: err instanceof Error ? err.message : '导出失败' });
+      return;
+    }
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -478,8 +501,16 @@ export default function StrategyDialog({
       if (!file) return;
 
       const text = await file.text();
-      const result = importStoredStrategies(text);
-      loadStrategies();
+      let payload: unknown;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        alert('导入失败: 不是合法的 JSON 文件');
+        return;
+      }
+      const result = await importUserStrategies(payload);
+      await loadStrategies();
+      onStrategySaved?.();
       alert(
         `导入完成:\n` +
         `导入: ${result.imported}\n` +
@@ -733,7 +764,7 @@ export default function StrategyDialog({
                   <div className="flex items-center gap-2 min-w-0">
                     <button
                       onClick={() => {
-                        if (viewingStrategy && !getAllStoredStrategies().some((s) => s.id === viewingStrategy.id)) {
+                        if (viewingStrategy && !storedStrategies.some((s) => s.id === viewingStrategy.id)) {
                           setActiveTab('create');
                         }
                         setViewingStrategy(null);

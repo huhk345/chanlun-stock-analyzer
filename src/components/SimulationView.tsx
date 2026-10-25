@@ -9,7 +9,7 @@
  * 数据与计算全部在服务端 (server/backtest.ts / server/poolBacktest.ts):
  *   - 单标的: POST /api/backtest/run
  *   - 选股池: POST /api/backtest/pool 发起任务, 前端轮询进度, 完成后取组合报告
- * 引擎: src/utils/backtestRunner.runBacktest (沪深 A 股长仓; 信号当日收盘价成交 (尾盘模型); 佣金+印花税+过户费; 涨跌停按收盘价拦截; 固定止损为盘中止损单)
+ * 引擎: server/engine/backtestRunner.runBacktest (策略与回测引擎都在服务端) (沪深 A 股长仓; 信号当日收盘价成交 (尾盘模型); 佣金+印花税+过户费; 涨跌停按收盘价拦截; 固定止损为盘中止损单)
  */
 
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
@@ -17,7 +17,7 @@ import {
   Play, Download, RefreshCw, LineChart as LineChartIcon, Target, Layers,
   X, Search, Loader2, Square, Percent, Wallet, ShieldAlert, Activity,
   Coins, ListOrdered, AlertTriangle, Info, ChevronUp, ChevronDown, SlidersHorizontal, FlaskConical, Check,
-  ChartCandlestick, ClipboardList,
+  ChartCandlestick, ClipboardList, FileCode2,
 } from 'lucide-react';
 import {
   Area,
@@ -29,16 +29,6 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import {
-  createChart,
-  createSeriesMarkers,
-  CandlestickSeries,
-  HistogramSeries,
-  ColorType,
-  CrosshairMode,
-  type Time,
-  type SeriesMarker,
-} from 'lightweight-charts';
 import type { Kline, BacktestTrade } from '../types/stock';
 import type { UserStrategyDefinition, BacktestDiagnostic } from '../types/strategy';
 import type { IndexId } from '../types/scan';
@@ -51,7 +41,11 @@ import type {
   PoolSymbolResult,
   PoolTradeLogView,
 } from '../types/poolBacktest';
+import PortfolioSimulationView from './PortfolioSimulationView';
+import StrategySourceDialog from './StrategySourceDialog';
+import ChanlunKlineChart from './ChanlunKlineChart';
 import { isAshareSymbol, resolveSymbol } from '../utils/symbols';
+import { csvCell, downloadCsv } from '../utils/download';
 
 interface SimulationViewProps {
   symbol?: string;
@@ -304,119 +298,9 @@ function EquityChart({
 }
 
 /**
- * 价格 K 线 + 买卖成交标注 (单标的报告 / 池下钻共用)。
- *
- * 与个股分析页 K 线标记同一视觉语言: 红↑ 买入 (标在当日最低价下方)、
- * 绿↓ 卖出 (标在当日最高价上方); 成交日不在 K 线范围内时跳过。
+ * 价格 K 线 + 缠论分析 + 买卖成交标注 (单标的报告 / 池下钻共用)。
+ * 实现在 ChanlunKlineChart: 笔/线段/中枢/分型/三类买卖点均可在图上开关。
  */
-function TradePriceChart({
-  klines,
-  trades,
-  heightClass = 'h-64 md:h-72',
-}: {
-  klines: Kline[];
-  trades: BacktestTrade[];
-  heightClass?: string;
-}) {
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el || klines.length === 0) return;
-
-    const chart = createChart(el, {
-      autoSize: true,
-      layout: {
-        background: { type: ColorType.Solid, color: '#09090b' },
-        textColor: '#64748b',
-        fontSize: 10,
-        fontFamily: 'ui-monospace, monospace',
-      },
-      grid: {
-        vertLines: { color: '#1e293b', style: 2 },
-        horzLines: { color: '#1e293b', style: 2 },
-      },
-      crosshair: {
-        mode: CrosshairMode.Normal,
-        vertLine: { color: '#64748b', width: 1, style: 2, labelBackgroundColor: '#1e293b' },
-        horzLine: { color: '#64748b', width: 1, style: 2, labelBackgroundColor: '#1e293b' },
-      },
-      rightPriceScale: {
-        borderColor: '#1e293b',
-        scaleMargins: { top: 0.12, bottom: 0.22 },
-      },
-      timeScale: {
-        borderColor: '#1e293b',
-        timeVisible: false,
-        rightOffset: 2,
-        barSpacing: 8,
-        minBarSpacing: 2,
-      },
-      handleScale: { axisPressedMouseMove: true },
-      handleScroll: { vertTouchDrag: false },
-    });
-
-    // K 线 (中国市场惯例: 红涨绿跌)
-    const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: '#f43f5e',
-      downColor: '#10b981',
-      borderUpColor: '#f43f5e',
-      borderDownColor: '#10b981',
-      wickUpColor: '#f43f5e',
-      wickDownColor: '#10b981',
-    });
-    candleSeries.setData(
-      klines.map((k) => ({
-        time: k.date as Time,
-        open: k.open,
-        high: k.high,
-        low: k.low,
-        close: k.close,
-      })),
-    );
-
-    // 成交量 (底部薄层)
-    const volumeSeries = chart.addSeries(HistogramSeries, {
-      priceFormat: { type: 'volume' },
-      priceScaleId: 'volume',
-    });
-    volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
-    volumeSeries.setData(
-      klines.map((k) => ({
-        time: k.date as Time,
-        value: k.volume,
-        color: k.close >= k.open ? 'rgba(244, 63, 94, 0.25)' : 'rgba(16, 185, 129, 0.25)',
-      })),
-    );
-
-    // 买卖成交标注: 买入标在当日最低价下方, 卖出标在当日最高价上方
-    const klineByDate = new Map(klines.map((k) => [k.date, k]));
-    const markers: SeriesMarker<Time>[] = [];
-    for (const t of trades) {
-      const k = klineByDate.get(t.date);
-      if (!k) continue;
-      const isBuy = t.type === 'BUY';
-      const offset = (k.high - k.low) * 1.5 || k.close * 0.02;
-      markers.push({
-        time: t.date as Time,
-        position: isBuy ? 'atPriceBottom' : 'atPriceTop',
-        shape: isBuy ? 'arrowUp' : 'arrowDown',
-        color: isBuy ? '#ef4444' : '#22c55e',
-        text: isBuy ? '买入' : '卖出',
-        price: isBuy ? k.low - offset : k.high + offset,
-        size: 1.2,
-      });
-    }
-    // lightweight-charts 要求标记按时间升序
-    markers.sort((a, b) => String(a.time).localeCompare(String(b.time)));
-    createSeriesMarkers(candleSeries, markers);
-
-    chart.timeScale().fitContent();
-    return () => chart.remove();
-  }, [klines, trades]);
-
-  return <div ref={containerRef} className={`w-full ${heightClass}`} />;
-}
 
 function TradesTable({ trades }: { trades: BacktestTrade[] }) {
   if (!trades || trades.length === 0) {
@@ -624,6 +508,9 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
   const [strategyId, setStrategyId] = useState('');
   const [paramsJson, setParamsJson] = useState('{}');
   const [strategyLoadError, setStrategyLoadError] = useState('');
+  /** 策略列表是否已完成一次加载 (区分「加载中」与「加载完但为空」) */
+  const [strategiesLoaded, setStrategiesLoaded] = useState(false);
+  const [sourceOpen, setSourceOpen] = useState(false);
   /** 策略参数卡片: 参数多时默认折叠, 让配置区更紧凑 */
   const [paramsExpanded, setParamsExpanded] = useState(true);
 
@@ -646,6 +533,8 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
       setStrategyLoadError('');
     } catch (err) {
       setStrategyLoadError(err instanceof Error ? err.message : '策略列表加载失败');
+    } finally {
+      setStrategiesLoaded(true);
     }
   }, []);
 
@@ -711,6 +600,7 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
   const [leaderReturnFilter, setLeaderReturnFilter] = useState<'all' | 'profit' | 'loss'>('all');
   /** 默认隐藏未产生任何交易的标的 (收益恒为 0%, 会稀释统计并造成「全是 0%」的误读) */
   const [hideUntraded, setHideUntraded] = useState(true);
+  const [poolTableTab, setPoolTableTab] = useState<'leader' | 'trades'>('leader');
   /** 全池逐笔成交明细 (按日期升序): 惰性加载, 切换任务时清空 */
   const [tradeLog, setTradeLog] = useState<PoolTradeLogView | null>(null);
   const [tradeLogLoading, setTradeLogLoading] = useState(false);
@@ -783,6 +673,7 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
     setTradeLog(null);
     setTradeLogQuery('');
     setTradeLogLimit(TRADE_LOG_PAGE_SIZE);
+    setPoolTableTab('leader');
   }, [jobId]);
 
   // 单标的回测进度: 请求进行中轮询服务端阶段进度 (拉取 K 线 → 回测计算)。
@@ -1109,17 +1000,6 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
   );
 
   // ---- 导出 ----
-  const downloadCsv = useCallback((filename: string, rows: (string | number)[][]) => {
-    const csv = rows.map((r) => r.join(',')).join('\n');
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, []);
-
   const handleExportSingle = useCallback(() => {
     if (!singleResult?.result?.trades?.length) return;
     const rows: (string | number)[][] = [['日期', '方向', '信号来源', '信号依据', '执行价格', '交易股数', '交易金额', '费用', '盈亏', '盈亏率']];
@@ -1128,7 +1008,7 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
         t.date,
         t.type === 'BUY' ? '买入' : '卖出',
         t.signalType,
-        `"${String(t.reason ?? t.signalType).replace(/"/g, '""')}"`,
+        csvCell(String(t.reason ?? t.signalType)),
         t.price,
         t.shares,
         t.value,
@@ -1141,7 +1021,7 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
       `${singleResult.symbol}_backtest_${singleResult.dateRange.start}_${singleResult.dateRange.end}.csv`,
       rows,
     );
-  }, [singleResult, downloadCsv]);
+  }, [singleResult]);
 
   const handleExportPool = useCallback(() => {
     if (!poolSummary) return;
@@ -1153,8 +1033,8 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
     for (const r of poolSummary.rows) {
       rows.push([
         r.symbol,
-        `"${String(r.name ?? '').replace(/"/g, '""')}"`,
-        `"${String(r.industry ?? '').replace(/"/g, '""')}"`,
+        csvCell(r.name ?? ''),
+        csvCell(r.industry ?? ''),
         num(r.returnPercent),
         num(r.buyHoldPercent),
         num(r.excessPercent),
@@ -1168,7 +1048,7 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
       ]);
     }
     downloadCsv(`pool_backtest_${poolSummary.dateRange.start}_${poolSummary.dateRange.end}.csv`, rows);
-  }, [poolSummary, downloadCsv]);
+  }, [poolSummary]);
 
   // ---- 全池成交明细 (按日期) ----
   const loadTradeLog = useCallback(
@@ -1198,7 +1078,6 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
       setPoolError('没有可导出的成交 (该任务未产生任何交易)');
       return;
     }
-    const esc = (s: string) => `"${s.replace(/"/g, '""')}"`;
     const rows: (string | number)[][] = [
       ['日期', '代码', '名称', '方向', '信号来源', '信号依据', '执行价格', '交易股数', '交易金额', '费用', '盈亏', '盈亏率%'],
     ];
@@ -1206,10 +1085,10 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
       rows.push([
         t.date,
         t.symbol,
-        esc(t.name ?? ''),
+        csvCell(t.name ?? ''),
         t.type === 'BUY' ? '买入' : '卖出',
         t.signalType,
-        esc(String(t.reason ?? '')),
+        csvCell(String(t.reason ?? '')),
         t.price,
         t.shares,
         t.value,
@@ -1220,10 +1099,10 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
     }
     const range = poolSummary ? `${poolSummary.dateRange.start}_${poolSummary.dateRange.end}` : 'all';
     downloadCsv(`pool_trades_${range}.csv`, rows);
-  }, [tradeLog, loadTradeLog, downloadCsv, poolSummary]);
+  }, [tradeLog, loadTradeLog, poolSummary]);
 
   // ---- 渲染 ----
-  if (strategies.length === 0) {
+  if (!strategiesLoaded) {
     return (
       <div className="mx-auto flex w-full max-w-[1560px] flex-col items-center justify-center gap-3 py-24 text-zinc-500">
         {strategyLoadError ? (
@@ -1240,6 +1119,23 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
             <p className="text-sm">加载策略中…</p>
           </>
         )}
+      </div>
+    );
+  }
+
+  if (strategies.length === 0) {
+    return (
+      <div className="mx-auto flex w-full max-w-[1560px] flex-col items-center justify-center gap-3 py-24 text-zinc-500">
+        <FlaskConical className="h-8 w-8 text-zinc-700" />
+        <p className="text-sm text-zinc-400">暂无策略</p>
+        <p className="max-w-md text-center text-xs leading-relaxed text-zinc-600">
+          在服务端 <code className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-zinc-400">server/strategies/</code> 目录下
+          新增 <code className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-zinc-400">.ts</code> 策略文件
+          (导出包含 id / name / decide 的对象), 或在「管理策略」里新建, 重启/刷新后即可加载。
+        </p>
+        <button onClick={() => void loadStrategies()} className="text-xs text-blue-400 underline">
+          重新加载策略列表
+        </button>
       </div>
     );
   }
@@ -1273,6 +1169,13 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
       </span>
     </th>
   );
+
+  // 选股池模式已重做为「共享资金逐日组合模拟」(backtrader 执行层),
+  // 旧版池内等权汇总界面不再渲染; 单标的模式保持原实现。
+  // 说明: 这里用类型断言避免把下方 mode 收窄为 'single', 旧池界面代码仍保留以便回滚。
+  if ((mode as Mode) === 'pool') {
+    return <PortfolioSimulationView onModeChange={setMode} />;
+  }
 
   return (
     <div className="mx-auto w-full max-w-[1560px]">
@@ -1319,7 +1222,7 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
       </section>
 
       {/* ================= 双栏工作区 ================= */}
-      <div className="mt-4 grid grid-cols-1 gap-4 md:gap-5 xl:mt-5 xl:grid-cols-[400px_minmax(0,1fr)] xl:items-start">
+      <div className="mt-4 grid grid-cols-1 gap-4 md:mt-5 md:grid-cols-[300px_minmax(0,1fr)] md:items-start lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[400px_minmax(0,1fr)]">
 
         {/* ══════ 左栏: 回测控制台 (xl 起吸顶, 设置区独立滚动) ══════ */}
         <aside className="flex min-w-0 flex-col gap-3 xl:sticky xl:top-[64px] xl:max-h-[calc(100vh_-_180px)]">
@@ -1442,13 +1345,24 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
             <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
               <SlidersHorizontal className="h-3.5 w-3.5 text-blue-400" />
               策略
-              <button
-                onClick={() => void loadStrategies()}
-                className="ml-auto flex h-6 w-6 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900/80 text-zinc-500 transition hover:text-zinc-200 cursor-pointer"
-                title="重新加载策略列表"
-              >
-                <RefreshCw className="h-3 w-3" />
-              </button>
+              <div className="ml-auto flex items-center gap-1.5">
+                <button
+                  onClick={() => setSourceOpen(true)}
+                  disabled={!strategyId}
+                  className="flex h-6 items-center gap-1 rounded-md border border-zinc-800 bg-zinc-900/80 px-2 text-[10px] font-semibold normal-case tracking-normal text-zinc-400 transition hover:border-blue-500/40 hover:text-blue-300 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                  title="查看当前策略源码"
+                >
+                  <FileCode2 className="h-3 w-3" />
+                  查看源码
+                </button>
+                <button
+                  onClick={() => void loadStrategies()}
+                  className="flex h-6 w-6 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900/80 text-zinc-500 transition hover:text-zinc-200 cursor-pointer"
+                  title="重新加载策略列表"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                </button>
+              </div>
             </div>
             <div>
               <label className={labelCls}>策略选择</label>
@@ -1463,7 +1377,7 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
                 <p className="mt-1.5 text-[10px] leading-relaxed text-zinc-500">{selectedStrategy.description}</p>
               )}
               <p className="mt-1.5 text-[10px] leading-relaxed text-zinc-600">
-                策略来源: 服务端内置策略 (src/strategies/user); 回测在服务端执行, 全池共用同一份策略代码与参数。
+                策略来源: 服务端策略注册表 (server/strategies 内置 + data/user-strategies 自建); 回测在服务端执行, 全池共用同一份策略代码与参数。
               </p>
             </div>
 
@@ -1868,15 +1782,15 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
 
               <SymbolKpiGrid detail={singleResult} />
 
-              {/* 价格 K 线 + 买卖成交标注 */}
+              {/* 价格 K 线 + 缠论分析 + 买卖成交标注 */}
               {(singleResult.klines?.length ?? 0) > 0 && (
                 <div className="rounded-2xl border border-zinc-800/80 bg-zinc-950/60 p-4 md:p-5">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <h5 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
                       <ChartCandlestick className="h-3.5 w-3.5 text-blue-400" />
-                      价格走势 & 成交标注
+                      K线 · 缠论分析 & 成交标注
                       <span className="font-mono font-normal normal-case tracking-normal text-zinc-600">
-                        (红↑ 买入 · 绿↓ 卖出)
+                        (笔/线段/中枢/买卖点)
                       </span>
                     </h5>
                     <span className="flex items-center gap-3 font-mono text-[10px] text-zinc-500">
@@ -1884,7 +1798,11 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
                       <span>卖出 {singleResult.result.trades.filter((t) => t.type === 'SELL').length} 笔</span>
                     </span>
                   </div>
-                  <TradePriceChart klines={singleResult.klines} trades={singleResult.result.trades} />
+                  <ChanlunKlineChart
+                    klines={singleResult.klines}
+                    trades={singleResult.result.trades}
+                    heightClass="h-72 md:h-80"
+                  />
                 </div>
               )}
 
@@ -2003,291 +1921,324 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
                 />
               </div>
 
-              {/* 逐标的排行榜 */}
+              {/* 池内明细: 逐标的回测排行榜 / 全部成交明细 (按日期) */}
               <div className="overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-950/60">
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800/80 px-4 py-3">
-                  <h5 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
-                    <ListOrdered className="h-3.5 w-3.5 text-blue-400" />
+                {/* Tab 切换 */}
+                <div className="flex flex-wrap items-center gap-1 border-b border-zinc-800/80 px-2">
+                  <button
+                    onClick={() => setPoolTableTab('leader')}
+                    className={`-mb-px flex items-center gap-1.5 border-b-2 px-2.5 py-3 text-xs font-bold transition cursor-pointer ${
+                      poolTableTab === 'leader'
+                        ? 'border-blue-400 text-blue-400'
+                        : 'border-transparent text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    <ListOrdered className="h-3.5 w-3.5" />
                     逐标的回测排行榜
-                    <span className="font-mono font-normal normal-case tracking-normal text-zinc-600">
-                      {leaderRows.length}/{poolSummary.rows.length} 只 ·{' '}
-                      <span className="text-red-400">盈利 {leaderStats.profit}</span>{' '}
-                      <span className="text-green-400">亏损 {leaderStats.loss}</span>
-                      {leaderStats.flat > 0 ? <span> / 持平 {leaderStats.flat}</span> : null}
-                      <span> (正收益率 {leaderStats.positivePct.toFixed(1)}%)</span>
-                      {hideUntraded && untradedCount > 0 ? (
-                        <span> · 已隐藏未交易 {untradedCount} 只</span>
-                      ) : null}
-                      {' '}· 点击行查看明细
-                    </span>
-                  </h5>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="relative">
-                      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-600" />
-                      <input
-                        value={leaderQuery}
-                        onChange={(e) => setLeaderQuery(e.target.value)}
-                        placeholder="搜索代码 / 名称 / 行业"
-                        className={`${inputCls} w-52 pl-8`}
-                      />
-                    </div>
-                    <div className="flex items-center gap-0.5 rounded-lg border border-zinc-700 bg-zinc-900 p-0.5">
-                      {([['all', '全部', 'text-zinc-400'], ['profit', '仅盈利', 'text-red-400'], ['loss', '仅亏损', 'text-green-400']] as const).map(
-                        ([key, label, tone]) => (
-                          <button
-                            key={key}
-                            onClick={() => setLeaderReturnFilter(key)}
-                            className={`rounded-md px-2 py-1.5 text-[11px] font-semibold transition cursor-pointer ${
-                              leaderReturnFilter === key
-                                ? `bg-zinc-700 ${tone}`
-                                : 'text-zinc-500 hover:text-zinc-300'
-                            }`}
-                            title={key === 'all' ? '全部标的 (默认收益降序, 首页不只有赢家, 翻页看全池)' : key === 'profit' ? '只看收益 > 0 的标的' : '只看收益 < 0 的标的'}
-                          >
-                            {label}
-                          </button>
-                        ),
-                      )}
-                    </div>
-                    <label
-                      className="flex cursor-pointer select-none items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-[11px] font-semibold text-zinc-400 transition hover:text-zinc-200"
-                      title="未产生任何交易的标的收益恒为 0%, 默认隐藏 (取消勾选可重新显示)"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={hideUntraded}
-                        onChange={(e) => setHideUntraded(e.target.checked)}
-                        className="h-3 w-3 accent-blue-500"
-                      />
-                      隐藏未交易{untradedCount > 0 ? ` (${untradedCount})` : ''}
-                    </label>
-                    <button
-                      onClick={handleExportPool}
-                      className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs font-semibold text-zinc-100 transition hover:bg-zinc-700 cursor-pointer"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      导出全池 CSV
-                    </button>
-                  </div>
-                </div>
-
-                <div className="max-h-[560px] overflow-auto">
-                  <table className="w-full min-w-[980px] text-left text-xs">
-                    <thead className="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-950/95 font-mono font-semibold text-zinc-500 backdrop-blur">
-                      <tr>
-                        <th className="w-12 px-3 py-2.5 text-left font-normal text-zinc-600">#</th>
-                        {th('code', '标的', 'left')}
-                        {th('returnPercent', '收益')}
-                        {th('buyHoldPercent', '买入持有')}
-                        {th('excessPercent', '超额')}
-                        {th('trades', '交易')}
-                        {th('winRate', '胜率')}
-                        {th('sharpeRatio', '夏普')}
-                        {th('maxDrawdownPercent', '回撤')}
-                        {th('fees', '费用')}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-zinc-900">
-                      {leaderVisible.map((r, i) => {
-                        const rank = rankBySymbol.get(r.symbol) ?? poolSummary.rows.indexOf(r) + 1;
-                        const active = detailSymbol === r.symbol;
-                        return (
-                          <tr
-                            key={r.symbol}
-                            onClick={() => void handleSelectSymbol(r)}
-                            className={`cursor-pointer transition ${
-                              active ? 'bg-blue-500/10' : 'hover:bg-zinc-900/50'
-                            }`}
-                          >
-                            <td className="px-3 py-2 font-mono text-[10px] text-zinc-600">{rank}</td>
-                            <td className="px-3 py-2">
-                              <span className="font-semibold text-zinc-200">{r.name ?? r.code}</span>
-                              <span className="ml-2 font-mono text-[10px] text-zinc-500">{r.symbol}</span>
-                              {r.industry && (
-                                <span className="ml-2 hidden text-[10px] text-zinc-600 lg:inline">
-                                  {r.industry.split('>').pop()?.trim()}
-                                </span>
-                              )}
-                            </td>
-                            <td className={`px-3 py-2 text-right font-mono font-bold ${upDown(r.returnPercent)}`}>
-                              {pct(r.returnPercent)}
-                            </td>
-                            <td className={`px-3 py-2 text-right font-mono ${upDown(r.buyHoldPercent)}`}>
-                              {pct(r.buyHoldPercent)}
-                            </td>
-                            <td className={`px-3 py-2 text-right font-mono font-semibold ${upDown(r.excessPercent)}`}>
-                              {pct(r.excessPercent)}
-                            </td>
-                            <td className="px-3 py-2 text-right font-mono text-zinc-400">{r.trades}</td>
-                            <td className="px-3 py-2 text-right font-mono text-zinc-300">{fmt(r.winRate)}%</td>
-                            <td className="px-3 py-2 text-right font-mono text-zinc-300">{fmt(r.sharpeRatio)}</td>
-                            <td className="px-3 py-2 text-right font-mono text-zinc-400">{fmt(r.maxDrawdownPercent)}%</td>
-                            <td className="px-3 py-2 text-right font-mono text-zinc-500">{fmt(r.fees, 0)}</td>
-                          </tr>
-                        );
-                      })}
-                      {leaderVisible.length === 0 && (
-                        <tr>
-                          <td colSpan={10} className="py-10 text-center text-xs text-zinc-500">
-                            {hideUntraded && untradedCount > 0
-                              ? '没有匹配的标的 (未产生交易的标的已隐藏, 可取消勾选「隐藏未交易」查看)'
-                              : '没有匹配的标的'}
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                {leaderRows.length > LEADER_PAGE_SIZE && (
-                  <div className="flex items-center justify-center border-t border-zinc-800/80 px-4 py-2.5">
-                    <span className="mr-3 font-mono text-[10px] text-zinc-600">
-                      当前: 按{leaderSortLabel}{sortDir === 'desc' ? '降序' : '升序'}前 {LEADER_PAGE_SIZE} 只 (非全池)
-                    </span>
-                    <button
-                      onClick={() => setShowAllRows((v) => !v)}
-                      className="text-[11px] font-semibold text-blue-400 transition hover:text-blue-300 cursor-pointer"
-                    >
-                      {showAllRows ? '收起' : `显示全部 ${leaderRows.length} 只`}
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* 全部成交明细 (按日期) */}
-              <div className="overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-950/60">
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800/80 px-4 py-3">
-                  <h5 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
-                    <ClipboardList className="h-3.5 w-3.5 text-blue-400" />
+                    <span className="font-mono text-[10px] font-normal text-zinc-500">{leaderRows.length}</span>
+                  </button>
+                  <button
+                    onClick={() => setPoolTableTab('trades')}
+                    className={`-mb-px flex items-center gap-1.5 border-b-2 px-2.5 py-3 text-xs font-bold transition cursor-pointer ${
+                      poolTableTab === 'trades'
+                        ? 'border-blue-400 text-blue-400'
+                        : 'border-transparent text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    <ClipboardList className="h-3.5 w-3.5" />
                     全部成交明细 (按日期)
-                    <span className="font-mono font-normal normal-case tracking-normal text-zinc-600">
-                      {tradeLog
-                        ? `${tradeLogRows.length}/${tradeLog.total} 笔 · ${tradeLog.trades[0]?.date ?? ''} ~ ${tradeLog.trades[tradeLog.trades.length - 1]?.date ?? ''}`
-                        : '全池逐笔买入 / 卖出 / 止损, 日期升序'}
+                    <span className="font-mono text-[10px] font-normal text-zinc-500">
+                      {tradeLog ? tradeLog.total : '—'}
                     </span>
-                  </h5>
-                  <div className="flex flex-wrap items-center gap-2">
-                    {tradeLog && tradeLog.total > 0 && (
-                      <div className="relative">
-                        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-600" />
-                        <input
-                          value={tradeLogQuery}
-                          onChange={(e) => setTradeLogQuery(e.target.value)}
-                          placeholder="搜索代码 / 名称 / 信号"
-                          className={`${inputCls} w-52 pl-8`}
-                        />
-                      </div>
-                    )}
-                    <button
-                      onClick={() => void handleExportTrades()}
-                      disabled={tradeLogLoading}
-                      className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs font-semibold text-zinc-100 transition hover:bg-zinc-700 disabled:opacity-50 cursor-pointer"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      导出全部成交 CSV
-                    </button>
-                  </div>
+                  </button>
                 </div>
 
-                {!tradeLog ? (
-                  <div className="flex flex-col items-center gap-3 py-10">
-                    <p className="text-xs text-zinc-500">
-                      合并全部标的的成交记录 (买入 / 卖出 / 止损), 按日期升序排列
-                    </p>
-                    <button
-                      onClick={() => void loadTradeLog()}
-                      disabled={tradeLogLoading}
-                      className="flex items-center gap-1.5 rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-xs font-semibold text-blue-300 transition hover:bg-blue-500/20 disabled:opacity-50 cursor-pointer"
-                    >
-                      {tradeLogLoading ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <ClipboardList className="h-3.5 w-3.5" />
-                      )}
-                      {tradeLogLoading ? '加载中…' : '加载全部成交明细'}
-                    </button>
-                  </div>
-                ) : tradeLog.trades.length === 0 ? (
-                  <div className="py-10 text-center text-xs text-zinc-500">该任务未产生任何交易</div>
-                ) : (
+                {poolTableTab === 'leader' ? (
                   <>
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800/80 px-4 py-3">
+                      <h5 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
+                        <ListOrdered className="h-3.5 w-3.5 text-blue-400" />
+                        逐标的回测排行榜
+                        <span className="font-mono font-normal normal-case tracking-normal text-zinc-600">
+                          {leaderRows.length}/{poolSummary.rows.length} 只 ·{' '}
+                          <span className="text-red-400">盈利 {leaderStats.profit}</span>{' '}
+                          <span className="text-green-400">亏损 {leaderStats.loss}</span>
+                          {leaderStats.flat > 0 ? <span> / 持平 {leaderStats.flat}</span> : null}
+                          <span> (正收益率 {leaderStats.positivePct.toFixed(1)}%)</span>
+                          {hideUntraded && untradedCount > 0 ? (
+                            <span> · 已隐藏未交易 {untradedCount} 只</span>
+                          ) : null}
+                          {' '}· 点击行查看明细
+                        </span>
+                      </h5>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="relative">
+                          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-600" />
+                          <input
+                            value={leaderQuery}
+                            onChange={(e) => setLeaderQuery(e.target.value)}
+                            placeholder="搜索代码 / 名称 / 行业"
+                            className={`${inputCls} w-52 pl-8`}
+                          />
+                        </div>
+                        <div className="flex items-center gap-0.5 rounded-lg border border-zinc-700 bg-zinc-900 p-0.5">
+                          {([['all', '全部', 'text-zinc-400'], ['profit', '仅盈利', 'text-red-400'], ['loss', '仅亏损', 'text-green-400']] as const).map(
+                            ([key, label, tone]) => (
+                              <button
+                                key={key}
+                                onClick={() => setLeaderReturnFilter(key)}
+                                className={`rounded-md px-2 py-1.5 text-[11px] font-semibold transition cursor-pointer ${
+                                  leaderReturnFilter === key
+                                    ? `bg-zinc-700 ${tone}`
+                                    : 'text-zinc-500 hover:text-zinc-300'
+                                }`}
+                                title={key === 'all' ? '全部标的 (默认收益降序, 首页不只有赢家, 翻页看全池)' : key === 'profit' ? '只看收益 > 0 的标的' : '只看收益 < 0 的标的'}
+                              >
+                                {label}
+                              </button>
+                            ),
+                          )}
+                        </div>
+                        <label
+                          className="flex cursor-pointer select-none items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-[11px] font-semibold text-zinc-400 transition hover:text-zinc-200"
+                          title="未产生任何交易的标的收益恒为 0%, 默认隐藏 (取消勾选可重新显示)"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={hideUntraded}
+                            onChange={(e) => setHideUntraded(e.target.checked)}
+                            className="h-3 w-3 accent-blue-500"
+                          />
+                          隐藏未交易{untradedCount > 0 ? ` (${untradedCount})` : ''}
+                        </label>
+                        <button
+                          onClick={handleExportPool}
+                          className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs font-semibold text-zinc-100 transition hover:bg-zinc-700 cursor-pointer"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          导出全池 CSV
+                        </button>
+                      </div>
+                    </div>
+
                     <div className="max-h-[560px] overflow-auto">
-                      <table className="w-full min-w-[920px] text-left text-xs">
+                      <table className="w-full min-w-[980px] text-left text-xs">
                         <thead className="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-950/95 font-mono font-semibold text-zinc-500 backdrop-blur">
                           <tr>
-                            <th className="px-3 py-2.5 text-left font-normal text-zinc-600">日期</th>
-                            <th className="px-3 py-2.5 text-left font-normal text-zinc-600">标的</th>
-                            <th className="px-3 py-2.5 text-left font-normal text-zinc-600">方向</th>
-                            <th className="px-3 py-2.5 text-left font-normal text-zinc-600">信号</th>
-                            <th className="px-3 py-2.5 text-right font-normal text-zinc-600">价格</th>
-                            <th className="px-3 py-2.5 text-right font-normal text-zinc-600">股数</th>
-                            <th className="px-3 py-2.5 text-right font-normal text-zinc-600">金额</th>
-                            <th className="px-3 py-2.5 text-right font-normal text-zinc-600">费用</th>
-                            <th className="px-3 py-2.5 text-right font-normal text-zinc-600">盈亏</th>
+                            <th className="w-12 px-3 py-2.5 text-left font-normal text-zinc-600">#</th>
+                            {th('code', '标的', 'left')}
+                            {th('returnPercent', '收益')}
+                            {th('buyHoldPercent', '买入持有')}
+                            {th('excessPercent', '超额')}
+                            {th('trades', '交易')}
+                            {th('winRate', '胜率')}
+                            {th('sharpeRatio', '夏普')}
+                            {th('maxDrawdownPercent', '回撤')}
+                            {th('fees', '费用')}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-zinc-900">
-                          {tradeLogVisible.map((t, i) => (
-                            <tr key={`${t.symbol}-${t.date}-${t.type}-${i}`} className="hover:bg-zinc-900/40">
-                              <td className="whitespace-nowrap px-3 py-2 font-mono text-zinc-400">{t.date}</td>
-                              <td className="whitespace-nowrap px-3 py-2">
-                                <span className="font-semibold text-zinc-300">{t.name ?? t.code}</span>
-                                <span className="ml-1.5 font-mono text-[10px] text-zinc-500">{t.symbol}</span>
-                              </td>
-                              <td
-                                className={`whitespace-nowrap px-3 py-2 font-semibold ${
-                                  t.type === 'BUY' ? 'text-red-400' : 'text-green-400'
+                          {leaderVisible.map((r, i) => {
+                            const rank = rankBySymbol.get(r.symbol) ?? poolSummary.rows.indexOf(r) + 1;
+                            const active = detailSymbol === r.symbol;
+                            return (
+                              <tr
+                                key={r.symbol}
+                                onClick={() => void handleSelectSymbol(r)}
+                                className={`cursor-pointer transition ${
+                                  active ? 'bg-blue-500/10' : 'hover:bg-zinc-900/50'
                                 }`}
                               >
-                                {t.type === 'BUY' ? '买入' : '卖出'}
-                              </td>
-                              <td
-                                className="max-w-[260px] truncate px-3 py-2 text-zinc-400"
-                                title={String(t.reason ?? t.signalType)}
-                              >
-                                {t.signalType}
-                                {t.reason ? ` · ${t.reason}` : ''}
-                              </td>
-                              <td className="px-3 py-2 text-right font-mono text-zinc-300">{t.price.toFixed(2)}</td>
-                              <td className="px-3 py-2 text-right font-mono text-zinc-300">
-                                {t.shares.toLocaleString()}
-                              </td>
-                              <td className="px-3 py-2 text-right font-mono text-zinc-300">{money(t.value)}</td>
-                              <td className="px-3 py-2 text-right font-mono text-zinc-500">{fmt(t.fee)}</td>
-                              <td
-                                className={`px-3 py-2 text-right font-mono font-semibold ${
-                                  t.pnl === undefined ? 'text-zinc-600' : upDown(t.pnl)
-                                }`}
-                              >
-                                {t.pnl === undefined ? '--' : money(t.pnl)}
-                                {t.pnlPercent !== undefined ? (
-                                  <span className="ml-1 text-[10px]">({pct(t.pnlPercent)})</span>
-                                ) : null}
-                              </td>
-                            </tr>
-                          ))}
-                          {tradeLogVisible.length === 0 && (
+                                <td className="px-3 py-2 font-mono text-[10px] text-zinc-600">{rank}</td>
+                                <td className="px-3 py-2">
+                                  <span className="font-semibold text-zinc-200">{r.name ?? r.code}</span>
+                                  <span className="ml-2 font-mono text-[10px] text-zinc-500">{r.symbol}</span>
+                                  {r.industry && (
+                                    <span className="ml-2 hidden text-[10px] text-zinc-600 lg:inline">
+                                      {r.industry.split('>').pop()?.trim()}
+                                    </span>
+                                  )}
+                                </td>
+                                <td className={`px-3 py-2 text-right font-mono font-bold ${upDown(r.returnPercent)}`}>
+                                  {pct(r.returnPercent)}
+                                </td>
+                                <td className={`px-3 py-2 text-right font-mono ${upDown(r.buyHoldPercent)}`}>
+                                  {pct(r.buyHoldPercent)}
+                                </td>
+                                <td className={`px-3 py-2 text-right font-mono font-semibold ${upDown(r.excessPercent)}`}>
+                                  {pct(r.excessPercent)}
+                                </td>
+                                <td className="px-3 py-2 text-right font-mono text-zinc-400">{r.trades}</td>
+                                <td className="px-3 py-2 text-right font-mono text-zinc-300">{fmt(r.winRate)}%</td>
+                                <td className="px-3 py-2 text-right font-mono text-zinc-300">{fmt(r.sharpeRatio)}</td>
+                                <td className="px-3 py-2 text-right font-mono text-zinc-400">{fmt(r.maxDrawdownPercent)}%</td>
+                                <td className="px-3 py-2 text-right font-mono text-zinc-500">{fmt(r.fees, 0)}</td>
+                              </tr>
+                            );
+                          })}
+                          {leaderVisible.length === 0 && (
                             <tr>
-                              <td colSpan={9} className="py-10 text-center text-xs text-zinc-500">
-                                没有匹配的成交
+                              <td colSpan={10} className="py-10 text-center text-xs text-zinc-500">
+                                {hideUntraded && untradedCount > 0
+                                  ? '没有匹配的标的 (未产生交易的标的已隐藏, 可取消勾选「隐藏未交易」查看)'
+                                  : '没有匹配的标的'}
                               </td>
                             </tr>
                           )}
                         </tbody>
                       </table>
                     </div>
-                    {tradeLogRows.length > tradeLogLimit && (
-                      <div className="flex items-center justify-center gap-3 border-t border-zinc-800/80 px-4 py-2.5">
-                        <span className="font-mono text-[10px] text-zinc-600">
-                          已显示 {tradeLogVisible.length}/{tradeLogRows.length} 笔
+
+                    {leaderRows.length > LEADER_PAGE_SIZE && (
+                      <div className="flex items-center justify-center border-t border-zinc-800/80 px-4 py-2.5">
+                        <span className="mr-3 font-mono text-[10px] text-zinc-600">
+                          当前: 按{leaderSortLabel}{sortDir === 'desc' ? '降序' : '升序'}前 {LEADER_PAGE_SIZE} 只 (非全池)
                         </span>
                         <button
-                          onClick={() => setTradeLogLimit((v) => v + TRADE_LOG_PAGE_SIZE)}
+                          onClick={() => setShowAllRows((v) => !v)}
                           className="text-[11px] font-semibold text-blue-400 transition hover:text-blue-300 cursor-pointer"
                         >
-                          显示更多
+                          {showAllRows ? '收起' : `显示全部 ${leaderRows.length} 只`}
                         </button>
                       </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800/80 px-4 py-3">
+                      <h5 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
+                        <ClipboardList className="h-3.5 w-3.5 text-blue-400" />
+                        全部成交明细 (按日期)
+                        <span className="font-mono font-normal normal-case tracking-normal text-zinc-600">
+                          {tradeLog
+                            ? `${tradeLogRows.length}/${tradeLog.total} 笔 · ${tradeLog.trades[0]?.date ?? ''} ~ ${tradeLog.trades[tradeLog.trades.length - 1]?.date ?? ''}`
+                            : '全池逐笔买入 / 卖出 / 止损, 日期升序'}
+                        </span>
+                      </h5>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {tradeLog && tradeLog.total > 0 && (
+                          <div className="relative">
+                            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-600" />
+                            <input
+                              value={tradeLogQuery}
+                              onChange={(e) => setTradeLogQuery(e.target.value)}
+                              placeholder="搜索代码 / 名称 / 信号"
+                              className={`${inputCls} w-52 pl-8`}
+                            />
+                          </div>
+                        )}
+                        <button
+                          onClick={() => void handleExportTrades()}
+                          disabled={tradeLogLoading}
+                          className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-xs font-semibold text-zinc-100 transition hover:bg-zinc-700 disabled:opacity-50 cursor-pointer"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          导出全部成交 CSV
+                        </button>
+                      </div>
+                    </div>
+
+                    {!tradeLog ? (
+                      <div className="flex flex-col items-center gap-3 py-10">
+                        <p className="text-xs text-zinc-500">
+                          合并全部标的的成交记录 (买入 / 卖出 / 止损), 按日期升序排列
+                        </p>
+                        <button
+                          onClick={() => void loadTradeLog()}
+                          disabled={tradeLogLoading}
+                          className="flex items-center gap-1.5 rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-xs font-semibold text-blue-300 transition hover:bg-blue-500/20 disabled:opacity-50 cursor-pointer"
+                        >
+                          {tradeLogLoading ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <ClipboardList className="h-3.5 w-3.5" />
+                          )}
+                          {tradeLogLoading ? '加载中…' : '加载全部成交明细'}
+                        </button>
+                      </div>
+                    ) : tradeLog.trades.length === 0 ? (
+                      <div className="py-10 text-center text-xs text-zinc-500">该任务未产生任何交易</div>
+                    ) : (
+                      <>
+                        <div className="max-h-[560px] overflow-auto">
+                          <table className="w-full min-w-[920px] text-left text-xs">
+                            <thead className="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-950/95 font-mono font-semibold text-zinc-500 backdrop-blur">
+                              <tr>
+                                <th className="px-3 py-2.5 text-left font-normal text-zinc-600">日期</th>
+                                <th className="px-3 py-2.5 text-left font-normal text-zinc-600">标的</th>
+                                <th className="px-3 py-2.5 text-left font-normal text-zinc-600">方向</th>
+                                <th className="px-3 py-2.5 text-left font-normal text-zinc-600">信号</th>
+                                <th className="px-3 py-2.5 text-right font-normal text-zinc-600">价格</th>
+                                <th className="px-3 py-2.5 text-right font-normal text-zinc-600">股数</th>
+                                <th className="px-3 py-2.5 text-right font-normal text-zinc-600">金额</th>
+                                <th className="px-3 py-2.5 text-right font-normal text-zinc-600">费用</th>
+                                <th className="px-3 py-2.5 text-right font-normal text-zinc-600">盈亏</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-zinc-900">
+                              {tradeLogVisible.map((t, i) => (
+                                <tr key={`${t.symbol}-${t.date}-${t.type}-${i}`} className="hover:bg-zinc-900/40">
+                                  <td className="whitespace-nowrap px-3 py-2 font-mono text-zinc-400">{t.date}</td>
+                                  <td className="whitespace-nowrap px-3 py-2">
+                                    <span className="font-semibold text-zinc-300">{t.name ?? t.code}</span>
+                                    <span className="ml-1.5 font-mono text-[10px] text-zinc-500">{t.symbol}</span>
+                                  </td>
+                                  <td
+                                    className={`whitespace-nowrap px-3 py-2 font-semibold ${
+                                      t.type === 'BUY' ? 'text-red-400' : 'text-green-400'
+                                    }`}
+                                  >
+                                    {t.type === 'BUY' ? '买入' : '卖出'}
+                                  </td>
+                                  <td
+                                    className="max-w-[260px] truncate px-3 py-2 text-zinc-400"
+                                    title={String(t.reason ?? t.signalType)}
+                                  >
+                                    {t.signalType}
+                                    {t.reason ? ` · ${t.reason}` : ''}
+                                  </td>
+                                  <td className="px-3 py-2 text-right font-mono text-zinc-300">{t.price.toFixed(2)}</td>
+                                  <td className="px-3 py-2 text-right font-mono text-zinc-300">
+                                    {t.shares.toLocaleString()}
+                                  </td>
+                                  <td className="px-3 py-2 text-right font-mono text-zinc-300">{money(t.value)}</td>
+                                  <td className="px-3 py-2 text-right font-mono text-zinc-500">{fmt(t.fee)}</td>
+                                  <td
+                                    className={`px-3 py-2 text-right font-mono font-semibold ${
+                                      t.pnl === undefined ? 'text-zinc-600' : upDown(t.pnl)
+                                    }`}
+                                  >
+                                    {t.pnl === undefined ? '--' : money(t.pnl)}
+                                    {t.pnlPercent !== undefined ? (
+                                      <span className="ml-1 text-[10px]">({pct(t.pnlPercent)})</span>
+                                    ) : null}
+                                  </td>
+                                </tr>
+                              ))}
+                              {tradeLogVisible.length === 0 && (
+                                <tr>
+                                  <td colSpan={9} className="py-10 text-center text-xs text-zinc-500">
+                                    没有匹配的成交
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                        {tradeLogRows.length > tradeLogLimit && (
+                          <div className="flex items-center justify-center gap-3 border-t border-zinc-800/80 px-4 py-2.5">
+                            <span className="font-mono text-[10px] text-zinc-600">
+                              已显示 {tradeLogVisible.length}/{tradeLogRows.length} 笔
+                            </span>
+                            <button
+                              onClick={() => setTradeLogLimit((v) => v + TRADE_LOG_PAGE_SIZE)}
+                              className="text-[11px] font-semibold text-blue-400 transition hover:text-blue-300 cursor-pointer"
+                            >
+                              显示更多
+                            </button>
+                          </div>
+                        )}
+                      </>
                     )}
                   </>
                 )}
@@ -2339,17 +2290,17 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
                           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                             <h6 className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
                               <ChartCandlestick className="h-3.5 w-3.5 text-cyan-400" />
-                              价格走势 & 成交标注
+                              K线 · 缠论分析 & 成交标注
                             </h6>
                             <span className="flex items-center gap-3 font-mono text-[10px] text-zinc-600">
                               <span>买入 {detail.result.trades.filter((t) => t.type === 'BUY').length} 笔</span>
                               <span>卖出 {detail.result.trades.filter((t) => t.type === 'SELL').length} 笔</span>
                             </span>
                           </div>
-                          <TradePriceChart
+                          <ChanlunKlineChart
                             klines={detail.klines}
                             trades={detail.result.trades}
-                            heightClass="h-56 md:h-64"
+                            heightClass="h-64 md:h-72"
                           />
                         </div>
                       )}
@@ -2408,6 +2359,13 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
           )}
         </div>
       </div>
+
+      <StrategySourceDialog
+        strategyId={strategyId}
+        strategyName={selectedStrategy?.name}
+        isOpen={sourceOpen}
+        onClose={() => setSourceOpen(false)}
+      />
     </div>
   );
 }

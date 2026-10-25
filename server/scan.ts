@@ -42,8 +42,10 @@ const SCAN_CACHE_DIR = process.env.SCAN_CACHE_DIR
  *   TickFlow 限流 60/分钟 约需 13 分钟 -> 腾讯约 55 秒 (受 15 次/秒 限速约束)
  */
 const CONCURRENCY = 8;
-/** 每只标的取用的 K 线根数 (近 1 年日线 / 约 400 周线) */
+/** 兼容 getKlines 的 count 参数; 实际窗口固定为 2023-01-01 至今 */
 const KLINE_COUNT = 400;
+/** 扫描缓存版本: 分析窗口/算法变化时递增, 旧缓存自动失效 */
+const SCAN_CACHE_VERSION = 2;
 /** 每新算完多少只标的落盘一次扫描缓存 */
 const CACHE_FLUSH_EVERY = 20;
 /** 进度推送节流间隔 (ms), 避免高频刷屏 */
@@ -69,6 +71,8 @@ interface CacheEntry {
 type ScanCache = Record<string, CacheEntry>;
 
 interface CacheFile {
+  /** 扫描缓存版本, 与 SCAN_CACHE_VERSION 不一致时整份丢弃 */
+  version?: number;
   updatedAt: number;
   entries: ScanCache;
 }
@@ -92,7 +96,13 @@ function loadCache(tf: ScanTimeframe): ScanCache {
   let entries: ScanCache = {};
   try {
     const parsed = JSON.parse(fs.readFileSync(cacheFile(tf), 'utf-8')) as CacheFile;
-    if (parsed && typeof parsed === 'object' && parsed.entries && typeof parsed.entries === 'object') {
+    if (
+      parsed &&
+      parsed.version === SCAN_CACHE_VERSION &&
+      typeof parsed === 'object' &&
+      parsed.entries &&
+      typeof parsed.entries === 'object'
+    ) {
       entries = parsed.entries;
     }
   } catch {
@@ -103,7 +113,7 @@ function loadCache(tf: ScanTimeframe): ScanCache {
 }
 
 function saveCache(tf: ScanTimeframe, entries: ScanCache): void {
-  const payload: CacheFile = { updatedAt: Date.now(), entries };
+  const payload: CacheFile = { version: SCAN_CACHE_VERSION, updatedAt: Date.now(), entries };
   try {
     fs.mkdirSync(SCAN_CACHE_DIR, { recursive: true });
     // 先写临时文件再重命名, 避免中断留下半截 JSON

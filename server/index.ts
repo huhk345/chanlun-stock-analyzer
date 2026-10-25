@@ -14,16 +14,41 @@
 import http from 'node:http';
 import type { Kline } from '../src/types/stock.ts';
 import { computeStrokesAndBSPoints, runChanlunPipeline } from '../src/utils/chanlun.ts';
-import { loadStrategies } from '../src/strategies/user/index.ts';
+import { listStrategySummaries, loadBuiltinStrategies } from './strategies/index.ts';
+import { findStrategySource, userStrategySource } from './strategySource.ts';
+import {
+  deleteStoredStrategy,
+  getStoredStrategy,
+  importStoredStrategies,
+  listStoredStrategies,
+  saveStoredStrategy,
+  StrategyStoreError,
+} from './strategyStore.ts';
 import { getKlines } from './klines.ts';
 import type { KlinePeriod } from '../src/utils/klineUtils.ts';
 import { attachWebSocketServer } from './ws.ts';
 import { handleScanConnection, WS_PATH } from './scanSocket.ts';
 import { getCacheSnapshot } from './scan.ts';
 import { runServerBacktest, type ServerBacktestInput } from './backtest.ts';
+import {
+  activeStepperSessions,
+  closeStepperSession,
+  createStepperSession,
+  runAllStepperSession,
+  stepStepperSession,
+  stepperSessionTrades,
+  type ServerStepperInput,
+  type StepperAction,
+} from './backtestStepper.ts';
 import { beginProgress, getProgress, isProgressId, updateProgress } from './backtestProgress.ts';
 import { getPoolBacktestJob, requestPoolBacktest } from './poolBacktest.ts';
 import type { PoolBacktestInput } from '../src/types/poolBacktest.ts';
+import {
+  getPortfolioSimulationJob,
+  requestPortfolioSimulation,
+  simulationEngineHealth,
+} from './portfolioSimulation.ts';
+import type { PortfolioSimulationInput, PortfolioSignalQuery } from '../src/types/portfolioSimulation.ts';
 
 const PORT = Number(process.env.PORT || 8899);
 
@@ -100,7 +125,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
   }
 
   if (req.method === 'GET' && path === '/api/health') {
-    sendJson(res, 200, { ok: true, uptime: process.uptime() });
+    sendJson(res, 200, {
+      ok: true,
+      uptime: process.uptime(),
+      stepperSessions: activeStepperSessions(),
+    });
     return;
   }
 
@@ -110,6 +139,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
     const period: KlinePeriod = url.searchParams.get('period') === '1w' ? '1w' : '1d';
     const rawCount = parseInt(url.searchParams.get('count') || '400', 10);
     const count = Math.min(Math.max(Number.isFinite(rawCount) ? rawCount : 400, 30), 5000);
+    // count 为兼容参数: 实际返回窗口固定为 2023-01-01 至今 (见 klines.ts)
     const adjust = url.searchParams.get('adjust') || 'forward';
     const force = url.searchParams.get('refresh') === '1' || url.searchParams.get('force') === '1';
     const result = await getKlines(symbol, period, count, adjust, force);
@@ -117,17 +147,69 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
     return;
   }
 
+  // -------------------------------------------------------------------------
+  // 策略注册表 (server/strategies 内置 + data/user-strategies 用户自建)
+  //   GET    /api/strategies             元数据列表 (含 source: builtin|user)
+  //   POST   /api/strategies             新建 / 覆盖用户策略 (代码沙箱校验)
+  //   POST   /api/strategies/import      批量导入用户策略
+  //   GET    /api/strategies/:id/source  策略源码 (内置片段 / 用户完整代码)
+  //   DELETE /api/strategies/:id         删除用户策略
+  // -------------------------------------------------------------------------
   if (req.method === 'GET' && path === '/api/strategies') {
-    const strategies = await loadStrategies();
-    sendJson(res, 200, {
-      strategies: strategies.map((s) => ({
-        id: s.id,
-        name: s.name,
-        description: s.description,
-        requiresChanLun: !!s.requiresChanLun,
-        params: s.params ?? [],
-      })),
-    });
+    sendJson(res, 200, { strategies: await listStrategySummaries() });
+    return;
+  }
+
+  if (req.method === 'POST' && path === '/api/strategies') {
+    const body = await readJson<Record<string, unknown>>(req);
+    try {
+      const builtinIds = new Set((await loadBuiltinStrategies()).map((s) => s.id));
+      const strategy = saveStoredStrategy(body as never, { reservedIds: builtinIds });
+      sendJson(res, 201, { strategy });
+    } catch (err) {
+      const status = err instanceof StrategyStoreError ? err.statusCode : 400;
+      sendJson(res, status, { error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && path === '/api/strategies/import') {
+    const body = await readJson<unknown>(req);
+    sendJson(res, 200, importStoredStrategies(body));
+    return;
+  }
+
+  // 用户策略列表 (含完整代码, 供「管理策略」面板编辑)
+  if (req.method === 'GET' && path === '/api/strategies/user') {
+    sendJson(res, 200, { strategies: listStoredStrategies() });
+    return;
+  }
+
+  // 内置策略源码 (返回策略所在文件的完整源码, 供前端「查看源码」弹窗展示)
+  if (req.method === 'GET' && path.startsWith('/api/strategies/') && path.endsWith('/source')) {
+    const id = decodeURIComponent(path.slice('/api/strategies/'.length, -'/source'.length));
+    if (!id || id.includes('/')) throw Object.assign(new Error('invalid strategy id'), { statusCode: 400 });
+    const builtin = findStrategySource(id);
+    if (builtin) {
+      sendJson(res, 200, builtin);
+      return;
+    }
+    const stored = getStoredStrategy(id);
+    if (stored) {
+      sendJson(res, 200, userStrategySource(stored));
+      return;
+    }
+    throw Object.assign(new Error(`策略源码未找到: ${id}`), { statusCode: 404 });
+  }
+
+  if (req.method === 'DELETE' && path.startsWith('/api/strategies/')) {
+    const id = decodeURIComponent(path.slice('/api/strategies/'.length));
+    if (!id || id.includes('/')) throw Object.assign(new Error('invalid strategy id'), { statusCode: 400 });
+    if (!deleteStoredStrategy(id)) {
+      sendJson(res, 404, { error: `用户策略不存在: ${id} (内置策略不可删除)` });
+      return;
+    }
+    sendJson(res, 200, { deleted: id });
     return;
   }
 
@@ -199,7 +281,118 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
   }
 
   // -------------------------------------------------------------------------
-  // 选股池组合回测 (server/poolBacktest.ts)
+  // 逐步回测 (服务端会话, 策略与引擎都在服务端)
+  //   POST   /api/backtest/stepper                建会话, 返回第 0 步
+  //   POST   /api/backtest/stepper/:id/step       前进 / 后退 / 跳转
+  //   POST   /api/backtest/stepper/:id/run-all    跑到结束, 返回完整报告
+  //   GET    /api/backtest/stepper/:id/trades     当前账本
+  //   DELETE /api/backtest/stepper/:id            结束会话
+  // -------------------------------------------------------------------------
+  if (req.method === 'POST' && path === '/api/backtest/stepper') {
+    const body = await readJson<ServerStepperInput>(req);
+    try {
+      sendJson(res, 201, await createStepperSession(body));
+    } catch (err) {
+      const status = typeof err?.statusCode === 'number' ? err.statusCode : 400;
+      sendJson(res, status, { error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+
+  if (path.startsWith('/api/backtest/stepper/')) {
+    const rest = path.slice('/api/backtest/stepper/'.length).split('/');
+    const sessionId = rest[0];
+    try {
+      if (req.method === 'POST' && rest[1] === 'step') {
+        const body = await readJson<{ action?: StepperAction; index?: number }>(req);
+        const action: StepperAction = body.action ?? 'forward';
+        sendJson(res, 200, stepStepperSession(sessionId, action, body.index));
+        return;
+      }
+      if (req.method === 'POST' && rest[1] === 'run-all') {
+        sendJson(res, 200, runAllStepperSession(sessionId));
+        return;
+      }
+      if (req.method === 'GET' && rest[1] === 'trades') {
+        sendJson(res, 200, stepperSessionTrades(sessionId));
+        return;
+      }
+      if (req.method === 'DELETE' && rest.length === 1) {
+        sendJson(res, 200, { closed: closeStepperSession(sessionId) });
+        return;
+      }
+    } catch (err) {
+      const status = typeof err?.statusCode === 'number' ? err.statusCode : 400;
+      sendJson(res, status, { error: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+    sendJson(res, 405, { error: 'method not allowed' });
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // 股票池共享资金逐日组合模拟 (server/portfolioSimulation.ts + backtrader)
+  //   GET  /api/simulation/health                 执行引擎 (backtrader) 健康检查
+  //   POST /api/simulation/run                    发起 / 复用任务
+  //   GET  /api/simulation/:id                    轮询进度 / 最终报告
+  //   GET  /api/simulation/:id/signals            信号账本 (分页/筛选)
+  //   GET  /api/simulation/:id/symbols            标的维度表现
+  //   POST /api/simulation/:id/cancel             中断任务
+  // -------------------------------------------------------------------------
+  if (req.method === 'GET' && path === '/api/simulation/health') {
+    sendJson(res, 200, simulationEngineHealth());
+    return;
+  }
+
+  if (req.method === 'POST' && path === '/api/simulation/run') {
+    const body = await readJson<PortfolioSimulationInput>(req);
+    try {
+      const { job, attached } = await requestPortfolioSimulation(body);
+      sendJson(res, attached ? 200 : 202, { jobId: job.id, attached, job: job.view() });
+    } catch (err: any) {
+      const status = typeof err?.statusCode === 'number' ? err.statusCode : 400;
+      sendJson(res, status, { error: err?.message ?? String(err), jobId: err?.jobId });
+    }
+    return;
+  }
+
+  if (path.startsWith('/api/simulation/')) {
+    const rest = path.slice('/api/simulation/'.length).split('/');
+    const job = getPortfolioSimulationJob(rest[0]);
+    if (!job) {
+      sendJson(res, 404, { error: '任务不存在或已过期' });
+      return;
+    }
+    if (req.method === 'POST' && rest[1] === 'cancel') {
+      job.cancel();
+      sendJson(res, 200, job.view());
+      return;
+    }
+    if (req.method === 'GET' && rest[1] === 'signals') {
+      const query: PortfolioSignalQuery = {
+        limit: url.searchParams.get('limit') ? Number(url.searchParams.get('limit')) : undefined,
+        offset: url.searchParams.get('offset') ? Number(url.searchParams.get('offset')) : undefined,
+        action: (url.searchParams.get('action') as PortfolioSignalQuery['action']) || 'ALL',
+        symbol: url.searchParams.get('symbol') || undefined,
+      };
+      sendJson(res, 200, job.signalPage(query));
+      return;
+    }
+    if (req.method === 'GET' && rest[1] === 'symbols') {
+      sendJson(res, 200, { rows: job.symbolStats() });
+      return;
+    }
+    if (req.method === 'GET' && rest.length === 1) {
+      sendJson(res, 200, job.view());
+      return;
+    }
+    sendJson(res, 405, { error: 'method not allowed' });
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // 旧版选股池等权汇总回测 (server/poolBacktest.ts) — 保留给 CLI 脚本兼容
+  //   新前端使用 /api/simulation/*
   //   POST /api/backtest/pool                    发起任务
   //   GET  /api/backtest/pool/:id                轮询进度 / 最终报告
   //   GET  /api/backtest/pool/:id/symbol/:symbol 单只标的明细

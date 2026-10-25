@@ -17,6 +17,61 @@ export function isAshareSymbol(v: unknown): v is string {
 /** Supported markets for the analyzer. */
 export type StockMarket = 'cn' | 'us' | 'hk';
 
+// ---------------------------------------------------------------------------
+// A 股板块划分 (组合模拟的「排除板块」选项前后端共用)
+// ---------------------------------------------------------------------------
+
+/** 主板 / 创业板 / 科创板 / 北交所 */
+export type AShareBoard = 'main' | 'chinext' | 'star' | 'bse';
+
+/** 可按板块排除的集合 (主板不可排除) */
+export type ExcludableBoard = Exclude<AShareBoard, 'main'>;
+
+/** 排除板块的可选项 (前端渲染 chips / CLI 参数校验共用) */
+export const EXCLUDABLE_BOARDS: readonly {
+  id: ExcludableBoard;
+  label: string;
+  hint: string;
+  /** 代码前缀, 用于展示 */
+  prefixes: string;
+}[] = [
+  { id: 'chinext', label: '创业板', hint: '300 / 301', prefixes: '300/301' },
+  { id: 'star', label: '科创板', hint: '688 / 689', prefixes: '688/689' },
+  { id: 'bse', label: '北交所', hint: '43 / 83 / 87 / 88 / 92', prefixes: '43/83/87/88/92' },
+];
+
+/** 6 位代码 (可带后缀) -> 板块 */
+export function aShareBoard(codeOrSymbol: string): AShareBoard {
+  const code = String(codeOrSymbol ?? '')
+    .trim()
+    .replace(/\.(SH|SS|SZ|BJ)$/i, '');
+  if (/^(300|301)/.test(code)) return 'chinext';
+  if (/^(688|689)/.test(code)) return 'star';
+  if (/^(43|83|87|88|92)/.test(code)) return 'bse';
+  return 'main';
+}
+
+/** 该标的所属板块是否在排除名单内 */
+export function isBoardExcluded(
+  symbol: string,
+  exclude: readonly ExcludableBoard[] | undefined,
+): boolean {
+  if (!exclude || exclude.length === 0) return false;
+  const board = aShareBoard(symbol);
+  return board !== 'main' && (exclude as readonly AShareBoard[]).includes(board);
+}
+
+/** 排除名单标签 (进度/诊断文案用), 空数组返回 '' */
+export function describeExcludedBoards(exclude: readonly ExcludableBoard[] | undefined): string {
+  if (!exclude || exclude.length === 0) return '';
+  return exclude
+    .map((id) => {
+      const found = EXCLUDABLE_BOARDS.find((b) => b.id === id);
+      return found ? `${found.label}(${found.prefixes})` : id;
+    })
+    .join(' + ');
+}
+
 /**
  * Resolve user input into a canonical symbol + market.
  * (见文件头注释中的格式列表)

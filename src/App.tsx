@@ -10,6 +10,7 @@ import StockInfoPanel from './components/StockInfoPanel';
 import MarketDashboard from './components/MarketDashboard';
 import IndexAnalysis from './components/IndexAnalysis';
 import SimulationView from './components/SimulationView';
+import KeepAlive from './components/KeepAlive';
 import { SupabaseUser } from './utils/supabase';
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade, BSPoint } from './types/stock';
 import { analyzeChanlunWithFallback } from './utils/analysisApi';
@@ -37,30 +38,77 @@ const CHAT_RAIL_MIN = 320;
 const CHAT_RAIL_MAX = 800;
 const CHAT_RAIL_DEFAULT = 420;
 const NAVBAR_HEIGHT = 56;
+const DEFAULT_SYMBOL = '000001.ss';
 
 type ViewMode = 'dashboard' | 'indexes' | 'analyzer' | 'simulation';
 
-// Parse the current location into app routing state.
-// Mirrors the initial-view logic: presence of ?code= implies the analyzer view.
-function parseAppUrl(): { view: ViewMode; code: string; timeframe: KlineTimeframe } {
-  const params = new URLSearchParams(window.location.search);
-  const rawView = params.get('view');
-  const code = params.get('code') || '000001.ss';
-  const timeframe: KlineTimeframe = params.get('tf') === 'weekly' ? 'weekly' : 'daily';
-  let view: ViewMode = 'dashboard';
-  if (rawView === 'analyzer' || params.get('code')) {
-    view = 'analyzer';
-  } else if (rawView === 'indexes') {
-    view = 'indexes';
-  } else if (rawView === 'simulation') {
-    view = 'simulation';
-  }
-  return { view, code, timeframe };
+interface AppRoute {
+  view: ViewMode;
+  code: string;
+  timeframe: KlineTimeframe;
 }
 
-// Write routing state to the URL. Push creates a history entry (back-button
-// support); replace only canonicalizes the current entry without adding one.
-// Identical URLs are skipped to avoid duplicate history entries.
+// Canonical path for each tab. The analyzer and simulation keep the active
+// symbol in the path so every tab is directly linkable/bookmarkable.
+function routePath(view: ViewMode, symbol: string): string {
+  if (view === 'analyzer' || view === 'simulation') {
+    return symbol ? `/${view}/${encodeURIComponent(symbol)}` : `/${view}`;
+  }
+  return `/${view}`;
+}
+
+function decodePathSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+// Parse the current location into app routing state from real paths
+// (`/dashboard`, `/indexes`, `/analyzer/600519`, `/simulation/600519`).
+// Legacy query-param links (`?view=analyzer&code=...`) still parse and are
+// rewritten to their path equivalent on boot.
+function parseAppUrl(): AppRoute {
+  const url = new URL(window.location.href);
+  const params = url.searchParams;
+  const timeframe: KlineTimeframe = params.get('tf') === 'weekly' ? 'weekly' : 'daily';
+  const [first, second] = url.pathname.split('/').filter(Boolean);
+
+  if (first === 'analyzer') {
+    return {
+      view: 'analyzer',
+      code: decodePathSegment(second || params.get('code') || DEFAULT_SYMBOL),
+      timeframe,
+    };
+  }
+  if (first === 'simulation') {
+    return {
+      view: 'simulation',
+      code: decodePathSegment(second || params.get('code') || DEFAULT_SYMBOL),
+      timeframe,
+    };
+  }
+  if (first === 'dashboard' || first === 'indexes') {
+    return { view: first, code: params.get('code') || DEFAULT_SYMBOL, timeframe };
+  }
+
+  // Backward compatibility with the previous query-param routes.
+  const legacyView = params.get('view');
+  if (legacyView === 'analyzer' || params.get('code')) {
+    return { view: 'analyzer', code: params.get('code') || DEFAULT_SYMBOL, timeframe };
+  }
+  if (legacyView === 'indexes') return { view: 'indexes', code: DEFAULT_SYMBOL, timeframe };
+  if (legacyView === 'simulation') {
+    return { view: 'simulation', code: params.get('code') || DEFAULT_SYMBOL, timeframe };
+  }
+
+  return { view: 'dashboard', code: DEFAULT_SYMBOL, timeframe };
+}
+
+// Write routing state to the URL as a path. Push creates a history entry
+// (back-button support); replace only canonicalizes the current entry without
+// adding one. Identical URLs are skipped to avoid duplicate history entries.
 function syncAppUrl(
   view: ViewMode,
   symbol: string,
@@ -68,29 +116,9 @@ function syncAppUrl(
   mode: 'push' | 'replace',
 ) {
   const url = new URL(window.location.href);
-  if (view === 'dashboard') {
-    url.searchParams.set('view', 'dashboard');
-    url.searchParams.delete('code');
-  } else if (view === 'indexes') {
-    url.searchParams.set('view', 'indexes');
-    url.searchParams.delete('code');
-  } else {
-    url.searchParams.set('view', 'analyzer');
-    if (symbol) url.searchParams.set('code', symbol);
-  }
-  if (timeframe === 'weekly') url.searchParams.set('tf', 'weekly');
-  else url.searchParams.delete('tf');
-  const next = url.toString();
-  if (next === window.location.href) return;
-  if (mode === 'push') window.history.pushState({}, '', next);
-  else window.history.replaceState({}, '', next);
-}
-
-// Simulation view: keep the symbol/code in the URL so backtests can target it
-function syncSimulationUrl(symbol: string, timeframe: KlineTimeframe, mode: 'push' | 'replace') {
-  const url = new URL(window.location.href);
-  url.searchParams.set('view', 'simulation');
-  if (symbol) url.searchParams.set('code', symbol);
+  url.pathname = routePath(view, symbol);
+  url.searchParams.delete('view');
+  url.searchParams.delete('code');
   if (timeframe === 'weekly') url.searchParams.set('tf', 'weekly');
   else url.searchParams.delete('tf');
   const next = url.toString();
@@ -105,8 +133,8 @@ export default function App() {
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [isChatVisible, setIsChatVisible] = useState(true);
 
-  // View routing: dashboard is the index page; analyzer is the stock workspace.
-  // Entering analyzer via ?view=analyzer or a shared ?code= link.
+  // View routing: each tab is a real path (/dashboard, /indexes,
+  // /analyzer/:symbol, /simulation/:symbol); legacy ?view= links still work.
   const initialRoute = parseAppUrl();
   const initialView: ViewMode = initialRoute.view;
   const [view, setView] = useState<ViewMode>(initialView);
@@ -323,11 +351,7 @@ export default function App() {
   const handleViewChange = (nextView: ViewMode) => {
     if (nextView === viewRef.current && nextView !== 'analyzer' && nextView !== 'simulation') return;
     setView(nextView);
-    if (nextView === 'simulation') {
-      syncSimulationUrl(symbolRef.current, timeframeRef.current, 'push');
-    } else {
-      syncAppUrl(nextView, symbolRef.current, timeframeRef.current, 'push');
-    }
+    syncAppUrl(nextView, symbolRef.current, timeframeRef.current, 'push');
 
     // First entry into the analyzer loads the current symbol
     if (nextView === 'analyzer' && klines.length === 0 && !isLoading) {
@@ -336,18 +360,14 @@ export default function App() {
   };
 
   // Run on mount: only the analyzer view needs the default chart immediately.
-  // Default always 日线: drop any ?tf= from the URL so it matches the daily state.
+  // Canonicalize legacy query-param URLs into path routes, and default to 日线
+  // by dropping any ?tf= from the URL so it matches the daily state.
   useEffect(() => {
     if (hasInitialized.current) return;
     hasInitialized.current = true;
-    const bootUrl = new URL(window.location.href);
-    if (bootUrl.searchParams.has('tf')) {
-      bootUrl.searchParams.delete('tf');
-      window.history.replaceState({}, '', bootUrl.toString());
-    }
+    syncAppUrl(initialView, initialCode, timeframeRef.current, 'replace');
     if (initialView === 'analyzer') {
-      const urlCode = new URLSearchParams(window.location.search).get('code') || '000001.ss';
-      fetchAndProcessStock(urlCode, timeframeRef.current);
+      fetchAndProcessStock(initialCode, timeframeRef.current);
     }
   }, []);
 
@@ -460,22 +480,25 @@ export default function App() {
         dataSource={dataSource}
       />
 
-      {/* Main Container - Dashboard (index) view */}
-      {view === 'dashboard' && (
+      {/* Main Container - Dashboard (index) view.
+          Pages are kept alive: switching tabs hides them instead of unmounting,
+          so dashboard filters, scan results, backtest reports and chart state
+          survive navigation. */}
+      <KeepAlive active={view === 'dashboard'}>
         <main className="flex-1 w-full px-[10px] py-[10px] md:px-6 md:py-6 lg:px-8">
           <MarketDashboard onSelectStock={handleSearch} />
         </main>
-      )}
+      </KeepAlive>
 
       {/* Main Container - Index ChanLun buy/sell points view */}
-      {view === 'indexes' && (
+      <KeepAlive active={view === 'indexes'}>
         <main className="flex-1 w-full px-[10px] py-[10px] md:px-6 md:py-6 lg:px-8">
           <IndexAnalysis onSelectStock={handleSearch} />
         </main>
-      )}
+      </KeepAlive>
 
       {/* Main Container - Chart + Backtest scroll under the fixed right rail */}
-      {view === 'analyzer' && (
+      <KeepAlive active={view === 'analyzer'}>
       <main
         className="flex-1 w-full px-[10px] py-[10px] md:px-6 md:py-6 lg:px-8 transition-[padding] duration-200"
         style={{ paddingRight: isMobile ? `10px` : `calc(${railOffset}px + 1rem)` }}
@@ -563,17 +586,19 @@ export default function App() {
         )}
 
       </main>
-      )}
+      </KeepAlive>
 
       {/* Main Container - Strategy Simulation view */}
-      {view === 'simulation' && (
+      <KeepAlive active={view === 'simulation'}>
         <main className="flex-1 w-full px-[10px] py-[10px] md:px-6 md:py-6 lg:px-8">
           <SimulationView symbol={symbol} klines={klines} />
         </main>
-      )}
+      </KeepAlive>
 
-      {/* Fixed AI Right Rail - always-on-top side panel (desktop only, analyzer view) */}
-      {view === 'analyzer' && isChatVisible && !isMobile && (
+      {/* Fixed AI Right Rail - always-on-top side panel (desktop only, analyzer view).
+          Kept alive too so hiding the rail or visiting another tab does not
+          throw away the current AI conversation. */}
+      <KeepAlive active={view === 'analyzer' && isChatVisible && !isMobile}>
         <aside
           className="fixed right-0 z-40 flex shadow-[-12px_0_32px_-12px_rgba(0,0,0,0.6)]"
           style={{
@@ -611,7 +636,7 @@ export default function App() {
             />
           </div>
         </aside>
-      )}
+      </KeepAlive>
 
       {/* Floating tab to re-open the rail when collapsed (desktop only) */}
       {view === 'analyzer' && !isChatVisible && !isMobile && (
@@ -641,14 +666,17 @@ export default function App() {
         </button>
       )}
 
-      {/* Humble Footer */}
-      <footer
-        className="border-t border-zinc-850 py-3 md:py-6 mt-0 text-center text-[10px] font-mono text-zinc-500 transition-[padding] duration-200 px-3"
-        style={{ paddingRight: isMobile || view !== 'analyzer' ? 0 : `${railOffset}px` }}
-      >
-        <p>© 2026 缠论量化工作台。由 Google AI Studio 构建。<a href="https://github.com/huhk345/chanlun-stock-analyzer" target="_blank" rel="noopener noreferrer" className="underline hover:text-zinc-300 transition-colors">源代码</a></p>
-        <p className="mt-1">本工具仅供学习研究使用, 不构成任何投资建议, 投资有风险, 入市需谨慎。</p>
-      </footer>
+      {/* Humble Footer - hidden on the simulation view to keep the backtest
+          workspace as tall as possible */}
+      {view !== 'simulation' && (
+        <footer
+          className="border-t border-zinc-850 py-3 md:py-6 mt-0 text-center text-[10px] font-mono text-zinc-500 transition-[padding] duration-200 px-3"
+          style={{ paddingRight: isMobile || view !== 'analyzer' ? 0 : `${railOffset}px` }}
+        >
+          <p>© 2026 缠论量化工作台。由 Google AI Studio 构建。<a href="https://github.com/huhk345/chanlun-stock-analyzer" target="_blank" rel="noopener noreferrer" className="underline hover:text-zinc-300 transition-colors">源代码</a></p>
+          <p className="mt-1">本工具仅供学习研究使用, 不构成任何投资建议, 投资有风险, 入市需谨慎。</p>
+        </footer>
+      )}
 
     </div>
   );

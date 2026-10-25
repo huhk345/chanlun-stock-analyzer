@@ -1,4 +1,4 @@
-import type { Kline, BacktestTrade, BacktestResult } from '../types/stock';
+import type { Kline, BacktestTrade, BacktestResult } from '../../src/types/stock.ts';
 import type {
   BacktestStepperInput,
   BacktestStepper,
@@ -10,18 +10,17 @@ import type {
   RunBacktestOutput,
   UserStrategyInput,
   UserStrategyDecision,
-} from '../types/strategy';
-import { buildStrategyParams, validateDecision } from './strategyAdapter';
-import { computeIndicatorValues } from './indicatorAdapter';
-import { loadStoredIndicators } from './indicatorLoader';
+} from '../../src/types/strategy.ts';
+import { buildStrategyParams, validateDecision } from './strategyAdapter.ts';
+import { computeIndicatorValues } from './indicatorValues.ts';
 import {
   createInitialAccount,
   createInitialPosition,
   executeDecisionAtClose,
   executeProtectiveStop,
-} from './backtestExecution';
-import { computeChanlunStructures } from './chanlun';
-import { tradesToSnapshots, sharpeFromReturns } from './backtestUtils';
+} from './backtestExecution.ts';
+import { computeChanlunStructures } from '../../src/utils/chanlun.ts';
+import { tradesToSnapshots, sharpeFromReturns } from './backtestUtils.ts';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -99,8 +98,8 @@ export function createBacktestStepper(input: BacktestStepperInput): BacktestStep
   // Build strategy params once
   const params = buildStrategyParams(strategy, customParams as Record<string, unknown> | undefined);
 
-  // Load indicator definitions once (outside the loop)
-  const loadedIndicators = loadStoredIndicators();
+  // Load indicator definitions once (outside the loop) — 由调用方注入
+  const loadedIndicators = input.indicators ?? [];
   const selectedIndicators = selectedIndicatorIds
     ? loadedIndicators.filter(d => selectedIndicatorIds.includes(d.id))
     : [];

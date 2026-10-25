@@ -5,11 +5,19 @@
  *   - parseTickflowColumns  TickFlow 列式返回 -> Kline[]
  *   - extractRateLimitDelay 解析 TickFlow 限流提示中的重试等待时长
  *   - 交易日 / 新鲜度判断 (北京时间, 忽略节假日)
+ *   - KLINE_START_DATE / estimateBarsSince  服务端统一数据窗口与根数估算
  */
 import type { Kline } from '../types/stock';
 
 /** K 线周期 (与各数据源接口参数一致) */
 export type KlinePeriod = '1d' | '1w';
+
+/**
+ * 服务端 K 线数据的统一起始日。
+ * 缓存、扫描、回测与 /api/klines 都只使用该日期之后的数据,
+ * 保证不同标的的分析窗口一致。
+ */
+export const KLINE_START_DATE = '2023-01-01';
 
 /** 修正个别数据源 high/low 与 open/close 交叉的脏数据 */
 export function sanitizeKlines(klines: Kline[]): Kline[] {
@@ -86,14 +94,20 @@ export function daysBetween(from: string, to: string): number {
 /**
  * 预期最新交易日 (北京时间 YYYY-MM-DD, 忽略节假日):
  * 16:00 前当日日 K 尚未生成, 回退到上一工作日; 周末再回退到周五。
+ * @param timestamp 计算基准时刻 (ms), 可回看"某次成功拉取时"的预期交易日
  */
-export function expectedTradeDay(): string {
-  const d = new Date(Date.now() + CHINA_OFFSET_MS);
+export function expectedTradeDayAt(timestamp: number): string {
+  const d = new Date(timestamp + CHINA_OFFSET_MS);
   if (d.getUTCHours() < 16) d.setUTCDate(d.getUTCDate() - 1);
   const dow = d.getUTCDay();
   if (dow === 0) d.setUTCDate(d.getUTCDate() - 2);
   else if (dow === 6) d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().slice(0, 10);
+}
+
+/** 当前预期最新交易日 */
+export function expectedTradeDay(): string {
+  return expectedTradeDayAt(Date.now());
 }
 
 /** 末根日期是否已覆盖预期最新交易日 (周线放宽到 7 天) */
@@ -102,4 +116,17 @@ export function isFresh(lastDate: string | undefined, period: KlinePeriod): bool
   const expected = expectedTradeDay();
   if (period === '1w') return daysBetween(lastDate, expected) <= 7;
   return lastDate >= expected;
+}
+
+/**
+ * 估算 startDate ~ endDate 之间需要的 K 线根数 (忽略节假日, 含少量缓冲)。
+ * 日线按交易日 ≈ 自然日 × 5/7, 周线按自然周。
+ */
+export function estimateBarsSince(
+  startDate: string,
+  period: KlinePeriod,
+  endDate = expectedTradeDay(),
+): number {
+  const days = Math.max(0, daysBetween(startDate, endDate));
+  return period === '1w' ? Math.ceil(days / 7) + 2 : Math.ceil((days * 5) / 7) + 10;
 }

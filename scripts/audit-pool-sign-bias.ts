@@ -9,13 +9,11 @@
  *
  * 用法: pnpm exec tsx scripts/audit-pool-sign-bias.ts [--symbols N] [--sample-ids file]
  */
-import { installLocalStorageShim } from '../server/localStorageShim.ts';
-installLocalStorageShim();
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { runBacktest } from '../src/utils/backtestRunner.ts';
-import { loadStrategies } from '../src/strategies/user/index.ts';
+import { runBacktest } from '../server/engine/backtestRunner.ts';
+import { loadStrategies } from '../server/strategies/index.ts';
 import type { Kline } from '../src/types/stock';
 import type { UserStrategyDefinition, UserStrategyDecision } from '../src/types/strategy';
 import type { BacktestTrade } from '../src/types/stock';
