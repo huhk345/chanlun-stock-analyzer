@@ -20,5 +20,13 @@ autoresearch/
 .cache/
 .venv/
 
+# Python 服务端 (server-py)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest-tmp/
+server-py/.venv/
+server-py/*.egg-info/
+
 
 doc/

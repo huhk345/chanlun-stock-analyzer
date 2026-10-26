@@ -1,0 +1,61 @@
+{
+ "trades": [
+  [
+   "2024-11-05",
+   "BUY",
+   246.318,
+   400,
+   98527.2,
+   25.617072,
+   "chanlun-weekly-daily-thermometer"
+  ],
+  [
+   "2025-03-21",
+   "SELL",
+   242.153,
+   400,
+   96861.2,
+   122.045112,
+   "chanlun-weekly-daily-thermometer"
+  ],
+  [
+   "2025-11-13",
+   "BUY",
+   407.292,
+   200,
+   81458.4,
+   21.179184,
+   "chanlun-weekly-daily-thermometer"
+  ],
+  [
+   "2025-11-21",
+   "SELL",
+   361.692,
+   200,
+   72338.4,
+   91.146384,
+   "chanlun-weekly-daily-thermometer"
+  ],
+  [
+   "2026-04-29",
+   "BUY",
+   443.598,
+   200,
+   88719.6,
+   23.067096,
+   "chanlun-weekly-daily-thermometer"
+  ],
+  [
+   "2026-06-08",
+   "SELL",
+   391.618,
+   200,
+   78323.6,
+   98.687736,
+   "chanlun-weekly-daily-thermometer"
+  ]
+ ],
+ "finalBalance": 78436.25741599996,
+ "equityLen": 921,
+ "total": 6
+}

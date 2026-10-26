@@ -110,6 +110,24 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
 
    The single-stock analysis endpoints (`/api/chanlun/*`) still fall back to in-browser computation when the backend is down; the 买卖点扫描 requires the backend and shows a reconnect banner when the socket drops.
 
+   **Python backend (`server-py/`, alternative)** — the analysis + backtest server has been rewritten in Python with zero third-party runtime dependencies. Same paths, same JSON keys, same status codes, same execution model, so the frontend needs no change:
+   ```bash
+   pnpm run py:setup     # create server-py/.venv and install pytest
+   pnpm run server:py    # python -m chanlun_server serve, listens on :8899
+   pnpm run test:py      # three-part test suite
+   ```
+   The port is behavioural, not approximate: on the same cached bars both engines emit the same trade ledger, fees included (asserted against the TypeScript engine and a recorded real-data golden fixture).
+
+   Tests are split into **three parts**, each a separate pytest invocation with its own marker, orchestrated by `server-py/run_tests.py`:
+
+   | Part | Marker | Scope | Time |
+   | --- | --- | --- | --- |
+   | 1 · unit | `unit` | pure functions: ChanLun, fees, metrics, indicators, sandbox | ~0.5 s |
+   | 2 · integration | `integration` | engine + registry + router + cache in-process; prefix invariance (no look-ahead), stepper parity, TS-engine parity | ~14 s |
+   | 3 · e2e | `e2e` | real server subprocess, real HTTP, CORS, CLI | ~1.5 s |
+
+   Not ported: the `/ws` scan socket, `/api/scan/cache` (explicit stub) and `/api/simulation/*` (backtrader already runs in Python). See [`server-py/README.md`](server-py/README.md) for the full matrix.
+
 7. **Portfolio simulation engine (backtrader)** — the shared-cash stock-pool simulation executes day by day in Python, so a Python 3.10+ runtime is required:
    ```bash
    pnpm run sim:setup   # creates scripts/backtrader/.venv and installs backtrader 1.9.78.123
@@ -243,6 +261,24 @@ pnpm exec tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
      --max-positions 5 --position-percent 20 --out .cache/simulation-report.json
    ```
    信号是因果的: 每根 K 线的策略调用只拿到截至当根的 `klines.slice(0, i + 1)`, 成交按信号当日收盘价 (`cerebro.broker.set_coc(True)`) 撮合。基准默认沪深300全收益 (H00300), 可用 `--benchmark hs300` 或 `--benchmark equal_weight` 切换; 市场基准数据 (中证全债 / 10Y 国债 / 沪深300 PE / ERP 等) 与 K 线并行拉取并缓存在 `.cache/market/`, 拉取失败只降级基准, 不中断模拟。
+
+7. **Python 后端 (`server-py/`, 可选替换)** — 分析与回测服务端已用 Python 重写, 运行时零第三方依赖; 路径、JSON 字段、状态码与撮合规则都与 Node 版一致, 前端无需改动:
+   ```bash
+   pnpm run py:setup   # 创建 server-py/.venv 并安装 pytest
+   pnpm run server:py  # python -m chanlun_server serve, 监听 :8899
+   pnpm run test:py    # 三阶段测试
+   ```
+   这是行为级移植而非近似实现: 同一份缓存 K 线在两侧引擎上跑出的逐笔成交 (含每笔费用)、期末权益与权益曲线长度完全一致 —— 由「与 TypeScript 引擎实时比对」和「真实行情 golden 用例」共同保证。
+
+   测试按**三部分**拆分, 每部分是一个独立的 pytest 调用 (各自带 marker), 由 `server-py/run_tests.py` 统一调度并汇总:
+
+   | 阶段 | marker | 覆盖范围 | 耗时 |
+   | --- | --- | --- | --- |
+   | 1 · 单元 | `unit` | 纯函数: 缠论 / 费用 / 指标 / 沙箱 | ~0.5s |
+   | 2 · 集成 | `integration` | 引擎 + 注册表 + 路由 + 缓存, 进程内; 前缀不变性 (无未来数据)、单步与批量一致、与 TS 引擎逐笔一致 | ~14s |
+   | 3 · 端到端 | `e2e` | 真实子进程 + 真实 HTTP: CORS、错误码、并发、CLI | ~1.5s |
+
+   未移植: `/ws` 扫描通道、`/api/scan/cache` (返回明确占位)、`/api/simulation/*` (backtrader 本身已在 Python 侧)。完整对照见 [`server-py/README.md`](server-py/README.md)。
 
 **疑难排查:** 出现 `Cannot find module '.../node_modules/.pnpm/vite.../dist/node/chunks/dep-*.js'` 报错，通常是因为 `node_modules` 被检出成了（可能自引用的）符号链接，导致模块解析失败。仓库不跟踪 `node_modules`；删除坏链接后重装即可:
 ```bash
