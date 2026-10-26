@@ -376,12 +376,12 @@ async function main(): Promise<void> {
         `no entry on the vanished 2024-12-24 B3 (${phantom.map((t) => t.date).join(',') || 'none'})`);
     }
 
-    // 回归：2025-09 起市场温度长期在 60-80。旧实现 >=60 一律不新开仓，
-    // 导致 2025 年下半年之后完全零信号；当前 60-70 允许 20% 小仓跟随买点。
+    // 回归：2025-09 至 2026 年上半年市场温度长期高于 70，旧实现会全年停止开仓。
+    // 温度开关已整体移除，该区间内已确认的买点应能正常入场。
     if (symbol === '300750.SZ') {
       const hotBandBuy = output.result.trades.find((trade) =>
         trade.type === 'BUY' && trade.date >= '2025-10-01' && trade.date <= '2025-12-31');
-      check(!!hotBandBuy, `hot-band (60-70C) entry still fires after 2025-09 (${hotBandBuy?.date ?? 'none'})`);
+      check(!!hotBandBuy, `confirmed B3 still fires after 2025-09 without the temperature switch (${hotBandBuy?.date ?? 'none'})`);
     }
 
     if (prefixSymbols.has(symbol)) validatePrefixInvariance(symbol, klines, output);

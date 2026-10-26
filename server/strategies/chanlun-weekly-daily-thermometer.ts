@@ -7,13 +7,19 @@ const DEFAULTS = {
   weeklyMaPeriod: 20,
   weeklySlopeWeeks: 4,
   maxSignalAge: 10,
+  minBreakoutVolumeRatio: 1.5,
+  hubReturnBars: 3,
   maxRsi: 72,
   maxDistanceFromMa20Percent: 12,
   minRelativeStrengthPercent: -8,
   minimumSignalQuality: 0.7,
   hardStopPercent: 10,
   structureStopBufferPercent: 1.5,
-  trailingAtrMultiple: 5,
+  // 移动保护的回吐额度必须小于启动线，否则保护在数学上不存在。
+  // 全样本 ATR14/价格 中位 3.01%，5×ATR 中位 15.1%，与启动线 15% 几乎相等
+  // → 启动瞬间止损位就落在成本价上（50.5% 的交易 5×ATR ≥ 15%），等于没有保护，
+  // 只能一路跌到 -10% 硬止损。3×ATR 中位 9.0%，启动瞬间止损位在成本上方约 6%。
+  trailingAtrMultiple: 3,
   trailingActivationPercent: 15,
   maxHoldingBars: 60,
   timeStopMinReturnPercent: 2,
@@ -152,6 +158,62 @@ function latestConfirmedPoint(
   return null;
 }
 
+function strokeHigh(stroke: Stroke): number {
+  return Math.max(stroke.start.price, stroke.end.price);
+}
+
+function strokeLow(stroke: Stroke): number {
+  return Math.min(stroke.start.price, stroke.end.price);
+}
+
+/** B3 对应的中枢区间，与 calculateBSPoints 的三买口径一致：e-4 / e-2 两笔的重叠区间。 */
+function b3HubRange(point: BSPoint, strokes: readonly Stroke[]): { zd: number; zg: number } | null {
+  const e = point.strokeIndex;
+  const first = strokes[e - 4];
+  const second = strokes[e - 2];
+  if (!first || !second) return null;
+  const zd = Math.max(strokeLow(first), strokeLow(second));
+  const zg = Math.min(strokeHigh(first), strokeHigh(second));
+  return zg > zd ? { zd, zg } : null;
+}
+
+/**
+ * 突破中枢的那一笔必须有量：取突破笔内成交量最大的一根，
+ * 要求其成交量 >= 20 日均量 × minRatio。
+ */
+function breakoutVolumeConfirmed(
+  point: BSPoint,
+  strokes: readonly Stroke[],
+  klines: readonly Kline[],
+  minRatio: number,
+): boolean {
+  const breakout = strokes[point.strokeIndex - 1];
+  if (!breakout || breakout.direction !== 'up') return false;
+
+  let maxVolume = 0;
+  let maxVolumeIndex = -1;
+  for (let i = breakout.start.originalIndex; i <= breakout.end.originalIndex; i++) {
+    if (klines[i].volume > maxVolume) {
+      maxVolume = klines[i].volume;
+      maxVolumeIndex = i;
+    }
+  }
+  if (maxVolumeIndex < 0 || maxVolume <= 0) return false;
+
+  const averageVolume = klineMean(klines, maxVolumeIndex, 20, 'volume');
+  return isFinitePositive(averageVolume) && maxVolume >= averageVolume * minRatio;
+}
+
+/**
+ * 动态止盈：浮盈越高，ATR 跟踪越紧。
+ * 默认 3×ATR 在 20% 浮盈后收紧到 2.5×，30% 后收紧到 2×，最低不低于 1.5×。
+ */
+function trailingAtrMultipleFor(baseMultiple: number, maxProfitPercent: number): number {
+  if (maxProfitPercent >= 30) return Math.max(1.5, baseMultiple * 2 / 3);
+  if (maxProfitPercent >= 20) return Math.max(1.5, baseMultiple * 5 / 6);
+  return baseMultiple;
+}
+
 function weeklyContext(klines: readonly Kline[]): WeeklyContext {
   const bars = completedWeeks(klines);
   if (bars.length === 0) {
@@ -187,11 +249,9 @@ function weeklyContext(klines: readonly Kline[]): WeeklyContext {
 interface MarketContext {
   source: 'benchmark' | 'stock-fallback';
   score: number;
-  temperature: number;
   close: number;
   ma20: number;
   ma60: number;
-  aboveMa60: boolean;
   stableTrend: boolean;
   relativeStrengthPercent: number | null;
 }
@@ -207,13 +267,11 @@ function stockFallbackMarketContext(stockKlines: readonly Kline[], index: number
   return {
     source: 'stock-fallback',
     // Keep the fallback neutral and small-sized. Without a fresh benchmark,
-    // do not pretend that stock-local data can estimate broad-market heat.
+    // do not pretend that stock-local data can estimate broad-market strength.
     score: 50,
-    temperature: 50,
     close,
     ma20,
     ma60,
-    aboveMa60: close > ma60,
     stableTrend,
     relativeStrengthPercent: null,
   };
@@ -260,11 +318,9 @@ function marketContext(date: string, stockKlines: readonly Kline[], index: numbe
   return {
     source: 'benchmark',
     score: row[1],
-    temperature: row[2],
     close: row[3],
     ma20,
     ma60,
-    aboveMa60: row[3] > ma60,
     stableTrend,
     relativeStrengthPercent,
   };
@@ -307,6 +363,8 @@ interface BuyCandidate {
   supportPrice: number;
   /** 买点自身的日期，用于在图表上与看板买卖点对齐 */
   pointDate: string;
+  /** B3 突破的中枢上沿；回到该价位下方盘整即判定突破失败 */
+  hubUpper: number | null;
 }
 
 function confirmedPointCandidate(
@@ -317,6 +375,7 @@ function confirmedPointCandidate(
   ma20: number,
   ma20Rising: boolean,
   weekly: WeeklyContext,
+  hubUpper: number | null = null,
 ): BuyCandidate | null {
   if (!found) return null;
   const point = found.point;
@@ -332,25 +391,23 @@ function confirmedPointCandidate(
     reason: `${type}|周线多头，日线${pointName}右侧确认，收盘站上买点与 MA20`,
     supportPrice: point.price,
     pointDate: point.date,
+    hubUpper,
   };
 }
 
 /**
- * 温度只决定"买多少"，不单独否决大势。
+ * 仓位只由大盘趋势强度决定：趋势越强，仓位越重。
  *
- * 偏热区（60-70）仍允许小仓位跟随已确认的缠论三买，避免在强趋势里整整
- * 一年不开仓；真正过热（>=70）才停止新开仓，与文档中的风控口径一致。
+ * 温度已整体移除，不再用估值冷热做逆向分档，也不再用单日温度开关否决开仓。
  */
-function allocationPercent(temperature: number, market: MarketContext, weeklyBullish: boolean, candidateKind: BuyCandidate['kind']): number {
+function allocationPercent(market: MarketContext, weeklyBullish: boolean, candidateKind: BuyCandidate['kind']): number {
   if (market.source === 'stock-fallback') {
     return candidateKind === 'B3' && weeklyBullish && market.stableTrend ? 25 : 0;
   }
-  if (temperature <= 25) return market.aboveMa60 ? 100 : 65;
-  if (temperature <= 40) return market.aboveMa60 ? 80 : 50;
-  if (temperature < 55 && weeklyBullish && market.stableTrend && market.score >= 55) return 50;
-  if (temperature < 60 && weeklyBullish && market.stableTrend && market.score >= 60) return 35;
-  if (temperature < 70 && weeklyBullish && market.stableTrend && market.score >= 60) return 20;
-  return 0;
+  if (!weeklyBullish || !market.stableTrend) return 0;
+  if (market.score >= 75) return 100;
+  if (market.score >= 60) return 80;
+  return 50;
 }
 
 function attractionScore(
@@ -369,9 +426,6 @@ function attractionScore(
   if (market) {
     score += Math.max(0, Math.min(20, market.score / 100 * 20));
     if (relativeStrength !== null) score += Math.max(0, Math.min(14, ((relativeStrength + 15) / 30) * 14));
-    if (market.temperature >= 25 && market.temperature < 45) score += 6;
-    else if (market.temperature < 25) score += 4;
-    else if (market.temperature < 60) score += 2;
   }
   if (hasFreshDailyBuy) score += 10;
   return Math.round(Math.min(100, Math.max(0, score)) * 100) / 100;
@@ -392,12 +446,6 @@ function currentEntryTrade(input: UserStrategyInput) {
     if (input.trades[i].action === 'BUY') return input.trades[i];
   }
   return null;
-}
-
-/** 入场时的市场温度，从买入 reason 中记录的 `市场温度 X.X` 读取。 */
-function entryTemperature(entryTrade: { reason?: string } | null): number | null {
-  const match = entryTrade?.reason?.match(/市场温度\s+([0-9]+(?:\.[0-9]+)?)/);
-  return match ? Number(match[1]) : null;
 }
 
 function entryIndexFor(input: UserStrategyInput, tradeDate: string | null): number | null {
@@ -436,7 +484,17 @@ function decision(input: UserStrategyInput) {
   const b3 = latestConfirmedPoint(dailyPoints, dailyStructures.strokes, dailyStructures.mergedKlines, index, ['B3'], maxConfirmAge);
   const b2 = latestConfirmedPoint(dailyPoints, dailyStructures.strokes, dailyStructures.mergedKlines, index, ['B2'], maxConfirmAge);
   const b1 = latestConfirmedPoint(dailyPoints, dailyStructures.strokes, dailyStructures.mergedKlines, index, ['B1'], maxConfirmAge);
-  const b3Candidate = confirmedPointCandidate(b3, 'B3', klines, index, dailyMa20 ?? Infinity, dailyMa20Rising, weekly);
+  // B3 必须由放量突破中枢确认；量能取突破笔内成交量最大的一根。
+  const b3Hub = b3 ? b3HubRange(b3.point, dailyStructures.strokes) : null;
+  const b3VolumeConfirmed = b3 !== null && breakoutVolumeConfirmed(
+    b3.point,
+    dailyStructures.strokes,
+    klines,
+    numberParam(input, 'minBreakoutVolumeRatio'),
+  );
+  const b3Candidate = b3VolumeConfirmed
+    ? confirmedPointCandidate(b3, 'B3', klines, index, dailyMa20 ?? Infinity, dailyMa20Rising, weekly, b3Hub?.zg ?? null)
+    : null;
   const b2Candidate = market?.source === 'benchmark' && market.stableTrend
     ? confirmedPointCandidate(b2, 'B2', klines, index, dailyMa20 ?? Infinity, dailyMa20Rising, weekly)
     : null;
@@ -450,35 +508,6 @@ function decision(input: UserStrategyInput) {
     const entryTrade = currentEntryTrade(input);
     const entryIndex = entryIndexFor(input, entryTrade?.date ?? null);
     const heldBars = entryIndex === null ? 0 : index - entryIndex + 1;
-    const temperature = market?.temperature;
-
-    if (temperature !== undefined && temperature > 70) {
-      return sellAll(`[temperature-exit]|市场温度 ${temperature.toFixed(1)} 超过 70`, score, input.position.shares, 0.98);
-    }
-    // 偏热区（>=60）的减仓只针对"便宜时进场"的旧仓；本轮在 60-70 新建的
-    // 20% 小仓本身就是过热风控的一部分，若次日再砍半会直接失效。
-    const enteredAt = entryTemperature(entryTrade);
-    const trimmableEntry = entryTrade !== null && (enteredAt === null || enteredAt < 60);
-    if (temperature !== undefined && temperature >= 60 && trimmableEntry) {
-      const alreadyTrimmed = input.trades.some((trade) =>
-        trade.action === 'SELL' && trade.date >= entryTrade.date && trade.reason?.startsWith('[temperature-trim]'),
-      );
-      if (!alreadyTrimmed) {
-        // A-share partial sells must use board lots; a remaining odd lot is
-        // only sellable when the position is closed in full.
-        const trimShares = Math.floor((input.position.shares * 0.5) / 100) * 100;
-        if (trimShares < 100 || trimShares >= input.position.shares) {
-          return sellAll(`[temperature-exit]|温度升至 ${temperature.toFixed(1)}，持仓不足一手无法减半，清仓`, score, input.position.shares, 0.9);
-        }
-        return {
-          action: 'SELL' as const,
-          amount: { unit: 'shares' as const, value: trimShares },
-          reason: `[temperature-trim]|温度升至 ${temperature.toFixed(1)}，首次减仓约 50%`,
-          confidence: 0.9,
-          score,
-        };
-      }
-    }
 
     if (weekly.freshSell) return sellAll('[weekly-sell]|周线出现近两周确认卖点', score, input.position.shares, 0.95);
     if (weekly.weak) {
@@ -493,6 +522,27 @@ function decision(input: UserStrategyInput) {
     const hardStop = input.position.averageCost * (1 - numberParam(input, 'hardStopPercent') / 100);
     if (current.close <= hardStop) {
       return sellAll(`[hard-stop]|收盘低于成本 ${numberParam(input, 'hardStopPercent').toFixed(1)}%`, score, input.position.shares, 0.98);
+    }
+
+    // B3 入场后，收盘跌回被突破中枢的上沿下方，并连续 hubReturnBars 根未收回，
+    // 视为突破失败离场。该规则取代 B3 的"跌回买点价"结构止损。
+    const hubUpperMatch = entryTrade?.reason?.match(/(?:^|\|)hub=([0-9]+(?:\.[0-9]+)?)/);
+    const hubUpper = hubUpperMatch ? Number(hubUpperMatch[1]) : null;
+    if (isFinitePositive(hubUpper) && entryIndex !== null) {
+      const requiredBars = numberParam(input, 'hubReturnBars');
+      let barsBackInside = 0;
+      for (let i = index; i > entryIndex && barsBackInside < requiredBars; i--) {
+        if (klines[i].close > hubUpper) break;
+        barsBackInside++;
+      }
+      if (barsBackInside >= requiredBars) {
+        return sellAll(
+          `[hub-return]|收盘连续 ${barsBackInside} 根跌回中枢上沿 ${hubUpper.toFixed(2)} 下方，突破失败`,
+          score,
+          input.position.shares,
+          0.93,
+        );
+      }
     }
 
     const supportMatch = entryTrade?.reason?.match(/(?:^|\|)support=([0-9]+(?:\.[0-9]+)?)/);
@@ -510,7 +560,7 @@ function decision(input: UserStrategyInput) {
       const entrySwingLow = dailyStructures.strokes.filter((stroke) => stroke.direction === 'down' && stroke.end.originalIndex <= entryIndex).at(-1);
       if (entrySwingLow) structuralSupport = entrySwingLow.end.price;
     }
-    if (isFinitePositive(structuralSupport) && current.close <= structuralSupport * (1 - numberParam(input, 'structureStopBufferPercent') / 100)) {
+    if (!isFinitePositive(hubUpper) && isFinitePositive(structuralSupport) && current.close <= structuralSupport * (1 - numberParam(input, 'structureStopBufferPercent') / 100)) {
       return sellAll('[structure-stop]|收盘跌破入场支撑并超过结构缓冲', score, input.position.shares, 0.93);
     }
 
@@ -521,10 +571,12 @@ function decision(input: UserStrategyInput) {
       let highestSinceEntry = input.position.averageCost;
       for (let i = entryIndex + 1; i <= index; i++) highestSinceEntry = Math.max(highestSinceEntry, klines[i].high);
       const maximumProfitPercent = ((highestSinceEntry / input.position.averageCost) - 1) * 100;
-      const trailingStop = highestSinceEntry - numberParam(input, 'trailingAtrMultiple') * atr;
+      // 浮盈越高，跟踪倍数越紧；highestSinceEntry 只上移，保护线因此只升不降。
+      const atrMultiple = trailingAtrMultipleFor(numberParam(input, 'trailingAtrMultiple'), maximumProfitPercent);
+      const trailingStop = highestSinceEntry - atrMultiple * atr;
       if (maximumProfitPercent >= numberParam(input, 'trailingActivationPercent') && current.close <= trailingStop) {
         if (!weekly.bullish) {
-          return sellAll(`[atr-trailing-stop]|浮盈达到启动线后收盘跌破 ${numberParam(input, 'trailingAtrMultiple').toFixed(1)} ATR 移动保护位，周线多头未确认`, score, input.position.shares, 0.9);
+          return sellAll(`[atr-trailing-stop]|浮盈达到启动线后收盘跌破 ${atrMultiple.toFixed(2)} ATR 动态移动保护位，周线多头未确认`, score, input.position.shares, 0.9);
         }
 
         const alreadyTrimmed = input.trades.some((trade) =>
@@ -533,7 +585,7 @@ function decision(input: UserStrategyInput) {
         if (!alreadyTrimmed) {
           const trimShares = Math.floor((input.position.shares * 0.5) / 100) * 100;
           if (trimShares < 100 || trimShares >= input.position.shares) {
-            return sellAll(`[atr-trailing-stop]|触发 ${numberParam(input, 'trailingAtrMultiple').toFixed(1)} ATR 移动保护位，持仓不足一手无法减半，清仓`, score, input.position.shares, 0.9);
+            return sellAll(`[atr-trailing-stop]|触发 ${atrMultiple.toFixed(2)} ATR 动态移动保护位，持仓不足一手无法减半，清仓`, score, input.position.shares, 0.9);
           }
           return {
             action: 'SELL' as const,
@@ -567,8 +619,6 @@ function decision(input: UserStrategyInput) {
   if (market.source === 'stock-fallback' && !market.stableTrend) {
     return { action: 'HOLD' as const, reason: '[filter:stock-fallback-trend]|大盘数据已过期，个股 MA20/MA60 趋势未确认', score };
   }
-  if (market.temperature >= 70) return { action: 'HOLD' as const, reason: '[filter:temperature]|市场温度进入极端过热区，暂停新买入', score };
-
   if (current.close <= (dailyMa20 ?? Infinity) || !dailyMa20Rising || current.close <= current.open) {
     return { action: 'HOLD' as const, reason: '[filter:daily-trend]|等待日线趋势与收盘确认', score };
   }
@@ -585,15 +635,15 @@ function decision(input: UserStrategyInput) {
     return { action: 'HOLD' as const, reason: '[filter:quality]|买点质量低于最低阈值', score };
   }
 
-  const percent = allocationPercent(market.temperature, market, weekly.bullish, candidate.kind);
+  const percent = allocationPercent(market, weekly.bullish, candidate.kind);
   if (percent <= 0) {
-    return { action: 'HOLD' as const, reason: '[filter:allocation]|当前市场温度或趋势档位不允许新开仓', score };
+    return { action: 'HOLD' as const, reason: '[filter:allocation]|当前大盘趋势强度不足，不允许新开仓', score };
   }
 
   return {
     action: 'BUY' as const,
     amount: { unit: 'percent' as const, value: percent },
-    reason: `${candidate.reason}|support=${candidate.supportPrice.toFixed(4)}|point=${candidate.pointDate}|周线${weekly.freshB3 ? '含近端三买' : '多头结构'}，日线 MA20 上行，市场温度 ${market.temperature.toFixed(1)}，数据源 ${market.source === 'benchmark' ? '沪深300' : '个股趋势回退'}，仓位 ${percent}%`,
+    reason: `${candidate.reason}|support=${candidate.supportPrice.toFixed(4)}|point=${candidate.pointDate}${candidate.hubUpper !== null ? `|hub=${candidate.hubUpper.toFixed(4)}` : ''}|周线${weekly.freshB3 ? '含近端三买' : '多头结构'}，日线 MA20 上行，大盘强度 ${market.score.toFixed(1)}，数据源 ${market.source === 'benchmark' ? '沪深300' : '个股趋势回退'}，仓位 ${percent}%`,
     confidence: candidate.quality,
     score,
   };
@@ -601,12 +651,14 @@ function decision(input: UserStrategyInput) {
 
 export const chanlunWeeklyDailyThermometerStrategy: UserStrategyDefinition = {
   id: 'chanlun-weekly-daily-thermometer',
-  name: '缠论周线日线温度计',
-    description: '周线只用已完成周线确认多头，日线只在确认的缠论买点右侧入场，优先级为三买、二买、一买；一买和二买仅在市场趋势稳定时启用。结合沪深300温度分档仓位，并使用结构止损、ATR保护和周日线卖点退出。所有判断只使用当前回测日及之前的数据。',
+  name: '缠论周线日线趋势',
+  description: '周线只用已完成周线确认多头，日线只在确认的缠论买点右侧入场，优先级为三买、二买、一买；一买和二买仅在市场趋势稳定时启用。B3 必须由突破中枢的放量笔确认，收盘连续回到中枢内即离场；仓位按沪深300趋势强度分档，并使用随浮盈收紧的 ATR 动态止盈、结构止损和周日线卖点退出。所有判断只使用当前回测日及之前的数据。',
   defaultSelected: false,
   requiresChanLun: true,
   params: [
     { key: 'maxSignalAge', label: '买点确认后最大等待交易日', type: 'number', defaultValue: DEFAULTS.maxSignalAge, min: 0, max: 30, step: 1 },
+    { key: 'minBreakoutVolumeRatio', label: '突破笔量能 / 20 日均量倍数', type: 'number', defaultValue: DEFAULTS.minBreakoutVolumeRatio, min: 1, max: 5, step: 0.1 },
+    { key: 'hubReturnBars', label: '回到中枢连续收盘根数', type: 'number', defaultValue: DEFAULTS.hubReturnBars, min: 1, max: 10, step: 1 },
     { key: 'maxRsi', label: '买入 RSI 上限', type: 'number', defaultValue: DEFAULTS.maxRsi, min: 50, max: 90, step: 1 },
     { key: 'maxDistanceFromMa20Percent', label: '距 MA20 最大涨幅 (%)', type: 'number', defaultValue: DEFAULTS.maxDistanceFromMa20Percent, min: 2, max: 30, step: 1 },
     { key: 'minRelativeStrengthPercent', label: '20 日相对强度下限 (%)', type: 'number', defaultValue: DEFAULTS.minRelativeStrengthPercent, min: -30, max: 20, step: 1 },

@@ -14,16 +14,6 @@
 
 ---
 
-## Screenshot
-
-<div align="center">
-
-![ChanLun Stock Analyzer](docs/screenshots/chart-main.png)
-
-</div>
-
----
-
 ## English
 
 ### Overview
