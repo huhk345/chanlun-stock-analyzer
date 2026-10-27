@@ -27,7 +27,7 @@ from . import config
 from .klines import get_klines
 from .metrics import max_drawdown_from_equity_curve, sharpe_from_equity_curve
 from .models import Kline
-from .runner import run_backtest
+from .service import resolve_engine, run_backtest_with_engine
 from .strategies import find_strategy
 
 CONCURRENCY = 4
@@ -38,8 +38,39 @@ JOB_TTL_SECONDS = 30 * 60
 MAX_JOBS = 3
 MAX_FETCH_FAILURES_BEFORE_ABORT = 40
 
-ASHARE_RE = re.compile(r"^\d{6}\.(SH|SZ)$")
+ASHARE_RE = re.compile(r"^\d{6}\.(SH|SZ|BJ)$")
 INDEX_LABELS = {"hs300": "沪深300", "zz500": "中证500"}
+
+#: 可排除板块 -> 代码前缀。创业板 / 科创板 / 北交所均有投资者适当性门槛。
+EXCLUDABLE_BOARDS: Dict[str, Tuple[str, ...]] = {
+    "chinext": ("300", "301"),
+    "star": ("688", "689"),
+    "bse": ("43", "83", "87", "88", "92"),
+}
+
+
+def a_share_board(symbol: str) -> str:
+    """6 位代码或带后缀的 A 股代码 -> 板块 id (main / chinext / star / bse)。"""
+    code = str(symbol or "").strip().upper().split(".", 1)[0]
+    if code.startswith(EXCLUDABLE_BOARDS["chinext"]):
+        return "chinext"
+    if code.startswith(EXCLUDABLE_BOARDS["star"]):
+        return "star"
+    if code.startswith(EXCLUDABLE_BOARDS["bse"]) or str(symbol or "").strip().upper().endswith(".BJ"):
+        return "bse"
+    return "main"
+
+
+def normalize_excluded_boards(value: Any) -> List[str]:
+    """过滤非法板块 id, 保持去重后的稳定顺序。"""
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    out: List[str] = []
+    for item in value:
+        board = str(item)
+        if board in EXCLUDABLE_BOARDS and board not in out:
+            out.append(board)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +117,11 @@ def load_stock_meta() -> Dict[str, Dict[str, str]]:
     return meta
 
 
-def build_universe(indexes: Sequence[str], custom: Sequence[str]) -> List[str]:
+def build_universe(
+    indexes: Sequence[str],
+    custom: Sequence[str],
+    exclude_boards: Optional[Sequence[str]] = None,
+) -> List[str]:
     universe: List[str] = []
     seen: set[str] = set()
 
@@ -103,7 +138,14 @@ def build_universe(indexes: Sequence[str], custom: Sequence[str]) -> List[str]:
     for symbol in custom:
         if isinstance(symbol, str) and ASHARE_RE.match(symbol):
             push(symbol)
+
+    excluded = set(normalize_excluded_boards(exclude_boards))
+    if excluded:
+        universe = [s for s in universe if a_share_board(s) not in excluded]
+
     if not universe:
+        if excluded:
+            raise ValueError("筛选后股票池为空, 请减少排除板块或扩大回测范围")
         raise ValueError("扫描范围为空, 请至少选择一个指数或添加自定义标的")
     return universe
 
@@ -239,6 +281,14 @@ _running: Optional[PoolJob] = None
 _jobs_lock = threading.Lock()
 
 
+class PoolBusy(Exception):
+    """Another pool job is running with different parameters."""
+
+    def __init__(self, job_id: str, message: str = "已有选股池回测正在运行, 请稍后再试") -> None:
+        super().__init__(message)
+        self.job_id = job_id
+
+
 def _prune_jobs() -> None:
     now = time.time()
     for job_id, job in list(_jobs.items()):
@@ -261,9 +311,11 @@ def get_pool_backtest_job(job_id: str) -> Optional[PoolJob]:
 
 def _job_key(payload: Dict[str, Any]) -> Tuple[Any, ...]:
     return (
+        payload.get("engine") or "native",
         payload.get("strategyId"),
         tuple(sorted(payload.get("indexes") or [])),
         tuple(sorted(payload.get("custom") or [])),
+        tuple(sorted(normalize_excluded_boards(payload.get("excludeBoards")))),
         payload.get("period") or "1d",
         payload.get("adjust") or "forward",
         payload.get("initialCash") or DEFAULT_PER_SYMBOL_CASH,
@@ -284,14 +336,14 @@ def request_pool_backtest(payload: Dict[str, Any]) -> Tuple[PoolJob, bool]:
     strategy = find_strategy(strategy_id)
     if strategy is None:
         raise ValueError(f"策略未找到: {strategy_id}")
+    # 引擎校验提前到请求阶段, 免得坏参数在后台线程里才炸
+    resolve_engine(payload)
 
     with _jobs_lock:
         if _running is not None and _running.state == "running":
             if _job_key(_running.input) == _job_key(payload):
                 return _running, True
-            error = ValueError("已有选股池回测正在运行, 请稍后再试")
-            error.job_id = _running.id  # type: ignore[attr-defined]
-            raise error
+            raise PoolBusy(_running.id)
 
         job = PoolJob(id=uuid.uuid4().hex, input=payload)
         _prune_jobs()
@@ -308,7 +360,8 @@ def _run_job(job: PoolJob, strategy: Any, payload: Dict[str, Any]) -> None:
     try:
         indexes = [str(i) for i in (payload.get("indexes") or [])]
         custom = [str(s) for s in (payload.get("custom") or [])]
-        universe = build_universe(indexes, custom)
+        exclude_boards = normalize_excluded_boards(payload.get("excludeBoards"))
+        universe = build_universe(indexes, custom, exclude_boards)
 
         period = "1w" if payload.get("period") == "1w" else "1d"
         adjust = str(payload.get("adjust") or "forward")
@@ -321,6 +374,7 @@ def _run_job(job: PoolJob, strategy: Any, payload: Dict[str, Any]) -> None:
         range_start = payload.get("rangeStart")
         range_end = payload.get("rangeEnd")
         force = bool(payload.get("force"))
+        engine = str(payload.get("engine") or "native")
 
         job.progress["total"] = len(universe)
         meta = load_stock_meta()
@@ -342,7 +396,8 @@ def _run_job(job: PoolJob, strategy: Any, payload: Dict[str, Any]) -> None:
                 if not klines:
                     raise ValueError("没有可用的 K 线数据")
 
-                output = run_backtest(
+                output = run_backtest_with_engine(
+                    engine,
                     klines=klines,
                     symbol=symbol,
                     strategy=strategy,

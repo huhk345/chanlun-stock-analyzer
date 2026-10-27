@@ -17,7 +17,7 @@ from typing import Any, Dict, List
 from . import config
 from .chanlun import run_chanlun_pipeline
 from .klines import get_klines
-from .runner import run_backtest
+from .service import BACKTEST_ENGINES, run_backtest_with_engine
 from .strategies import find_strategy, list_strategy_summaries
 
 
@@ -49,7 +49,8 @@ def _cmd_backtest(args: argparse.Namespace) -> int:
         print("没有可用的 K 线数据", file=sys.stderr)
         return 1
 
-    output = run_backtest(
+    output = run_backtest_with_engine(
+        args.engine,
         klines=klines,
         symbol=args.symbol,
         strategy=strategy,
@@ -62,6 +63,7 @@ def _cmd_backtest(args: argparse.Namespace) -> int:
     report: Dict[str, Any] = {
         "symbol": args.symbol,
         "strategy": strategy.id,
+        "engine": args.engine,
         "klinesCount": len(klines),
         "dateRange": {"start": klines[0].date, "end": klines[-1].date},
         "result": output.result.to_dict(),
@@ -110,6 +112,7 @@ def _cmd_pool(args: argparse.Namespace) -> int:
         "indexes": [i for i in args.indexes.split(",") if i],
         "custom": [s for s in (args.custom or "").split(",") if s],
         "initialCash": args.cash,
+        "engine": args.engine,
     }
     job, attached = request_pool_backtest(payload)
     print(f"任务 {job.id} 已启动 (attached={attached})")
@@ -150,6 +153,12 @@ def build_parser() -> argparse.ArgumentParser:
     bt = sub.add_parser("backtest", help="单标的回测")
     bt.add_argument("--symbol", required=True)
     bt.add_argument("--strategy", default="ma-cross")
+    bt.add_argument(
+        "--engine",
+        default="native",
+        choices=list(BACKTEST_ENGINES),
+        help="回测引擎: native (手写循环, 默认) / backtrader (开源框架)",
+    )
     bt.add_argument("--period", default="1d", choices=["1d", "1w"])
     bt.add_argument("--adjust", default="forward")
     bt.add_argument("--cash", type=float, default=config.DEFAULT_INITIAL_CASH)
@@ -178,6 +187,7 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("--indexes", default="hs300")
     pl.add_argument("--custom", default="")
     pl.add_argument("--cash", type=float, default=config.DEFAULT_INITIAL_CASH)
+    pl.add_argument("--engine", default="native", choices=list(BACKTEST_ENGINES))
     pl.set_defaults(func=_cmd_pool)
 
     return parser

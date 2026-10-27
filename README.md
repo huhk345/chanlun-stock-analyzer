@@ -28,7 +28,9 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
 - **Technical Indicators** — MA5/MA20, Bollinger Bands, MACD with interactive chart overlays
 - **Stock Info Panel** — Displays industry, actual controller, and reduction plan announcements
 - **Backtest Manager** — Local browser-persisted backtest tasks with Supabase cloud sync for logged-in users
-- **Portfolio Simulation (shared cash, day-by-day)** — The stock-pool mode was rebuilt on [backtrader](https://www.backtrader.com/): the TypeScript strategy emits one causal BUY/SELL/HOLD signal per symbol per day (only data up to that bar), and backtrader fills them against **one shared cash account** day by day. Same-day signals compete for cash, position caps and whole-lot sizing; A-share rules apply (T+1, 100-share lots, price-limit rejection, commission + stamp duty + transfer fee). Optional fixed stop-loss, equity curve vs. an equal-weight buy-and-hold benchmark, KPI cards, trade ledger, signal ledger, per-symbol table and open positions
+- **Two Backtest Engines** — The same `BUY / SELL / HOLD + amount` strategy contract runs on a dependency-free native loop (`native`) or on [backtrader](https://www.backtrader.com/) (`engine: "backtrader"`). Both fill at the signal bar's close and apply A-share rules (T+1, 100-share lots, price-limit rejection, commission + stamp duty + transfer fee, optional fixed stop-loss), and a parity suite asserts the two produce an identical trade ledger
+- **Day-by-Day Simulation** — One pass over the cached bars records every trading day (decision, fills, cash/position, mark-to-market equity, indicator snapshot, ChanLun summary), then you scrub, step and jump across the whole run instantly — navigation is an index lookup, not a re-run. Recordings are cached on disk, so re-opening the same simulation is instant
+- **Pool Backtest** — Equal-weight backtest of one strategy across 沪深300 / 中证500, with an equity curve vs. an equal-weight buy-and-hold benchmark, KPI cards, trade ledger and per-symbol table
 - **Search History** — Persistent stock search history with preset quick-access stocks
 - **Resizable AI Rail** — Draggable side panel with persistent width, responsive mobile layout
 - **Dark Theme** — Polished dark UI with smooth animations
@@ -126,18 +128,53 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
    | 2 · integration | `integration` | engine + registry + router + cache in-process; prefix invariance (no look-ahead), stepper parity, TS-engine parity | ~14 s |
    | 3 · e2e | `e2e` | real server subprocess, real HTTP, CORS, CLI | ~1.5 s |
 
-   Not ported: the `/ws` scan socket, `/api/scan/cache` (explicit stub) and `/api/simulation/*` (backtrader already runs in Python). See [`server-py/README.md`](server-py/README.md) for the full matrix.
+   Not ported: the `/ws` scan socket, `/api/scan/cache` (explicit stub) and `/api/simulation/*` (the shared-cash simulation was replaced by the equal-weight pool backtest). See [`server-py/README.md`](server-py/README.md) for the full matrix.
 
-7. **Portfolio simulation engine (backtrader)** — the shared-cash stock-pool simulation executes day by day in Python, so a Python 3.10+ runtime is required:
+   **Two interchangeable backtest engines** — the strategy contract (`decide(ctx) -> {action, amount, reason}`, where `action` is BUY / SELL / HOLD and `amount` is cash / shares / percent) is engine-agnostic. Pick one per request with `engine`:
+
+   | `engine` | Implementation | Notes |
+   | --- | --- | --- |
+   | `native` (default) | `chanlun_server/runner.py` — hand-rolled bar loop | zero dependencies; the ledger pinned to the TypeScript golden fixture |
+   | `backtrader` | `chanlun_server/bt_engine.py` — [backtrader](https://www.backtrader.com/) | mature broker/order model from the framework; needs `pip install backtrader` |
+
    ```bash
-   pnpm run sim:setup   # creates scripts/backtrader/.venv and installs backtrader 1.9.78.123
+   pip install backtrader                       # optional, only for engine=backtrader
+   python -m chanlun_server backtest --symbol 300750.SZ --strategy ma-cross --engine backtrader
+   curl -s localhost:8899/api/backtest/run -H 'Content-Type: application/json' \
+     -d '{"symbol":"300750.SZ","strategyId":"ma-cross","engine":"backtrader"}'
    ```
-   The server auto-detects `scripts/backtrader/.venv/bin/python` (override with `BACKTRADER_PYTHON`). Endpoints: `GET /api/simulation/health`, `POST /api/simulation/run` (202 + jobId, or 409 when another simulation is running), `GET /api/simulation/:jobId`, `POST /api/simulation/:jobId/cancel`, `GET /api/simulation/:jobId/signals`, `GET /api/simulation/:jobId/symbols`. Headless run:
+
+   Both engines fill at the signal bar's close (`broker.set_coc(True)` in backtrader), enforce 100-share lots, T+1, limit-up/limit-down rejection and the same commission + stamp-duty + transfer-fee model, and return the same `BacktestResult` JSON. `tests/part2_integration/test_backtrader_engine.py` asserts trade-for-trade equality between them — including the stop-loss ledger and the recorded real-data golden fixture — so switching engines changes features, not numbers.
+
+   **The strategy owns its K-lines.** The backtrader adapter keeps an append-only `list[Kline]` and recomputes ChanLun + indicator snapshots from it on every bar, handing them to the strategy as `ctx.klines` / `ctx.chanlun` / `ctx.indicators`. A strategy never re-reads the feed and physically cannot see a future bar:
+
+   ```python
+   def decide(ctx):
+       bars = ctx.klines                     # every bar up to and including this one
+       if len(bars) < 30 or not ctx.chanlun.hubs:
+           return Decision.hold()
+       hub = ctx.chanlun.hubs[-1]
+       close = ctx.current_kline.close
+       if close > hub.zg and ctx.params["MA5"] > ctx.params["MA20"]:
+           return Decision(action="BUY", amount={"unit": "shares", "value": 1000},
+                           reason="站上中枢 + 均线多头")
+       if close < hub.zd and ctx.position.shares > 0:
+           return Decision(action="SELL", amount={"unit": "percent", "value": 100},
+                           reason="跌破中枢")
+       return Decision.hold()                # HOLD keeps the position untouched
+   ```
+
+   **Day-by-day simulation — recorded once, then scrubbed.** `POST /api/backtest/stepper` records the whole run in a single pass over the cached bars (one snapshot per trading day); `GET .../timeline` returns every day plus the full ledger; `POST .../step` only moves a cursor, so forward / backward / jump all cost the same:
+
    ```bash
-   pnpm run sim:cli -- --custom 600519.SH,000001.SZ --start 2023-01-01 --cash 100000 \
-     --max-positions 5 --position-percent 20 --out .cache/simulation-report.json
+   SID=$(curl -s localhost:8899/api/backtest/stepper -H 'Content-Type: application/json' \
+     -d '{"symbol":"300750.SZ","strategyId":"ma-cross","engine":"backtrader"}' | jq -r .sessionId)
+   curl -s localhost:8899/api/backtest/stepper/$SID/timeline | jq '.rows[0:3]'
+   curl -s localhost:8899/api/backtest/stepper/$SID/step -H 'Content-Type: application/json' \
+     -d '{"action":"jump","index":900}'
    ```
-   Signal generation is causal: each bar's strategy call only receives `klines.slice(0, i + 1)`, and fills happen at the signal day's close (`cerebro.broker.set_coc(True)`). The benchmark defaults to 沪深300全收益 (H00300); pass `--benchmark hs300` or `--benchmark equal_weight` to switch. Market baselines (中证全债 / 10Y yield / HS300 PE / ERP, …) are fetched in parallel with K-lines and cached under `.cache/market/`, so a failed fetch only degrades the benchmark, never aborts the run.
+
+   On a 922-bar run: the recording pass takes ~1.9 s (the same cost as the batch backtest), the timeline payload is ~200 KB, a jump is ~10 µs server-side, and re-opening the same simulation hits the on-disk recording and returns in ~20 ms. Each day carries the decision, the fills, cash / position, mark-to-market equity, the indicator snapshot and a ChanLun summary, so the UI can show what happened on every single day without recomputing anything.
 
 **Troubleshooting:** an error like `Cannot find module '.../node_modules/.pnpm/vite.../dist/node/chunks/dep-*.js'` means `node_modules` was checked out as a (possibly self-referential) symlink, which breaks module resolution. `node_modules` is never tracked; remove the bad link and reinstall:
 ```bash
@@ -196,7 +233,9 @@ pnpm exec tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
 - **股票信息面板** — 展示行业、实际控制人、减持计划公告等关键信息
 - **回测管理器** — 本地浏览器持久化回测任务, 支持 Supabase 云端账户同步
 - **策略模拟回测** — 服务端运行策略回测 (信号当日收盘价成交, 不使用未来数据; 佣金 + 印花税 + 过户费; 涨跌停按收盘价拦截; 固定止损为盘中止损单, T+1 当日买入不可卖), 输出绩效概览、权益曲线与逐笔账本, 并在价格 K 线图上标注每笔买卖成交 (红↑ 买入 / 绿↓ 卖出); 单标的模式运行中实时展示阶段进度 (拉取 K 线 → 回测计算)
-- **组合模拟 (共享资金逐日模拟)** — 选股池模式改用开源框架 [backtrader](https://www.backtrader.com/) 作为执行层: TS 策略按「只使用截至当日的历史数据」逐日给出买入/卖出/持有信号, backtrader 在**同一份共享资金**上逐日撮合 —— 同日信号竞争现金、受最大持仓数与单只仓位上限约束、整手买卖; 遵守 A 股规则 (T+1、100 股一手、涨跌停拦截、佣金 + 印花税 + 过户费), 可选固定止损; 输出组合 KPI、基准权益曲线、市场环境面板、成交账本、信号账本 (含被拦截原因)、逐标的统计与当前持仓, 支持 CSV 导出
+- **双回测引擎** — 同一套 `BUY / SELL / HOLD + 数量` 策略契约可跑在零依赖的 native 循环上, 也可跑在开源框架 [backtrader](https://www.backtrader.com/) 上 (`engine: "backtrader"`); 两者都按信号当日收盘价成交并遵守 A 股规则 (T+1、100 股一手、涨跌停拦截、佣金 + 印花税 + 过户费, 可选固定止损), 且有逐笔一致性测试钉住两边账本
+- **逐日模拟** — 用缓存的 K 线一次性录完每个交易日 (策略决策 / 成交 / 现金持仓 / 收盘盯市权益 / 指标快照 / 缠论摘要), 之后拖动、单步、跳转全是索引查找而不是重跑策略; 录制结果落盘缓存, 再次打开同一段模拟几乎瞬时
+- **选股池等权回测** — 对沪深300 / 中证500 全池等权回测同一策略, 输出组合权益曲线、等权买入持有基准、KPI 卡片、成交账本与逐标的排行
 - **默认市场基准数据** — 组合模拟默认自带市场环境上下文 (不参与选股): 中证指数官网的沪深300全收益 H00300、沪深300 000300、中证500 000905、中证1000 000852、中证全债 H11001、沪深300 PE, 以及东方财富的 10Y / 2Y 国债收益率与 10Y-2Y 期限利差, 并派生股权风险溢价 ERP (100/PE − 10Y); 基准默认取沪深300全收益, 可切换沪深300价格指数或池内等权买入持有; 数据落盘缓存 `.cache/market/`, TTL 2 小时, 接口失败时自动回退旧缓存
 - **搜索历史** — 持久化股票搜索记录, 预设热门股票快速访问
 - **可调整 AI 侧栏** — 可拖拽调整宽度的 AI 顾问面板, 移动端自适应布局
@@ -250,17 +289,18 @@ pnpm exec tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
 
 5. 在浏览器中打开 [http://localhost:8888](http://localhost:8888)
 
-6. **启动分析后端 + 组合模拟引擎**
+6. **启动分析后端**
    ```bash
    pnpm server        # 分析/回测后端, 监听 :8899
-   pnpm run sim:setup # 首次运行: 创建 scripts/backtrader/.venv 并安装 backtrader
    ```
-   组合模拟需要 Python 3.10+; 服务端默认使用 `scripts/backtrader/.venv/bin/python` (可用 `BACKTRADER_PYTHON` 覆盖), 健康检查为 `GET /api/simulation/health`。无界面跑一次:
+   逐日模拟 (选股池回测的「逐日」视图) 走同一套接口: `POST /api/backtest/stepper` 用缓存的 K 线**一次性录完**整段模拟 (每个交易日一份快照), `GET .../timeline` 一次取回每一天 + 全量账本, `POST .../step` 只移动游标 —— 前进、后退、跳转都是索引查找, 不再重跑策略。
    ```bash
-   pnpm run sim:cli -- --custom 600519.SH,000001.SZ --start 2023-01-01 --cash 100000 \
-     --max-positions 5 --position-percent 20 --out .cache/simulation-report.json
+   SID=$(curl -s localhost:8899/api/backtest/stepper -H 'Content-Type: application/json' \
+     -d '{"symbol":"300750.SZ","strategyId":"ma-cross","engine":"backtrader"}' | jq -r .sessionId)
+   curl -s localhost:8899/api/backtest/stepper/$SID/step -H 'Content-Type: application/json' \
+     -d '{"action":"jump","index":900}'
    ```
-   信号是因果的: 每根 K 线的策略调用只拿到截至当根的 `klines.slice(0, i + 1)`, 成交按信号当日收盘价 (`cerebro.broker.set_coc(True)`) 撮合。基准默认沪深300全收益 (H00300), 可用 `--benchmark hs300` 或 `--benchmark equal_weight` 切换; 市场基准数据 (中证全债 / 10Y 国债 / 沪深300 PE / ERP 等) 与 K 线并行拉取并缓存在 `.cache/market/`, 拉取失败只降级基准, 不中断模拟。
+   922 根 K 线实测: 录制 ~1.9s (与批量回测同价), 时间轴 200KB, 跳转 ~10µs, 再次打开命中磁盘录制 ~20ms。每一天都带着决策、成交、现金/持仓、收盘盯市权益、指标快照与缠论摘要。
 
 7. **Python 后端 (`server-py/`, 可选替换)** — 分析与回测服务端已用 Python 重写, 运行时零第三方依赖; 路径、JSON 字段、状态码与撮合规则都与 Node 版一致, 前端无需改动:
    ```bash
@@ -278,7 +318,41 @@ pnpm exec tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
    | 2 · 集成 | `integration` | 引擎 + 注册表 + 路由 + 缓存, 进程内; 前缀不变性 (无未来数据)、单步与批量一致、与 TS 引擎逐笔一致 | ~14s |
    | 3 · 端到端 | `e2e` | 真实子进程 + 真实 HTTP: CORS、错误码、并发、CLI | ~1.5s |
 
-   未移植: `/ws` 扫描通道、`/api/scan/cache` (返回明确占位)、`/api/simulation/*` (backtrader 本身已在 Python 侧)。完整对照见 [`server-py/README.md`](server-py/README.md)。
+   未移植: `/ws` 扫描通道、`/api/scan/cache` (返回明确占位)、`/api/simulation/*` (共享资金模拟已由等权选股池回测取代)。完整对照见 [`server-py/README.md`](server-py/README.md)。
+
+   **两套可互换的回测引擎** —— 策略契约 (`decide(ctx) -> {action, amount, reason}`, `action` 为 BUY / SELL / HOLD, `amount` 支持 cash / shares / percent) 与引擎无关, 每次请求用 `engine` 选一个:
+
+   | `engine` | 实现 | 说明 |
+   | --- | --- | --- |
+   | `native` (默认) | `chanlun_server/runner.py`, 手写逐根循环 | 零依赖; 账本锚定 TypeScript golden 用例 |
+   | `backtrader` | `chanlun_server/bt_engine.py`, 开源 [backtrader](https://www.backtrader.com/) | 撮合/委托模型交给框架; 需 `pip install backtrader` |
+
+   ```bash
+   pip install backtrader                       # 可选, 仅 engine=backtrader 需要
+   python -m chanlun_server backtest --symbol 300750.SZ --strategy ma-cross --engine backtrader
+   curl -s localhost:8899/api/backtest/run -H 'Content-Type: application/json' \
+     -d '{"symbol":"300750.SZ","strategyId":"ma-cross","engine":"backtrader"}'
+   ```
+
+   两套引擎都按信号当根收盘价成交 (backtrader 侧用 `broker.set_coc(True)`), 都执行 100 股整手、T+1、涨跌停拦截与同一套佣金 + 印花税 + 过户费模型, 返回同一个 `BacktestResult` JSON。`tests/part2_integration/test_backtrader_engine.py` 逐笔比对两套引擎 (含止损账本与真实行情 golden 用例), 所以换引擎只换能力, 不换数字。
+
+   **K 线由策略自己保管** —— backtrader 适配器维护一份只增不改的 `list[Kline]`, 每根 K 线都从这份缓冲重算缠论结构与指标快照, 再作为 `ctx.klines` / `ctx.chanlun` / `ctx.indicators` 交给策略。策略因此不需要回读数据源, 也物理上拿不到未来数据:
+
+   ```python
+   def decide(ctx):
+       bars = ctx.klines                     # 截至当根的全部 K 线
+       if len(bars) < 30 or not ctx.chanlun.hubs:
+           return Decision.hold()
+       hub = ctx.chanlun.hubs[-1]
+       close = ctx.current_kline.close
+       if close > hub.zg and ctx.params["MA5"] > ctx.params["MA20"]:
+           return Decision(action="BUY", amount={"unit": "shares", "value": 1000},
+                           reason="站上中枢 + 均线多头")
+       if close < hub.zd and ctx.position.shares > 0:
+           return Decision(action="SELL", amount={"unit": "percent", "value": 100},
+                           reason="跌破中枢")
+       return Decision.hold()                # HOLD = 持仓不动
+   ```
 
 **疑难排查:** 出现 `Cannot find module '.../node_modules/.pnpm/vite.../dist/node/chunks/dep-*.js'` 报错，通常是因为 `node_modules` 被检出成了（可能自引用的）符号链接，导致模块解析失败。仓库不跟踪 `node_modules`；删除坏链接后重装即可:
 ```bash

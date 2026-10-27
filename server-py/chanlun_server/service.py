@@ -22,6 +22,11 @@ from .strategies import Strategy, find_strategy
 SESSION_TTL_SECONDS = 30 * 60
 MAX_SESSIONS = 8
 
+#: 可用回测引擎. ``native`` = 手写撮合循环 (零依赖, 历史账本基准);
+#: ``backtrader`` = 开源框架 backtrader 驱动同一套策略契约.
+BACKTEST_ENGINES = ("native", "backtrader")
+DEFAULT_ENGINE = "native"
+
 ProgressReporter = Callable[[Dict[str, Any]], None]
 
 
@@ -30,6 +35,38 @@ class ApiError(Exception):
         super().__init__(message)
         self.status = status
         self.message = message
+
+
+# ---------------------------------------------------------------------------
+# 引擎分发
+# ---------------------------------------------------------------------------
+
+
+def resolve_engine(payload: Dict[str, Any]) -> str:
+    """Read ``engine`` from a request payload; unknown values are a 400."""
+    engine = str(payload.get("engine") or DEFAULT_ENGINE).strip().lower()
+    if engine not in BACKTEST_ENGINES:
+        raise ApiError(
+            f"未知回测引擎: {engine} (可选: {', '.join(BACKTEST_ENGINES)})", 400
+        )
+    return engine
+
+
+def run_backtest_with_engine(engine: str, **kwargs: Any) -> Any:
+    """Dispatch to the native loop or the backtrader adapter.
+
+    ``backtrader`` is imported lazily so the server keeps running (and the test
+    suite keeps passing) when the optional dependency is not installed.
+    """
+    if engine == "backtrader":
+        try:
+            from .bt_engine import run_backtest_bt
+        except ImportError as exc:  # pragma: no cover - depends on the environment
+            raise ApiError(
+                "backtrader 引擎不可用: 请先安装 backtrader (pip install backtrader)", 501
+            ) from exc
+        return run_backtest_bt(**kwargs)
+    return run_backtest(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +144,7 @@ def run_server_backtest(
         raise ApiError("strategyId is required", 400)
 
     strategy = _require_strategy(strategy_id)
+    engine = resolve_engine(payload)
 
     klines, cached = fetch_backtest_klines(payload, on_progress)
 
@@ -116,14 +154,15 @@ def run_server_backtest(
                 "phase": "computing",
                 "message": (
                     f"K 线就绪 ({len(klines)} 根, {'本地缓存' if cached else '行情源'}), "
-                    f"正在运行「{strategy.name}」回测…"
+                    f"正在运行「{strategy.name}」回测 ({engine})…"
                 ),
                 "klines": len(klines),
                 "source": "cache" if cached else "network",
             }
         )
 
-    output = run_backtest(
+    output = run_backtest_with_engine(
+        engine,
         klines=klines,
         symbol=symbol,
         strategy=strategy,
@@ -140,6 +179,7 @@ def run_server_backtest(
 
     return {
         "symbol": symbol,
+        "engine": engine,
         "period": "1w" if payload.get("period") == "1w" else "1d",
         "adjust": str(payload.get("adjust") or "forward"),
         "klinesCount": len(klines),
@@ -194,6 +234,9 @@ def _view(session: StepperSession, state: Any) -> Dict[str, Any]:
     return {
         "sessionId": session.id,
         "symbol": session.symbol,
+        "engine": session.stepper.engine,
+        "cached": session.stepper.cached,
+        "recordSeconds": round(session.stepper.record_seconds, 3),
         "totalSteps": session.total_steps,
         "dateRange": session.date_range,
         "tradeCount": len(session.stepper.get_trades()),
@@ -213,6 +256,7 @@ def create_stepper_session(payload: Dict[str, Any]) -> Dict[str, Any]:
     if strategy is None:
         raise ApiError(f"策略未找到: {strategy_id}", 404)
 
+    engine = resolve_engine(payload)
     klines, _cached = fetch_backtest_klines(payload)
 
     stepper = BacktestStepper(
@@ -228,7 +272,11 @@ def create_stepper_session(payload: Dict[str, Any]) -> Dict[str, Any]:
         params=payload.get("params") or {},
         selected_indicator_ids=payload.get("selectedIndicatorIds"),
         indicators=payload.get("indicatorCodes"),
+        engine=engine,
+        # ``refresh`` forces a fresh recording, same escape hatch as the K-line cache
+        use_cache=not bool(payload.get("refresh")),
     )
+    # One recording pass; every navigation after this is an index lookup.
     state = stepper.start()
 
     _prune_sessions()
@@ -277,16 +325,14 @@ def step_stepper_session(session_id: str, action: str, index: Optional[int]) -> 
 
 def run_all_stepper_session(session_id: str) -> Dict[str, Any]:
     session = _require_session(session_id)
-    output = session.stepper.run_all()
+    payload = session.stepper.run_all()
     return {
         "sessionId": session.id,
         "symbol": session.symbol,
+        "engine": session.stepper.engine,
         "totalSteps": session.total_steps,
         "dateRange": session.date_range,
-        "result": output.result.to_dict(),
-        "diagnostics": [d.to_dict() for d in output.diagnostics],
-        "equityCurve": output.equity_curve,
-        "trades": [t.to_dict() for t in session.stepper.get_trades()],
+        **payload,
     }
 
 
@@ -294,7 +340,31 @@ def stepper_session_trades(session_id: str) -> Dict[str, Any]:
     session = _require_session(session_id)
     return {
         "sessionId": session.id,
-        "trades": [t.to_dict() for t in session.stepper.get_trades()],
+        "trades": session.stepper.get_trades(),
+    }
+
+
+def stepper_session_timeline(session_id: str) -> Dict[str, Any]:
+    """Whole simulation in one payload, for client-side scrubbing.
+
+    Fetching this once lets the browser move between days without a round trip:
+    the rows carry the day's price, decision, equity, cash, shares and how many
+    fills happened, which is everything the scrubber and the day list need.
+    """
+    session = _require_session(session_id)
+    timeline = session.stepper.timeline
+    return {
+        "sessionId": session.id,
+        "symbol": session.symbol,
+        "engine": timeline.engine,
+        "cached": timeline.cached,
+        "recordSeconds": round(timeline.record_seconds, 3),
+        "totalSteps": timeline.total_steps,
+        "dateRange": timeline.date_range,
+        "rows": timeline.snapshot_rows(),
+        # The whole ledger travels with the timeline so the client can show
+        # "trades up to this day" without another request per step.
+        "trades": timeline.trades,
     }
 
 

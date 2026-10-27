@@ -18,7 +18,7 @@ from . import config, progress
 from .chanlun import compute_strokes_and_bs_points, run_chanlun_pipeline
 from .klines import get_klines
 from .models import klines_from_raw
-from .pool import get_pool_backtest_job, request_pool_backtest
+from .pool import PoolBusy, get_pool_backtest_job, request_pool_backtest
 from .service import (
     ApiError,
     active_stepper_sessions,
@@ -27,6 +27,7 @@ from .service import (
     run_all_stepper_session,
     run_server_backtest,
     step_stepper_session,
+    stepper_session_timeline,
     stepper_session_trades,
 )
 from .strategy_store import (
@@ -235,12 +236,20 @@ def _route_stepper_trades(session_id: str, query: Dict[str, str], body: Any) -> 
     return 200, stepper_session_trades(session_id)
 
 
+def _route_stepper_timeline(session_id: str, query: Dict[str, str], body: Any) -> Response:
+    return 200, stepper_session_timeline(session_id)
+
+
 def _route_stepper_close(session_id: str, query: Dict[str, str], body: Any) -> Response:
     return 200, {"closed": close_stepper_session(session_id)}
 
 
 def _route_pool_create(query: Dict[str, str], body: Any) -> Response:
-    job, attached = request_pool_backtest(body or {})
+    try:
+        job, attached = request_pool_backtest(body or {})
+    except PoolBusy as exc:
+        # 409 + jobId: the frontend auto-attaches to the running job.
+        return 409, {"error": str(exc), "jobId": exc.job_id}
     return (200 if attached else 202), {"jobId": job.id, "attached": attached, "job": job.view()}
 
 
@@ -281,9 +290,8 @@ def _route_simulation_health(query: Dict[str, str], body: Any) -> Response:
         "ok": False,
         "engine": "python",
         "note": (
-            "共享资金逐日组合模拟仍由 backtrader 引擎执行 "
-            "(scripts/backtrader/runner.py + Node 服务端 /api/simulation/*); "
-            "Python 服务端未移植该接口"
+            "共享资金逐日组合模拟 (原 backtrader 引擎) 已在 Python-only 版本中移除; "
+            "选股池等权回测请使用 POST /api/backtest/pool"
         ),
     }
 
@@ -307,6 +315,7 @@ ROUTES: List[Tuple[str, re.Pattern[str], Callable[..., Response]]] = [
     ("POST", re.compile(r"^/api/backtest/stepper/([^/]+)/step$"), _route_stepper_step),
     ("POST", re.compile(r"^/api/backtest/stepper/([^/]+)/run-all$"), _route_stepper_run_all),
     ("GET", re.compile(r"^/api/backtest/stepper/([^/]+)/trades$"), _route_stepper_trades),
+    ("GET", re.compile(r"^/api/backtest/stepper/([^/]+)/timeline$"), _route_stepper_timeline),
     ("DELETE", re.compile(r"^/api/backtest/stepper/([^/]+)$"), _route_stepper_close),
     ("POST", re.compile(r"^/api/backtest/pool$"), _route_pool_create),
     ("GET", re.compile(r"^/api/backtest/pool/([^/]+)$"), _route_pool_view),
@@ -412,10 +421,22 @@ class ApiHandler(BaseHTTPRequestHandler):
         print(f"[chanlun-py] {self.address_string()} {fmt % args}")
 
 
-def create_server(host: str = config.HOST, port: int = config.PORT) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer((host, port), ApiHandler)
-    server.daemon_threads = True
-    return server
+class ApiServer(ThreadingHTTPServer):
+    """Threaded HTTP server tuned for a browser opening several requests at once.
+
+    ``request_queue_size`` must be a *class* attribute: ``TCPServer.__init__``
+    calls ``server_activate()`` (i.e. ``listen()``) before the constructor
+    returns, so assigning it to the instance afterwards has no effect and leaves
+    the default backlog of 5 — enough to get connections reset under a burst.
+    """
+
+    daemon_threads = True
+    request_queue_size = 128
+    allow_reuse_address = True
+
+
+def create_server(host: str = config.HOST, port: int = config.PORT) -> ApiServer:
+    return ApiServer((host, port), ApiHandler)
 
 
 def serve(host: str = config.HOST, port: int = config.PORT) -> None:

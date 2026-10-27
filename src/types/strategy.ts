@@ -353,6 +353,38 @@ export interface BacktestStepState {
   chanlunSnapshot: Readonly<ChanLunCache> | null;
   diagnostics: readonly BacktestDiagnostic[];
   isFinished: boolean;
+  /** 当日收盘盯市权益 = 现金 + 持仓 × 收盘价 (accountAfter.equity 只在成交时更新) */
+  equity?: number;
+  /** 当日指标快照 (MA / BOLL / MACD), 服务端逐日录制 */
+  indicators?: Readonly<Record<string, number>>;
+  /** 当日缠论结构摘要 (计数 + 最近中枢), 全量结构图太大, 只保留可读的部分 */
+  chanlun?: BacktestDayChanlun | null;
+}
+
+/** 逐日缠论摘要 */
+export interface BacktestDayChanlun {
+  merged: number;
+  fractions: number;
+  strokes: number;
+  segments: number;
+  hubs: number;
+  lastHub: { zg: number; zd: number; gg: number; dd: number } | null;
+}
+
+/** 逐日模拟的一行 (时间轴接口返回, 供前端本地拖动) */
+export interface BacktestTimelineRow {
+  index: number;
+  date: string;
+  close: number;
+  action: 'BUY' | 'SELL' | 'HOLD';
+  reason?: string | null;
+  /** 当日收盘盯市权益 */
+  equity: number;
+  cash: number;
+  shares: number;
+  /** 当日成交笔数 */
+  trades: number;
+  diagnostics: number;
 }
 
 export interface BacktestStepperInput {

@@ -10,8 +10,12 @@
  *   DELETE /api/backtest/stepper/:id         结束会话
  */
 import type { BacktestResult, BacktestTrade } from '../types/stock';
-import type { BacktestDiagnostic, BacktestStepState } from '../types/strategy';
-import type { PoolSymbolDetailView } from '../types/poolBacktest';
+import type {
+  BacktestDiagnostic,
+  BacktestStepState,
+  BacktestTimelineRow,
+} from '../types/strategy';
+import type { BacktestEngine, PoolSymbolDetailView } from '../types/poolBacktest';
 
 export interface BacktestIndicatorCode {
   id: string;
@@ -22,6 +26,8 @@ export interface BacktestIndicatorCode {
 export interface BacktestRunRequest {
   symbol: string;
   strategyId: string;
+  /** 回测引擎, 默认 'native' (逐步回测仅支持 native) */
+  engine?: BacktestEngine;
   period?: '1d' | '1w';
   rangeStart?: string;
   rangeEnd?: string;
@@ -45,11 +51,31 @@ export type BacktestStepperRequest = Omit<BacktestRunRequest, 'progressId' | 'fo
 export interface StepperSessionView {
   sessionId: string;
   symbol: string;
+  /** 实际执行模拟的引擎 */
+  engine?: BacktestEngine;
+  /** 本次是复用磁盘上录好的时间轴 (不重新跑策略) */
+  cached?: boolean;
+  /** 录制耗时 (秒); 命中缓存时接近 0 */
+  recordSeconds?: number;
   totalSteps: number;
   dateRange: { start: string; end: string };
   /** 已成交笔数 (账本明细走 getStepperTrades) */
   tradeCount: number;
   state: BacktestStepState;
+}
+
+/** 整段逐日模拟: 一次性拿到, 之后前端本地拖动即可 */
+export interface StepperTimelineView {
+  sessionId: string;
+  symbol: string;
+  engine?: BacktestEngine;
+  cached?: boolean;
+  recordSeconds?: number;
+  totalSteps: number;
+  dateRange: { start: string; end: string };
+  rows: BacktestTimelineRow[];
+  /** 全量成交账本 (按日期过滤即可得到"截至某天"的账本) */
+  trades: BacktestTrade[];
 }
 
 export interface StepperRunAllView {
@@ -121,6 +147,18 @@ export async function getStepperTrades(sessionId: string): Promise<BacktestTrade
     `/api/backtest/stepper/${encodeURIComponent(sessionId)}/trades`,
   );
   return data.trades ?? [];
+}
+
+/**
+ * 拉取整段逐日模拟。
+ *
+ * 服务端在建会话时已经一次性录好每一天 (决策 / 成交 / 账户 / 持仓 / 权益),
+ * 所以这里只取一次, 之后前进、后退、拖动都是本地索引, 不再触发策略计算。
+ */
+export async function getStepperTimeline(sessionId: string): Promise<StepperTimelineView> {
+  return request<StepperTimelineView>(
+    `/api/backtest/stepper/${encodeURIComponent(sessionId)}/timeline`,
+  );
 }
 
 export async function closeStepperSession(sessionId: string): Promise<void> {

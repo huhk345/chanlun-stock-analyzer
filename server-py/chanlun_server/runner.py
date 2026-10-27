@@ -16,7 +16,7 @@ The loop never touches bar ``i + 1``; the prefix-invariance test in
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from .chanlun import compute_chanlun_structures
 from .execution import (
@@ -51,6 +51,7 @@ from .models import (
     decision_from_raw,
 )
 from .strategies import Strategy, StrategyContext
+from .timeline import DaySnapshot, summarize_chanlun
 
 #: 连续异常达到该次数后判定策略不可用; 之前只降级为 HOLD
 MAX_CONSECUTIVE_ERRORS = 5
@@ -121,7 +122,15 @@ def run_backtest(
     indicators: Optional[Sequence[Any]] = None,
     record_signals: bool = False,
     resume: Optional[ResumeSeed] = None,
+    on_bar: Optional[Callable[["DaySnapshot"], None]] = None,
 ) -> RunBacktestOutput:
+    """Run ``strategy`` over ``klines`` bar by bar.
+
+    ``on_bar`` is the day-by-day recording hook used by the simulation timeline:
+    it receives one :class:`~chanlun_server.timeline.DaySnapshot` per bar, after
+    that bar's fills and equity snapshot. Passing ``None`` (the default) costs one
+    truthiness check per bar and changes nothing else.
+    """
     diagnostics: List[Diagnostic] = []
 
     if not klines:
@@ -160,8 +169,23 @@ def run_backtest(
         # --- 0) 增量续算: 前缀 K 线沿用缓存信号与末端状态 ---
         if i < resume_bars:
             equity_curve.append(account.cash + position.shares * current_price)
+            if on_bar is not None:
+                # Prefix bars made no decision in this run; record the carried
+                # state so the timeline stays dense and day-indexed.
+                on_bar(
+                    DaySnapshot(
+                        index=i,
+                        kline=current_kline,
+                        decision=None,
+                        account_after=account.copy(),
+                        position_after=position.copy(),
+                        equity=equity_curve[-1],
+                    )
+                )
             continue
 
+        trades_start = len(trades)
+        diagnostics_start = len(diagnostics)
         prev_close = klines[i - 1].close if i > 0 else None
 
         # --- 1) 固定止损 (盘中止损单) ---
@@ -189,6 +213,7 @@ def run_backtest(
         indicator_values = compute_indicator_values(selected_indicators, symbol, klines_slice, i)
         strategy_params.update(indicator_values)
 
+        chanlun = compute_chanlun_structures(klines_slice)
         ctx = StrategyContext(
             symbol=symbol,
             timeframe="daily",
@@ -201,7 +226,7 @@ def run_backtest(
             params=strategy_params,
             currency=currency,
             initial_cash=initial_cash,
-            chanlun=compute_chanlun_structures(klines_slice),
+            chanlun=chanlun,
             indicators=indicator_values,
         )
 
@@ -290,6 +315,22 @@ def run_backtest(
 
         # --- 4) 当日收盘权益 ---
         equity_curve.append(account.cash + position.shares * current_price)
+
+        if on_bar is not None:
+            on_bar(
+                DaySnapshot(
+                    index=i,
+                    kline=current_kline,
+                    decision=decision,
+                    account_after=account.copy(),
+                    position_after=position.copy(),
+                    equity=equity_curve[-1],
+                    trades_executed=[t.to_snapshot() for t in trades[trades_start:]],
+                    diagnostics=list(diagnostics[diagnostics_start:]),
+                    indicators=dict(indicator_values),
+                    chanlun=summarize_chanlun(chanlun),
+                )
+            )
 
     # --- 汇总 ---
     last_price = klines[-1].close

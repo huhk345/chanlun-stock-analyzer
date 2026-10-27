@@ -10,6 +10,7 @@ import type {
   StrategyParamValue,
   StrategySummary,
 } from '../types/strategy';
+import type { BacktestEngine } from '../types/poolBacktest';
 import { ensureLocalStrategyMigration, fetchStrategySummaries } from '../utils/strategyApi';
 import { csvCell, downloadCsv } from '../utils/download';
 import { getAllStoredIndicators } from '../utils/indicatorStorage';
@@ -19,9 +20,11 @@ import {
   stepStepperSession,
   runAllStepperSession,
   getStepperTrades,
+  getStepperTimeline,
   closeStepperSession,
   type BacktestIndicatorCode,
   type BacktestRunRequest,
+  type StepperTimelineView,
 } from '../utils/backtestApi';
 import StrategyDialog from './StrategyDialog';
 
@@ -64,11 +67,16 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
   // Strategy params (策略参数: 买卖逻辑的阈值)
   const [customParams, setCustomParams] = useState<Record<string, StrategyParamValue>>({});
 
-  // Day-by-day stepper (服务端会话)
+  // Day-by-day stepper (服务端会话; 建会话时一次性录好整段时间轴)
   const [stepperMode, setStepperMode] = useState(false);
   const [stepState, setStepState] = useState<BacktestStepState | null>(null);
   const [stepperBusy, setStepperBusy] = useState(false);
   const [diagnostics, setDiagnostics] = useState<BacktestDiagnostic[]>([]);
+  //: 整段逐日模拟 (拖动条 / 关键日跳转用, 不再逐次请求)
+  const [timeline, setTimeline] = useState<StepperTimelineView | null>(null);
+  //: 拖动条上的临时位置 (松手才真正跳转)
+  const [scrubIndex, setScrubIndex] = useState<number | null>(null);
+  const [engine, setEngine] = useState<BacktestEngine>('native');
 
   // Strategy dropdown
   const [strategyDropdownOpen, setStrategyDropdownOpen] = useState(false);
@@ -152,6 +160,8 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
     setBacktest(null);
     setStepState(null);
     setStepperMode(false);
+    setTimeline(null);
+    setScrubIndex(null);
   }, [selectedStrategyId, allStrategies]);
 
   const selectedStrategy = useMemo(
@@ -220,6 +230,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
     const body: BacktestRunRequest = {
       symbol,
       strategyId: selectedStrategy.id,
+      engine,
       initialCash: initialCapital,
       currency: 'CNY',
       commissionRate: commissionRateWan / 10000,
@@ -233,6 +244,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
   }, [
     selectedStrategy,
     symbol,
+    engine,
     initialCapital,
     commissionRateWan,
     customParams,
@@ -251,6 +263,8 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
     setLoading(true);
     setStepperMode(false);
     setStepState(null);
+    setTimeline(null);
+    setScrubIndex(null);
 
     // 一次性回测与逐步回测互斥: 先关掉可能存在的会话
     if (sessionIdRef.current) {
@@ -288,6 +302,30 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
     }
   }, []);
 
+  /** 本地账本: 时间轴已带上全量成交, 按日期截断即可, 不用再请求 */
+  const ledgerUpTo = useCallback(
+    (date: string | undefined): BacktestTrade[] => {
+      if (!timeline || !date) return [];
+      return timeline.trades.filter((t) => t.date <= date);
+    },
+    [timeline],
+  );
+
+  /** 有成交的日子 (快速跳转用); 方向取自真实成交, 止损日也能正确标红 */
+  type KeyDay = { index: number; date: string; action: 'BUY' | 'SELL'; reason?: string };
+  const keyDays = useMemo<KeyDay[]>(() => {
+    if (!timeline) return [];
+    const indexByDate = new Map(timeline.rows.map((row) => [row.date, row.index]));
+    const seen = new Map<string, KeyDay>();
+    for (const trade of timeline.trades) {
+      if (seen.has(trade.date)) continue;
+      const index = indexByDate.get(trade.date);
+      if (index === undefined) continue;
+      seen.set(trade.date, { index, date: trade.date, action: trade.type, reason: trade.reason });
+    }
+    return [...seen.values()].sort((a, b) => a.index - b.index);
+  }, [timeline]);
+
   const handleStartStepper = async () => {
     const body = buildRequest();
     if (!body) return;
@@ -302,9 +340,17 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
       sessionIdRef.current = view.sessionId;
       setStepState(view.state);
       setJumpToIndex('0');
+      setScrubIndex(null);
+      // 整段时间轴一次性取回: 之后拖动/跳转都在本地, 不再触发策略计算
+      try {
+        setTimeline(await getStepperTimeline(view.sessionId));
+      } catch {
+        setTimeline(null);
+      }
       await syncLedger();
     } catch (err) {
       setStepperMode(false);
+      setTimeline(null);
       setDiagnostics([{
         level: 'error',
         message: `逐步回测初始化失败: ${err instanceof Error ? err.message : String(err)}`,
@@ -325,7 +371,11 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
       const view = await stepStepperSession(sessionId, action, index);
       setStepState(view.state);
       setJumpToIndex(String(view.state.currentStepIndex));
-      await syncLedger();
+      setScrubIndex(null);
+      // 时间轴里已经带着全量账本, 本地截断即可 (无额外请求)
+      const local = ledgerUpTo(view.state.currentKline?.date);
+      if (timeline) setLedgerTrades(local);
+      else await syncLedger();
     } catch (err) {
       setDiagnostics((prev) => [...prev, {
         level: 'error',
@@ -345,6 +395,16 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
     void stepSession('jump', index);
   };
 
+  /** 拖动条松手才真正跳转 (拖动过程中只更新预览日期, 不发请求) */
+  const commitScrub = () => {
+    if (scrubIndex === null) return;
+    if (scrubIndex === stepState?.currentStepIndex) {
+      setScrubIndex(null);
+      return;
+    }
+    void stepSession('jump', scrubIndex);
+  };
+
   const handleRunAll = async () => {
     const sessionId = sessionIdRef.current;
     if (!sessionId) return;
@@ -356,6 +416,7 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
       onBacktestResult?.(output.result.trades);
       setStepperMode(false);
       setStepState(null);
+      setTimeline(null);
       // 账本留在本地状态, 服务端会话用完即关 (结果已经拿到)
       setLedgerTrades(output.trades);
       sessionIdRef.current = null;
@@ -376,6 +437,8 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
     if (sessionId) void closeStepperSession(sessionId);
     setStepperMode(false);
     setStepState(null);
+    setTimeline(null);
+    setScrubIndex(null);
     setLedgerTrades([]);
     onBacktestResult?.([]);
     setJumpToIndex('0');
@@ -669,7 +732,30 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
         {stepperMode && stepState && (
           <div className={`${sectionCls}`}>
             <div className="flex items-center justify-between px-3 py-2.5 md:px-5 md:py-3 bg-zinc-900/50 border-b border-zinc-800/50">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400">逐步回测</h4>
+              <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
+                逐步回测
+                <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-[10px] font-mono font-normal normal-case text-zinc-400">
+                  {timeline?.engine ?? engine}
+                </span>
+                {timeline && (
+                  <span
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-normal normal-case ${
+                      timeline.cached
+                        ? 'bg-emerald-950/40 text-emerald-400'
+                        : 'bg-zinc-800 text-zinc-500'
+                    }`}
+                    title={
+                      timeline.cached
+                        ? '命中磁盘时间轴缓存, 未重新运行策略'
+                        : '本次录制了整段时间轴, 之后拖动不再重算'
+                    }
+                  >
+                    {timeline.cached
+                      ? `缓存 ${(timeline.recordSeconds * 1000).toFixed(0)}ms`
+                      : `录制 ${timeline.recordSeconds.toFixed(2)}s`}
+                  </span>
+                )}
+              </h4>
               <button
                 onClick={handleResetStepper}
                 className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-zinc-500 hover:text-zinc-300 cursor-pointer transition-all"
@@ -681,19 +767,67 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
             </div>
 
             <div className="p-3 md:p-5 space-y-4">
-              {/* Progress bar */}
-              <div className="space-y-1">
+              {/* Progress + scrubber (整段时间轴已本地化, 拖动不触发计算) */}
+              <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-[11px] text-zinc-500">
-                  <span>步骤 {stepState.currentStepIndex + 1} / {stepState.totalSteps}</span>
-                  <span>{((stepState.currentStepIndex + 1) / stepState.totalSteps * 100).toFixed(1)}%</span>
+                  <span>
+                    第 {stepState.currentStepIndex + 1} / {stepState.totalSteps} 个交易日
+                    {scrubIndex !== null && timeline?.rows[scrubIndex] && (
+                      <span className="ml-2 font-mono text-blue-400">
+                        {timeline.rows[scrubIndex].date} · ¥{fmt(timeline.rows[scrubIndex].equity)}
+                      </span>
+                    )}
+                  </span>
+                  <span>
+                    {(((scrubIndex ?? stepState.currentStepIndex) + 1) / stepState.totalSteps * 100).toFixed(1)}%
+                  </span>
                 </div>
                 <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
                   <div
                     className="h-full bg-blue-500 rounded-full transition-all duration-200"
-                    style={{ width: `${((stepState.currentStepIndex + 1) / stepState.totalSteps) * 100}%` }}
+                    style={{ width: `${(((scrubIndex ?? stepState.currentStepIndex) + 1) / stepState.totalSteps) * 100}%` }}
                   />
                 </div>
+                {timeline && (
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(stepState.totalSteps - 1, 0)}
+                    value={scrubIndex ?? stepState.currentStepIndex}
+                    onChange={(e) => setScrubIndex(Number(e.target.value))}
+                    onMouseUp={commitScrub}
+                    onTouchEnd={commitScrub}
+                    onKeyUp={commitScrub}
+                    disabled={stepperBusy}
+                    className="w-full accent-blue-500 cursor-pointer disabled:opacity-40"
+                    id="stepper-scrubber"
+                    aria-label="拖动查看任意交易日"
+                  />
+                )}
               </div>
+
+              {keyDays.length > 0 && (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] text-zinc-500 font-mono uppercase">有成交的日子</span>
+                  {keyDays.map((row) => (
+                    <button
+                      key={`keyday-${row.index}`}
+                      onClick={() => void stepSession('jump', row.index)}
+                      disabled={stepperBusy}
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-all disabled:opacity-40 ${
+                        row.action === 'BUY'
+                          ? 'bg-blue-950/30 text-blue-400 border-blue-900/30 hover:bg-blue-950/60'
+                          : row.action === 'SELL'
+                          ? 'bg-red-950/30 text-red-400 border-red-900/30 hover:bg-red-950/60'
+                          : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:bg-zinc-700'
+                      }`}
+                      title={row.reason ?? row.action}
+                    >
+                      {row.date.slice(5)} {row.action}
+                    </button>
+                  ))}
+                </div>
+              )}
 
               {/* Stepper Controls */}
               <div className="flex items-center gap-2 flex-wrap">
@@ -823,6 +957,66 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
                         </div>
                       )}
                     </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 当日盯市 + 指标 / 缠论快照 (服务端逐日录制) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="p-3 bg-zinc-900 rounded-xl border border-zinc-800/80">
+                  <span className="text-[10px] text-zinc-500 font-mono uppercase">当日盯市</span>
+                  <div className="mt-1 space-y-0.5 text-xs font-mono">
+                    <div className="flex justify-between">
+                      <span className="text-zinc-500">收盘权益</span>
+                      <span className="text-zinc-200">¥{fmt(stepState.equity ?? 0)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-zinc-500">相对本金</span>
+                      <span
+                        className={
+                          (stepState.equity ?? 0) >= stepState.accountAfter.initialCash
+                            ? 'text-blue-400'
+                            : 'text-red-400'
+                        }
+                      >
+                        {(stepState.equity ?? 0) >= stepState.accountAfter.initialCash ? '+' : ''}
+                        {fmt(
+                          stepState.accountAfter.initialCash > 0
+                            ? (((stepState.equity ?? 0) - stepState.accountAfter.initialCash) /
+                                stepState.accountAfter.initialCash) *
+                                100
+                            : 0,
+                        )}
+                        %
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-zinc-900 rounded-xl border border-zinc-800/80">
+                  <span className="text-[10px] text-zinc-500 font-mono uppercase">当日指标 / 缠论</span>
+                  <div className="mt-1 space-y-0.5 text-xs font-mono">
+                    {Object.entries(stepState.indicators ?? {})
+                      .slice(0, 4)
+                      .map(([key, value]) => (
+                        <div key={`ind-${key}`} className="flex justify-between">
+                          <span className="text-zinc-500">{key}</span>
+                          <span className="text-zinc-300">{fmt(Number(value))}</span>
+                        </div>
+                      ))}
+                    {stepState.chanlun && (
+                      <div className="flex justify-between">
+                        <span className="text-zinc-500">笔 / 中枢</span>
+                        <span className="text-zinc-300">
+                          {stepState.chanlun.strokes} / {stepState.chanlun.hubs}
+                          {stepState.chanlun.lastHub &&
+                            ` (${fmt(stepState.chanlun.lastHub.zd)}~${fmt(stepState.chanlun.lastHub.zg)})`}
+                        </span>
+                      </div>
+                    )}
+                    {!stepState.chanlun && Object.keys(stepState.indicators ?? {}).length === 0 && (
+                      <span className="text-zinc-600">--</span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -964,6 +1158,17 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
               <div className="flex items-center justify-between mb-3">
                 <h5 className="text-xs font-bold text-zinc-400 uppercase tracking-wider text-left">交易账本</h5>
                 <div className="flex items-center gap-2">
+                  <select
+                    value={engine}
+                    onChange={(e) => setEngine(e.target.value as BacktestEngine)}
+                    disabled={stepperBusy || stepperMode}
+                    className="shrink-0 px-2 py-1.5 text-[11px] font-mono rounded-lg bg-zinc-900 text-zinc-300 border border-zinc-700 cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
+                    id="select-engine"
+                    title="回测引擎: native 手写撮合 / backtrader 开源框架 (两者账本逐笔一致)"
+                  >
+                    <option value="native">native</option>
+                    <option value="backtrader">backtrader</option>
+                  </select>
                   {!stepperMode && (
                     <button
                       onClick={handleStartStepper}

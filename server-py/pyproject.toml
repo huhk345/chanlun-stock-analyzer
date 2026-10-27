@@ -12,7 +12,9 @@ license = { text = "MIT" }
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+# 开源回测框架引擎 (engine="backtrader"); native 引擎不需要任何第三方依赖
+backtrader = ["backtrader>=1.9.78"]
+dev = ["pytest>=8.0", "backtrader>=1.9.78"]
 
 [project.scripts]
 chanlun-server = "chanlun_server.__main__:main"

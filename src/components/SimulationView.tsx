@@ -31,7 +31,7 @@ import {
 } from 'recharts';
 import type { Kline, BacktestTrade } from '../types/stock';
 import type { UserStrategyDefinition, BacktestDiagnostic } from '../types/strategy';
-import type { IndexId } from '../types/scan';
+import { INDEX_META, type IndexId } from '../types/scan';
 import type { BacktestProgressView } from '../types/backtestProgress';
 import type {
   PoolBacktestInput,
@@ -41,10 +41,15 @@ import type {
   PoolSymbolResult,
   PoolTradeLogView,
 } from '../types/poolBacktest';
-import PortfolioSimulationView from './PortfolioSimulationView';
 import StrategySourceDialog from './StrategySourceDialog';
 import ChanlunKlineChart from './ChanlunKlineChart';
-import { isAshareSymbol, resolveSymbol } from '../utils/symbols';
+import {
+  EXCLUDABLE_BOARDS,
+  isAshareSymbol,
+  isBoardExcluded,
+  resolveSymbol,
+  type ExcludableBoard,
+} from '../utils/symbols';
 import { csvCell, downloadCsv } from '../utils/download';
 
 interface SimulationViewProps {
@@ -53,7 +58,6 @@ interface SimulationViewProps {
 }
 
 type Mode = 'single' | 'pool';
-type SimPeriod = '1d' | '1w';
 
 const POOL_JOB_KEY = 'chanlun_pool_backtest_job';
 const LEADER_PAGE_SIZE = 100;
@@ -67,11 +71,20 @@ const POOL_OPTIONS: { id: IndexId; label: string; count: number }[] = [
 
 const ADJUST_LABEL: Record<string, string> = { forward: '前复权', backward: '后复权', '': '不复权' };
 
+/** 默认回测区间: 最近 3 年 (今天往前推 3 年 ~ 今天) */
+const rangeForLastThreeYears = (): { rangeStart: string; rangeEnd: string } => {
+  const end = new Date();
+  const start = new Date(end);
+  start.setFullYear(start.getFullYear() - 3);
+  const toInput = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return { rangeStart: toInput(start), rangeEnd: toInput(end) };
+};
+
+const DEFAULT_RANGE = rangeForLastThreeYears();
+
 interface SingleState {
   symbol: string;
-  period: SimPeriod;
-  count: number;
-  adjust: 'forward' | 'backward' | '';
   initialCash: number;
   commissionRateWan: number;
   minCommission: number;
@@ -84,9 +97,8 @@ interface SingleState {
 interface PoolState {
   indexes: Record<IndexId, boolean>;
   custom: string[];
-  period: SimPeriod;
-  count: number;
-  adjust: 'forward' | 'backward' | '';
+  /** 排除板块: 创业板 / 科创板 / 北交所 */
+  excludeBoards: ExcludableBoard[];
   initialCash: number;
   commissionRateWan: number;
   minCommission: number;
@@ -97,29 +109,23 @@ interface PoolState {
 }
 
 const DEFAULT_SINGLE: Omit<SingleState, 'symbol'> = {
-  period: '1d',
-  count: 500,
-  adjust: 'forward',
   initialCash: 100_000,
   commissionRateWan: 2.5,
   minCommission: 5,
   stopLossPercent: '',
-  rangeStart: '',
-  rangeEnd: '',
+  ...DEFAULT_RANGE,
   forceRefresh: false,
 };
 
 const DEFAULT_POOL: Omit<PoolState, 'custom'> = {
   indexes: { hs300: true, zz500: true },
-  period: '1d',
-  count: 400,
-  adjust: 'forward',
+  // 默认排除创业板 / 科创板 / 北交所 (小投资者无交易权限)
+  excludeBoards: EXCLUDABLE_BOARDS.map((b) => b.id),
   initialCash: 100_000,
   commissionRateWan: 2.5,
   minCommission: 5,
   stopLossPercent: '',
-  rangeStart: '',
-  rangeEnd: '',
+  ...DEFAULT_RANGE,
   forceRefresh: false,
 };
 
@@ -577,6 +583,8 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
 
   // ---- 选股池模式 ----
   const [pool, setPool] = useState<PoolState>(() => ({ ...DEFAULT_POOL, custom: [] }));
+  /** 指数成分股名单 (仅用于排除板块后的股票池计数预览) */
+  const [members, setMembers] = useState<Partial<Record<IndexId, string[]>>>({});
   const [customInput, setCustomInput] = useState('');
   const [jobId, setJobId] = useState<string | null>(() => {
     try {
@@ -609,6 +617,30 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
   const [error, setError] = useState<string | null>(null);
 
   const poolSummary: PoolBacktestSummary | null = job?.state === 'done' ? job.result ?? null : null;
+
+  // 加载指数成分股名单: 「本次回测宇宙」在排除板块后精确实时计数
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const out: Partial<Record<IndexId, string[]>> = {};
+      await Promise.all(
+        POOL_OPTIONS.map(async (o) => {
+          try {
+            const r = await fetch(`/${INDEX_META[o.id].file}`);
+            if (!r.ok) return;
+            const list = (await r.json()) as unknown;
+            if (Array.isArray(list)) out[o.id] = list.filter((s): s is string => typeof s === 'string');
+          } catch {
+            /* 名单加载失败时退回静态只数估算 */
+          }
+        }),
+      );
+      if (!cancelled) setMembers(out);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // URL 同步模式 (仅 canonicalize, 不新增历史记录)
   useEffect(() => {
@@ -763,9 +795,8 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
       const body: Record<string, unknown> = {
         symbol: resolveSymbol(single.symbol.trim()).resolved,
         strategyId,
-        period: single.period,
-        count: single.count,
-        adjust: single.adjust,
+        period: '1d',
+        adjust: 'forward',
         initialCash: single.initialCash,
         commissionRate: commissionRateOf(single.commissionRateWan),
         minCommission: single.minCommission,
@@ -799,7 +830,44 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
   // ---- 选股池回测 ----
   const poolUniverseCount =
     POOL_OPTIONS.reduce((sum, o) => sum + (pool.indexes[o.id] ? o.count : 0), 0) + pool.custom.length;
+
+  /** 排除板块后的股票池预览: 优先用真实成分股名单精确计数 */
+  const poolPreview = useMemo(() => {
+    const exclude = pool.excludeBoards;
+    let base = 0;
+    let kept = 0;
+    for (const o of POOL_OPTIONS) {
+      if (!pool.indexes[o.id]) continue;
+      const list = members[o.id];
+      if (list && list.length > 0) {
+        base += list.length;
+        kept += exclude.length > 0 ? list.filter((s) => !isBoardExcluded(s, exclude)).length : list.length;
+      } else {
+        base += o.count;
+        kept += o.count;
+      }
+    }
+    const customKept =
+      exclude.length > 0 ? pool.custom.filter((s) => !isBoardExcluded(s, exclude)).length : pool.custom.length;
+    const exact = POOL_OPTIONS.some((o) => pool.indexes[o.id] && (members[o.id]?.length ?? 0) > 0);
+    return {
+      total: base + pool.custom.length,
+      kept: kept + customKept,
+      excluded: base + pool.custom.length - (kept + customKept),
+      exact,
+    };
+  }, [pool.indexes, pool.custom, pool.excludeBoards, members]);
+
+  const poolEffectiveCount = pool.excludeBoards.length > 0 ? poolPreview.kept : poolUniverseCount;
   const poolRunning = job?.state === 'running' || poolLoading;
+
+  const toggleBoard = (id: ExcludableBoard) =>
+    setPool((prev) => ({
+      ...prev,
+      excludeBoards: prev.excludeBoards.includes(id)
+        ? prev.excludeBoards.filter((b) => b !== id)
+        : [...prev.excludeBoards, id],
+    }));
 
   const handleAddCustom = useCallback(() => {
     const tokens = customInput.split(/[\s,;，；、]+/).filter(Boolean);
@@ -827,9 +895,9 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
         strategyId,
         indexes,
         custom: pool.custom,
-        period: pool.period,
-        count: pool.count,
-        adjust: pool.adjust,
+        excludeBoards: pool.excludeBoards,
+        period: '1d',
+        adjust: 'forward',
         initialCash: pool.initialCash,
         commissionRate: commissionRateOf(pool.commissionRateWan),
         minCommission: pool.minCommission,
@@ -1129,8 +1197,8 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
         <FlaskConical className="h-8 w-8 text-zinc-700" />
         <p className="text-sm text-zinc-400">暂无策略</p>
         <p className="max-w-md text-center text-xs leading-relaxed text-zinc-600">
-          在服务端 <code className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-zinc-400">server/strategies/</code> 目录下
-          新增 <code className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-zinc-400">.ts</code> 策略文件
+          在服务端 <code className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-zinc-400">server-py/chanlun_server/strategies/</code> 目录下
+          新增 <code className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-zinc-400">.py</code> 策略文件
           (导出包含 id / name / decide 的对象), 或在「管理策略」里新建, 重启/刷新后即可加载。
         </p>
         <button onClick={() => void loadStrategies()} className="text-xs text-blue-400 underline">
@@ -1141,7 +1209,7 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
   }
 
   const singleCanRun = !!single.symbol.trim() && !!strategyId && !singleLoading;
-  const poolCanRun = poolUniverseCount > 0 && !!strategyId && !poolRunning;
+  const poolCanRun = poolEffectiveCount > 0 && !!strategyId && !poolRunning;
 
   const leaderVisible = showAllRows ? leaderRows : leaderRows.slice(0, LEADER_PAGE_SIZE);
   const detailRow = detailSymbol ? poolSummary?.rows.find((r) => r.symbol === detailSymbol) : undefined;
@@ -1170,13 +1238,9 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
     </th>
   );
 
-  // 选股池模式已重做为「共享资金逐日组合模拟」(backtrader 执行层),
-  // 旧版池内等权汇总界面不再渲染; 单标的模式保持原实现。
-  // 说明: 这里用类型断言避免把下方 mode 收窄为 'single', 旧池界面代码仍保留以便回滚。
-  if ((mode as Mode) === 'pool') {
-    return <PortfolioSimulationView onModeChange={setMode} />;
-  }
-
+  // 选股池模式走等权汇总回测 (POST /api/backtest/pool)。
+  // 「共享资金逐日组合模拟」依赖 backtrader 执行层, 该引擎已随 Node 服务端一起移除,
+  // 因此这里不再渲染 PortfolioSimulationView; 单标的模式保持原实现。
   return (
     <div className="mx-auto w-full max-w-[1560px]">
 
@@ -1279,15 +1343,59 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
                   </button>
                 </div>
 
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <label className={`${labelCls} mb-0`}>排除板块</label>
+                    <button
+                      onClick={() =>
+                        setPool((prev) => ({
+                          ...prev,
+                          excludeBoards:
+                            prev.excludeBoards.length === EXCLUDABLE_BOARDS.length
+                              ? []
+                              : EXCLUDABLE_BOARDS.map((b) => b.id),
+                        }))
+                      }
+                      className="text-[10px] text-zinc-500 transition hover:text-zinc-200 cursor-pointer"
+                    >
+                      {pool.excludeBoards.length === EXCLUDABLE_BOARDS.length ? '恢复全部' : '全部排除'}
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {EXCLUDABLE_BOARDS.map((b) => {
+                      const on = pool.excludeBoards.includes(b.id);
+                      return (
+                        <button
+                          key={b.id}
+                          onClick={() => toggleBoard(b.id)}
+                          title={`排除${b.label} (${b.hint})`}
+                          className={`flex items-center gap-1 rounded-lg border px-2 py-1.5 text-[10px] font-semibold transition cursor-pointer ${
+                            on
+                              ? 'border-amber-500/40 bg-amber-500/15 text-amber-300'
+                              : 'border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:text-zinc-200'
+                          }`}
+                        >
+                          {on && <Check className="h-3 w-3" />}
+                          {b.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-1.5 text-[10px] leading-relaxed text-zinc-600">
+                    默认排除创业板 / 科创板 / 北交所: 小投资者无交易权限.
+                  </p>
+                </div>
+
                 <div className="flex items-center justify-between gap-2 rounded-lg border border-zinc-800/80 bg-zinc-950/60 px-3 py-2">
                   <span className="text-[10px] text-zinc-500">本次回测宇宙</span>
                   <span className="font-mono text-xs font-bold text-zinc-200">
-                    {poolUniverseCount} 只
+                    {pool.excludeBoards.length > 0 ? `${poolPreview.exact ? '' : '≈'}${poolEffectiveCount}` : poolUniverseCount} 只
                     <span className="ml-1.5 text-[10px] font-normal text-zinc-500">
                       {pool.indexes.hs300 ? '沪深300' : ''}
                       {pool.indexes.hs300 && pool.indexes.zz500 ? ' + ' : ''}
                       {pool.indexes.zz500 ? '中证500' : ''}
                       {pool.custom.length > 0 ? ` + 自定义 ${pool.custom.length}` : ''}
+                      {poolPreview.excluded > 0 ? ` · 已排除 ${poolPreview.excluded} 只` : ''}
                     </span>
                   </span>
                 </div>
@@ -1459,56 +1567,6 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
                 return (
                   <div className="grid grid-cols-2 gap-2.5">
                     <div>
-                      <label className={labelCls}>周期</label>
-                      <div className="flex rounded-xl border border-zinc-800 bg-zinc-900/80 p-1">
-                        {(['1d', '1w'] as SimPeriod[]).map((p) => (
-                          <button
-                            key={p}
-                            onClick={() => setCfg({ period: p })}
-                            className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition cursor-pointer ${
-                              cfg.period === p ? 'bg-blue-500/20 text-blue-300' : 'text-zinc-500 hover:text-zinc-300'
-                            }`}
-                          >
-                            {p === '1d' ? '日线' : '周线'}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div>
-                      <label className={labelCls}>复权</label>
-                      <select
-                        value={cfg.adjust}
-                        onChange={(e) => setCfg({ adjust: e.target.value as SingleState['adjust'] })}
-                        className={inputCls}
-                      >
-                        <option value="forward">前复权</option>
-                        <option value="backward">后复权</option>
-                        <option value="">不复权</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className={labelCls}>拉取根数</label>
-                      <input
-                        type="number"
-                        value={cfg.count}
-                        onChange={(e) =>
-                          setCfg({ count: Math.max(30, Math.min(5000, parseInt(e.target.value) || cfg.count)) })
-                        }
-                        className={inputCls}
-                      />
-                    </div>
-                    <div className="flex items-end pb-1.5">
-                      <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
-                        <input
-                          type="checkbox"
-                          checked={cfg.forceRefresh}
-                          onChange={(e) => setCfg({ forceRefresh: e.target.checked })}
-                          className="h-4 w-4 rounded border-zinc-600 text-blue-500"
-                        />
-                        强制刷新缓存
-                      </label>
-                    </div>
-                    <div>
                       <label className={labelCls}>起始日</label>
                       <input
                         type="date"
@@ -1525,6 +1583,17 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
                         onChange={(e) => setCfg({ rangeEnd: e.target.value })}
                         className={inputCls}
                       />
+                    </div>
+                    <div className="col-span-2 flex items-center">
+                      <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
+                        <input
+                          type="checkbox"
+                          checked={cfg.forceRefresh}
+                          onChange={(e) => setCfg({ forceRefresh: e.target.checked })}
+                          className="h-4 w-4 rounded border-zinc-600 text-blue-500"
+                        />
+                        强制刷新缓存
+                      </label>
                     </div>
                   </div>
                 );
@@ -1612,19 +1681,18 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
                 <span className="mx-1.5 text-zinc-700">·</span>
                 {selectedStrategy?.name ?? '策略'}
                 <span className="mx-1.5 text-zinc-700">·</span>
-                {single.period === '1d' ? '日线' : '周线'}
+                前复权
                 <span className="mx-1.5 text-zinc-700">·</span>
-                {ADJUST_LABEL[single.adjust]}
-                <span className="mx-1.5 text-zinc-700">·</span>
-                {single.count} 根
+                {single.rangeStart} ~ {single.rangeEnd}
               </>
             ) : (
               <>
-                {poolUniverseCount} 只标的
+                {poolEffectiveCount} 只标的
+                {poolPreview.excluded > 0 && (
+                  <span className="text-zinc-600"> (已排除 {poolPreview.excluded})</span>
+                )}
                 <span className="mx-1.5 text-zinc-700">·</span>
                 {selectedStrategy?.name ?? '策略'}
-                <span className="mx-1.5 text-zinc-700">·</span>
-                {pool.period === '1d' ? '日线' : '周线'}
                 <span className="mx-1.5 text-zinc-700">·</span>
                 名义本金 {money(pool.initialCash)}/只
                 <span className="mx-1.5 text-zinc-700">·</span>

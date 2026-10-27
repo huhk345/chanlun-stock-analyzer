@@ -3,7 +3,6 @@
 
     python run_tests.py                 # all three parts
     python run_tests.py --part 2        # only part 2
-    python run_tests.py --no-parity     # skip the JS-engine parity check
     python run_tests.py --live          # also hit real market data
 
 Part 1  unit         pure functions: ChanLun, fees, metrics, indicators, sandbox
@@ -142,15 +141,12 @@ def print_summary(results: list[PartResult]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="三阶段测试运行器")
     parser.add_argument("--part", choices=["1", "2", "3", "all"], default="all")
-    parser.add_argument("--no-parity", action="store_true", help="跳过与 TypeScript 引擎的逐笔比对")
     parser.add_argument("--live", action="store_true", help="包含需要真实行情的用例")
     parser.add_argument("-v", "--verbose", action="store_true", help="始终打印完整 pytest 输出")
     parser.add_argument("-k", dest="keyword", default="", help="传给 pytest 的 -k 过滤表达式")
     args = parser.parse_args(argv)
 
     extra: list[str] = []
-    if args.no_parity:
-        extra += ["--deselect", "tests/part2_integration/test_ts_parity.py"]
     if args.live:
         extra.append("--live")
     if args.keyword:

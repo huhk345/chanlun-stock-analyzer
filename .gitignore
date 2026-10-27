@@ -30,3 +30,4 @@ server-py/*.egg-info/
 
 
 doc/
+.workbuddy-ai/

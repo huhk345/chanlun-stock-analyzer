@@ -1,3 +1,6 @@
-# Runtime: the server and engine use the Python standard library only.
+# Runtime (native engine): the Python standard library only.
+# Optional runtime: the backtrader engine (engine="backtrader" on /api/backtest/run).
+backtrader>=1.9.78
+
 # Development / testing:
 pytest>=8.0

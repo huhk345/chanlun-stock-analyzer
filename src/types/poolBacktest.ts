@@ -14,16 +14,30 @@
  */
 import type { BacktestDiagnostic } from './strategy';
 import type { BacktestResult, Kline } from './stock';
+import type { ExcludableBoard } from '../utils/symbols';
 
 export type PoolPeriod = '1d' | '1w';
+
+/**
+ * 回测引擎:
+ * - `native`     手写撮合循环 (零依赖, 与历史 TypeScript 账本逐笔一致, 默认)
+ * - `backtrader` 开源框架 backtrader 驱动同一套策略契约
+ *
+ * 两个引擎共享同一份策略 API 与成交模型, 账本逐笔一致; 默认仍走 native。
+ */
+export type BacktestEngine = 'native' | 'backtrader';
 
 export interface PoolBacktestInput {
   /** 策略 ID (从 /api/strategies 获取), 必填 */
   strategyId: string;
+  /** 回测引擎, 默认 'native' */
+  engine?: BacktestEngine;
   /** 股票池: 沪深300 / 中证500 (可多选, 两者都选 = 全部) */
   indexes: ('hs300' | 'zz500')[];
   /** 附加自定义标的 (可选) */
   custom?: string[];
+  /** 排除板块 (小投资者无权限): 创业板 / 科创板 / 北交所 */
+  excludeBoards?: ExcludableBoard[];
   /** K 线周期: '1d' | '1w', 默认 '1d' */
   period?: PoolPeriod;
   /** 每只标的拉取根数, 默认 400 (命中本地缓存更快) */
@@ -154,6 +168,8 @@ export interface PoolBacktestJobView {
 /** 单只标的明细 (点击池排行榜某一行时按需拉取) */
 export interface PoolSymbolDetailView {
   symbol: string;
+  /** 实际执行回测的引擎 */
+  engine?: BacktestEngine;
   period: PoolPeriod;
   adjust: string;
   klinesCount: number;
