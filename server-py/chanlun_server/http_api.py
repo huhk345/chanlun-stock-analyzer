@@ -285,6 +285,15 @@ def _route_pool_trades(job_id: str, query: Dict[str, str], body: Any) -> Respons
     return 200, job.all_trades()
 
 
+def _route_pool_timeline(job_id: str, query: Dict[str, str], body: Any) -> Response:
+    job = get_pool_backtest_job(job_id)
+    if job is None:
+        raise ApiError("任务不存在或已过期", 404)
+    if job.state != "done" or job.summary is None:
+        raise ApiError("回测尚未完成, 暂无逐日时间轴", 409)
+    return 200, job.build_timeline()
+
+
 def _route_simulation_health(query: Dict[str, str], body: Any) -> Response:
     return 200, {
         "ok": False,
@@ -321,6 +330,7 @@ ROUTES: List[Tuple[str, re.Pattern[str], Callable[..., Response]]] = [
     ("GET", re.compile(r"^/api/backtest/pool/([^/]+)$"), _route_pool_view),
     ("POST", re.compile(r"^/api/backtest/pool/([^/]+)/cancel$"), _route_pool_cancel),
     ("GET", re.compile(r"^/api/backtest/pool/([^/]+)/trades$"), _route_pool_trades),
+    ("GET", re.compile(r"^/api/backtest/pool/([^/]+)/timeline$"), _route_pool_timeline),
     ("GET", re.compile(r"^/api/backtest/pool/([^/]+)/symbol/([^/]+)$"), _route_pool_symbol),
     ("GET", re.compile(r"^/api/simulation/health$"), _route_simulation_health),
 ]

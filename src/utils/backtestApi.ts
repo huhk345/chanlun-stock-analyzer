@@ -45,8 +45,10 @@ export interface BacktestRunRequest {
   progressId?: string;
 }
 
-/** 逐步回测会话请求体 (与一次性回测同口径) */
-export type BacktestStepperRequest = Omit<BacktestRunRequest, 'progressId' | 'force'>;
+/** 逐步回测会话请求体 (与一次性回测同口径; refresh 会跳过时间轴缓存重新录制) */
+export type BacktestStepperRequest = Omit<BacktestRunRequest, 'progressId' | 'force'> & {
+  refresh?: boolean;
+};
 
 export interface StepperSessionView {
   sessionId: string;

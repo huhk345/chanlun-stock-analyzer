@@ -12,12 +12,12 @@
  * 引擎: server/engine/backtestRunner.runBacktest (策略与回测引擎都在服务端) (沪深 A 股长仓; 信号当日收盘价成交 (尾盘模型); 佣金+印花税+过户费; 涨跌停按收盘价拦截; 固定止损为盘中止损单)
  */
 
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef, useDeferredValue } from 'react';
 import {
   Play, Download, RefreshCw, LineChart as LineChartIcon, Target, Layers,
   X, Search, Loader2, Square, Percent, Wallet, ShieldAlert, Activity,
-  Coins, ListOrdered, AlertTriangle, Info, ChevronUp, ChevronDown, SlidersHorizontal, FlaskConical, Check,
-  ChartCandlestick, ClipboardList, FileCode2,
+  Coins, ListOrdered, AlertTriangle, Info, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, SlidersHorizontal, FlaskConical, Check,
+  ChartCandlestick, ClipboardList, FileCode2, History, SkipBack, CalendarDays,
 } from 'lucide-react';
 import {
   Area,
@@ -39,10 +39,18 @@ import type {
   PoolBacktestSummary,
   PoolSymbolDetailView,
   PoolSymbolResult,
+  PoolTimelineView,
+  PoolTradeLogRow,
   PoolTradeLogView,
 } from '../types/poolBacktest';
 import StrategySourceDialog from './StrategySourceDialog';
 import ChanlunKlineChart from './ChanlunKlineChart';
+import {
+  closeStepperSession,
+  createStepperSession,
+  getStepperTimeline,
+} from '../utils/backtestApi';
+import type { BacktestStepperRequest, StepperTimelineView } from '../utils/backtestApi';
 import {
   EXCLUDABLE_BOARDS,
   isAshareSymbol,
@@ -108,6 +116,16 @@ interface PoolState {
   forceRefresh: boolean;
 }
 
+/** 单标的逐日模拟: 服务端已录好的完整时间轴 + 图表所需的 K 线 */
+interface DaySessionState {
+  sessionId: string;
+  timeline: StepperTimelineView;
+  klines: Kline[];
+  symbol: string;
+  strategyName: string;
+  initialCash: number;
+}
+
 const DEFAULT_SINGLE: Omit<SingleState, 'symbol'> = {
   initialCash: 100_000,
   commissionRateWan: 2.5,
@@ -169,6 +187,24 @@ const newProgressId = (): string => {
     return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
   }
 };
+
+/** 逐日模拟的图表数据: 与回测同口径 (前复权日线) 拉取整段 K 线 */
+async function fetchSimulationKlines(symbol: string, forceRefresh: boolean): Promise<Kline[]> {
+  const params = new URLSearchParams({
+    symbol,
+    period: '1d',
+    adjust: 'forward',
+    count: '5000',
+  });
+  if (forceRefresh) params.set('refresh', '1');
+  const resp = await fetch(`/api/klines?${params.toString()}`);
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error((err as { error?: string })?.error || `K 线加载失败 (${resp.status})`);
+  }
+  const data = (await resp.json()) as { klines?: Kline[] };
+  return Array.isArray(data.klines) ? data.klines : [];
+}
 
 const inputCls =
   'w-full rounded-xl border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-xs text-zinc-100 font-mono placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition disabled:opacity-50';
@@ -474,6 +510,803 @@ function SingleRunProgress({
   );
 }
 
+/**
+ * 逐日时光机: 本地时间轴 + 图表联动。
+ *
+ * 服务端已一次性录好每一天的决策 / 成交 / 账户 / 持仓 / 权益, 这里只做索引切换:
+ * 图表、权益曲线、成交账本都裁剪到「当前交易日」, 拖动或回退都不会看到之后的数据。
+ */
+function DayByDayPanel({
+  sessionId,
+  timeline,
+  klines,
+  symbol,
+  strategyName,
+  initialCash,
+  onClose,
+}: {
+  sessionId: string;
+  timeline: StepperTimelineView;
+  klines: Kline[];
+  symbol: string;
+  strategyName: string;
+  initialCash: number;
+  onClose: () => void;
+}) {
+  const rows = timeline.rows;
+  const totalSteps = rows.length;
+  const [cursor, setCursor] = useState(0);
+  const safeCursor = Math.min(Math.max(cursor, 0), Math.max(totalSteps - 1, 0));
+  const row = rows[safeCursor];
+  const prevRow = safeCursor > 0 ? rows[safeCursor - 1] : null;
+
+  // 拖动时先保证滑块/数字跟手, 让较重的 K 线重算在后台完成。
+  const deferredCursor = useDeferredValue(safeCursor);
+  const chartRow = rows[Math.min(deferredCursor, Math.max(totalSteps - 1, 0))] ?? row;
+  const chartDate = chartRow?.date ?? '';
+
+  const visibleKlines = useMemo(() => {
+    if (!chartDate) return [];
+    const start = timeline.dateRange.start;
+    return klines.filter((k) => k.date >= start && k.date <= chartDate);
+  }, [klines, chartDate, timeline.dateRange.start]);
+
+  const visibleTrades = useMemo(() => {
+    const cutoff = row?.date;
+    if (!cutoff) return [];
+    return timeline.trades.filter((t) => t.date <= cutoff);
+  }, [timeline.trades, row?.date]);
+
+  // 图表用的成交标注也要跟随延迟后的 chartDate, 避免标记落在尚未绘制的 K 线上。
+  const chartTrades = useMemo(
+    () => visibleTrades.filter((t) => t.date <= chartDate),
+    [visibleTrades, chartDate],
+  );
+
+  const dayTrades = useMemo(
+    () => (row ? visibleTrades.filter((t) => t.date === row.date) : []),
+    [visibleTrades, row],
+  );
+
+  const pastTradeDays = useMemo(
+    () => rows.slice(0, safeCursor + 1).filter((r) => r.trades > 0),
+    [rows, safeCursor],
+  );
+
+  const prevTradeDayIndex = useMemo(() => {
+    for (let i = safeCursor - 1; i >= 0; i -= 1) {
+      if (rows[i].trades > 0) return i;
+    }
+    return -1;
+  }, [rows, safeCursor]);
+
+  if (!row) {
+    return (
+      <section className="rounded-2xl border border-zinc-800 bg-zinc-900/30 p-6 text-center text-xs text-zinc-500">
+        时间轴为空, 请调整回测区间后重试。
+      </section>
+    );
+  }
+
+  const jumpToDate = (date: string) => {
+    if (!date) return;
+    let lo = 0;
+    let hi = rows.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (rows[mid].date < date) lo = mid + 1;
+      else hi = mid;
+    }
+    setCursor(Math.min(lo, rows.length - 1));
+  };
+
+  const actionBadge =
+    row.action === 'BUY'
+      ? { label: '买入', cls: 'border-red-900/30 bg-red-950/30 text-red-400' }
+      : row.action === 'SELL'
+        ? { label: '卖出', cls: 'border-green-900/30 bg-green-950/30 text-green-400' }
+        : { label: '持有', cls: 'border-zinc-700 bg-zinc-800 text-zinc-400' };
+
+  const dayPnl = row.equity - (prevRow?.equity ?? initialCash);
+  const dayReturn =
+    prevRow && prevRow.equity > 0
+      ? (row.equity / prevRow.equity - 1) * 100
+      : initialCash > 0
+        ? (row.equity / initialCash - 1) * 100
+        : 0;
+  const cumReturn = initialCash > 0 ? ((row.equity - initialCash) / initialCash) * 100 : 0;
+  const positionValue = row.shares * row.close;
+  const positionWeight = row.equity > 0 ? (positionValue / row.equity) * 100 : 0;
+  const visibleBuyCount = visibleTrades.filter((t) => t.type === 'BUY').length;
+  const visibleSellCount = visibleTrades.filter((t) => t.type === 'SELL').length;
+  const engineLabel = timeline.engine ?? 'native';
+  const recordLabel = timeline.cached
+    ? `缓存 ${((timeline.recordSeconds ?? 0) * 1000).toFixed(0)}ms`
+    : `录制 ${(timeline.recordSeconds ?? 0).toFixed(2)}s`;
+
+  const equityDates = rows.slice(0, safeCursor + 1).map((r) => r.date);
+  const equityValues = rows.slice(0, safeCursor + 1).map((r) => r.equity);
+
+  return (
+    <section className="space-y-4 md:space-y-5">
+      {/* 头部: 会话信息 + 未来数据提示 */}
+      <section className="rounded-2xl border border-blue-500/25 bg-gradient-to-br from-blue-500/[0.08] via-zinc-900/40 to-zinc-900/30 p-4 md:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="flex items-center gap-1.5 rounded-lg border border-blue-500/30 bg-blue-500/15 px-2.5 py-1 text-[11px] font-bold text-blue-300">
+                <History className="h-3.5 w-3.5" />
+                逐日时光机
+              </span>
+              <span className="font-mono text-sm font-bold text-zinc-100">{symbol}</span>
+              <span className="rounded-md border border-zinc-700/70 bg-zinc-900 px-2 py-0.5 text-[10px] text-zinc-400">
+                {strategyName}
+              </span>
+              <span className="font-mono text-[10px] text-zinc-500">
+                {timeline.dateRange.start} ~ {timeline.dateRange.end} · {totalSteps} 个交易日 · {engineLabel}
+              </span>
+              <span
+                className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
+                  timeline.cached ? 'bg-emerald-950/40 text-emerald-400' : 'bg-zinc-800 text-zinc-500'
+                }`}
+                title={timeline.cached ? '命中服务端时间轴缓存, 未重新运行策略' : '本次录制了整段时间轴, 之后切换不再重算'}
+              >
+                {recordLabel}
+              </span>
+            </div>
+            <p className="text-[11px] leading-relaxed text-zinc-500">
+              只显示截至当前交易日的行情、成交账本与权益曲线; 拖动与回退都看不到之后的数据。
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-zinc-300 transition hover:border-zinc-600 hover:text-zinc-100 cursor-pointer"
+          >
+            <X className="h-3.5 w-3.5" />
+            退出逐日模拟
+          </button>
+        </div>
+      </section>
+
+      {/* 时间轴控制 */}
+      <section className="rounded-2xl border border-zinc-800/80 bg-zinc-950/60 p-4 md:p-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setCursor((v) => Math.max(0, v - 1))}
+            disabled={safeCursor <= 0}
+            className="rounded-lg border border-zinc-700 bg-zinc-800 p-2 text-zinc-300 transition hover:bg-zinc-700 disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
+            title="上一天"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => setCursor((v) => Math.min(totalSteps - 1, v + 1))}
+            disabled={safeCursor >= totalSteps - 1}
+            className="rounded-lg border border-zinc-700 bg-zinc-800 p-2 text-zinc-300 transition hover:bg-zinc-700 disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
+            title="下一天"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+          <span className="ml-1 text-[11px] text-zinc-500">
+            第 <span className="font-mono text-zinc-300">{safeCursor + 1}</span> / {totalSteps} 个交易日
+          </span>
+          <span className="font-mono text-xs font-bold text-blue-300">{row.date}</span>
+          <span className={`rounded px-2 py-0.5 text-[10px] font-extrabold ${actionBadge.cls}`}>{actionBadge.label}</span>
+
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => prevTradeDayIndex >= 0 && setCursor(prevTradeDayIndex)}
+              disabled={prevTradeDayIndex < 0}
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-[11px] font-semibold text-zinc-300 transition hover:border-zinc-600 hover:text-zinc-100 disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
+              title="回到最近一个已经发生成交的交易日"
+            >
+              <SkipBack className="h-3 w-3" />
+              上一成交日
+            </button>
+            <label className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-[11px] text-zinc-400">
+              <CalendarDays className="h-3.5 w-3.5" />
+              <input
+                type="date"
+                value={row.date}
+                min={timeline.dateRange.start}
+                max={timeline.dateRange.end}
+                onChange={(e) => jumpToDate(e.target.value)}
+                className="bg-transparent font-mono text-[11px] text-zinc-200 outline-none [color-scheme:dark]"
+                aria-label="回到指定交易日"
+              />
+            </label>
+          </div>
+        </div>
+
+        <input
+          type="range"
+          min={0}
+          max={Math.max(totalSteps - 1, 0)}
+          value={safeCursor}
+          onChange={(e) => setCursor(Number(e.target.value))}
+          className="mt-3 w-full cursor-pointer accent-blue-500"
+          aria-label="拖动查看任意交易日"
+        />
+        <div className="mt-1 flex justify-between font-mono text-[10px] text-zinc-600">
+          <span>{rows[0]?.date}</span>
+          <span>
+            {safeCursor + 1} / {totalSteps}
+          </span>
+          <span>{rows[totalSteps - 1]?.date}</span>
+        </div>
+
+        {pastTradeDays.length > 0 && (
+          <div className="mt-3 border-t border-zinc-800/60 pt-2.5">
+            <p className="mb-1.5 text-[10px] font-mono uppercase tracking-wider text-zinc-600">
+              已发生的成交日 ({pastTradeDays.length})
+            </p>
+            <div className="flex max-h-20 flex-wrap gap-1.5 overflow-y-auto pr-1">
+              {pastTradeDays.map((r) => (
+                <button
+                  key={`past-trade-${r.index}`}
+                  onClick={() => setCursor(r.index)}
+                  className={`rounded border px-2 py-0.5 font-mono text-[10px] transition cursor-pointer ${
+                    r.date === row.date
+                      ? 'border-blue-500/50 bg-blue-500/15 text-blue-300'
+                      : r.action === 'BUY'
+                        ? 'border-red-900/30 bg-red-950/30 text-red-400 hover:bg-red-950/60'
+                        : 'border-green-900/30 bg-green-950/30 text-green-400 hover:bg-green-950/60'
+                  }`}
+                  title={`${r.date} · ${r.reason ?? r.action}`}
+                >
+                  {r.date.slice(5)}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* 账户 / 仓位 / 权益 概览 */}
+      <div className="grid grid-cols-2 gap-2.5 md:grid-cols-4 md:gap-3">
+        <Kpi
+          label="收盘价"
+          value={money(row.close)}
+          tone={toneOf(row.close - (prevRow?.close ?? row.close))}
+          sub={`前收 ${prevRow ? money(prevRow.close) : '—'}`}
+        />
+        <Kpi
+          label="当日权益"
+          value={money(row.equity)}
+          tone={toneOf(dayPnl)}
+          sub={`当日 ${dayPnl >= 0 ? '+' : '-'}${money(Math.abs(dayPnl))} (${pct(dayReturn)})`}
+        />
+        <Kpi
+          label="累计收益"
+          value={pct(cumReturn)}
+          tone={toneOf(cumReturn)}
+          sub={`本金 ${money(initialCash)}`}
+        />
+        <Kpi
+          label="现金"
+          value={money(row.cash)}
+          sub={prevRow ? `前一日 ${money(prevRow.cash)}` : '起始现金'}
+        />
+        <Kpi
+          label="持仓市值"
+          value={money(positionValue)}
+          sub={prevRow ? `前一日 ${money((prevRow.shares ?? 0) * prevRow.close)}` : '起始为空仓'}
+        />
+        <Kpi
+          label="持仓股数"
+          value={`${row.shares} 股`}
+          sub={prevRow ? `前一日 ${prevRow.shares} 股` : '起始 0 股'}
+        />
+        <Kpi
+          label="仓位"
+          value={`${fmt(positionWeight, 1)}%`}
+          tone={positionWeight > 0 ? 'accent' : 'default'}
+          sub={row.shares > 0 ? '按收盘价盯市' : '当前空仓'}
+        />
+        <Kpi
+          label="累计成交"
+          value={`${visibleTrades.length} 笔`}
+          sub={`当日 ${dayTrades.length} 笔`}
+        />
+      </div>
+
+      {/* K 线: 只画到当前交易日 */}
+      <section className="rounded-2xl border border-zinc-800/80 bg-zinc-950/60 p-4 md:p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h5 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
+            <ChartCandlestick className="h-3.5 w-3.5 text-blue-400" />
+            K线 · 缠论分析 & 成交标注
+            <span className="font-mono font-normal normal-case tracking-normal text-zinc-600">
+              截至 {chartDate}
+            </span>
+          </h5>
+          <span className="flex items-center gap-3 font-mono text-[10px] text-zinc-500">
+            <span>买入 {visibleBuyCount} 笔</span>
+            <span>卖出 {visibleSellCount} 笔</span>
+            <span>{visibleKlines.length} 根</span>
+          </span>
+        </div>
+        {visibleKlines.length > 0 ? (
+          <ChanlunKlineChart
+            klines={visibleKlines}
+            trades={chartTrades}
+            heightClass="h-80 md:h-96"
+          />
+        ) : (
+          <p className="py-12 text-center text-xs text-zinc-600">当前交易日暂无可用 K 线。</p>
+        )}
+        <p className="mt-2 text-[10px] leading-relaxed text-zinc-600">
+          笔 / 线段 / 中枢按截至 {chartDate} 的 K 线重新计算, 不包含后续行情; 买卖标注也只显示已经发生的成交。
+        </p>
+      </section>
+
+      {/* 当日决策 + 账户状态 */}
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <div className="rounded-2xl border border-zinc-800/80 bg-zinc-950/60 p-4 md:p-5">
+          <h5 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
+            <Activity className="h-3.5 w-3.5 text-blue-400" />
+            当日策略决策
+            <span className="font-mono font-normal normal-case tracking-normal text-zinc-600">收盘评估 · 收盘价成交</span>
+          </h5>
+          <div className="mt-3 flex items-start gap-2.5">
+            <span className={`shrink-0 rounded px-2 py-0.5 text-[11px] font-extrabold ${actionBadge.cls}`}>
+              {actionBadge.label}
+            </span>
+            <p className="min-w-0 text-xs leading-relaxed text-zinc-400">{row.reason ?? '当日没有触发新的买卖信号。'}</p>
+          </div>
+
+          <div className="mt-4 border-t border-zinc-800/60 pt-3">
+            <p className="mb-2 text-[10px] font-mono uppercase tracking-wider text-zinc-600">
+              当日成交 ({dayTrades.length})
+            </p>
+            {dayTrades.length === 0 ? (
+              <p className="text-[11px] text-zinc-600">当日无成交, 账户保持原仓位。</p>
+            ) : (
+              <div className="space-y-1.5">
+                {dayTrades.map((t, i) => (
+                  <div key={`day-trade-${t.id ?? t.date}-${i}`} className="flex flex-wrap items-center gap-2 font-mono text-[11px]">
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-extrabold ${
+                        t.type === 'BUY'
+                          ? 'bg-red-950/30 text-red-400'
+                          : 'bg-green-950/30 text-green-400'
+                      }`}
+                    >
+                      {t.type === 'BUY' ? '买' : '卖'}
+                    </span>
+                    <span className="text-zinc-300">¥{fmt(t.price)} × {t.shares} 股</span>
+                    <span className="text-zinc-500">= {money(t.value)}</span>
+                    {(t.fee ?? 0) > 0 && <span className="text-zinc-600">费 {money(t.fee ?? 0)}</span>}
+                    {t.pnl !== undefined && (
+                      <span className={t.pnl >= 0 ? 'text-red-400' : 'text-green-400'}>
+                        {t.pnl >= 0 ? '+' : ''}
+                        {money(t.pnl)}
+                      </span>
+                    )}
+                    {t.reason && (
+                      <span className="min-w-0 basis-full truncate font-sans text-[10px] text-zinc-600" title={t.reason}>
+                        {t.reason}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-zinc-800/80 bg-zinc-950/60 p-4 md:p-5">
+          <h5 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
+            <Wallet className="h-3.5 w-3.5 text-blue-400" />
+            账户与持仓
+            <span className="font-mono font-normal normal-case tracking-normal text-zinc-600">收盘盯市</span>
+          </h5>
+          <div className="mt-3 space-y-2 font-mono text-[11px]">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-zinc-500">现金 (前 → 后)</span>
+              <span className="text-zinc-300">
+                {money(prevRow?.cash ?? initialCash)} → {money(row.cash)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-zinc-500">权益 (前 → 后)</span>
+              <span className="text-zinc-300">
+                {money(prevRow?.equity ?? initialCash)} → {money(row.equity)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-zinc-500">持仓 (前 → 后)</span>
+              <span className="text-zinc-300">
+                {prevRow?.shares ?? 0} 股 → {row.shares} 股
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-zinc-500">持仓市值 / 仓位</span>
+              <span className="text-zinc-300">
+                {money(positionValue)} / {fmt(positionWeight, 1)}%
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-zinc-500">累计收益</span>
+              <span className={upDown(cumReturn)}>{pct(cumReturn)}</span>
+            </div>
+          </div>
+          <p className="mt-3 border-t border-zinc-800/60 pt-2.5 text-[10px] leading-relaxed text-zinc-600">
+            每次买卖按信号仓位和当日收盘价撮合, 权益按每日收盘价盯市; 固定止损为盘中止损单。
+          </p>
+        </div>
+      </div>
+
+      {/* 权益曲线 + 截至当日账本 */}
+      <section className="rounded-2xl border border-zinc-800/80 bg-zinc-950/60 p-4 md:p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h5 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
+            <LineChartIcon className="h-3.5 w-3.5 text-blue-400" />
+            权益曲线
+            <span className="font-mono font-normal normal-case tracking-normal text-zinc-600">
+              截至 {row.date}
+            </span>
+          </h5>
+          <span className="font-mono text-[10px] text-zinc-500">{equityDates.length} 个交易日</span>
+        </div>
+        <EquityChart
+          dates={equityDates}
+          values={equityValues}
+          initialBalance={initialCash}
+          gradientId={`equity-daybyday-${sessionId}`}
+          heightClass="h-52 md:h-60"
+        />
+      </section>
+
+      <section className="rounded-2xl border border-zinc-800/80 bg-zinc-950/60 p-4 md:p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h5 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
+            <ListOrdered className="h-3.5 w-3.5 text-blue-400" />
+            截至当日成交账本
+            <span className="font-mono font-normal normal-case tracking-normal text-zinc-600">
+              {visibleTrades.length} 笔
+            </span>
+          </h5>
+          <span className="text-[10px] text-zinc-600">只显示 {row.date} 及之前的成交</span>
+        </div>
+        <div className="max-h-80 overflow-y-auto">
+          <TradesTable trades={visibleTrades} />
+        </div>
+      </section>
+
+      <p className="px-1 text-[10px] leading-relaxed text-zinc-600">
+        当前视图只包含截至 {row.date} 的信息。切换「一次性回测」可查看完整区间报告与全量账本。
+      </p>
+    </section>
+  );
+}
+
+/**
+ * 选股池逐日时光机: 组合权益 / 等权现金与持仓 + 当日全池成交。
+ *
+ * 池内每只标的仍是独立名义本金账户, 组合按等权汇总; 因此现金与持仓市值为
+ * 「每只标的的等权平均」, 与组合权益曲线口径一致。
+ */
+function PoolDayByDayPanel({
+  timeline,
+  trades,
+  tradesLoading,
+  onExit,
+}: {
+  timeline: PoolTimelineView;
+  trades: PoolTradeLogRow[] | null;
+  tradesLoading: boolean;
+  onExit: () => void;
+}) {
+  const rows = timeline.rows;
+  const totalSteps = rows.length;
+  const [cursor, setCursor] = useState(0);
+  const safeCursor = Math.min(Math.max(cursor, 0), Math.max(totalSteps - 1, 0));
+  const row = rows[safeCursor];
+  const prevRow = safeCursor > 0 ? rows[safeCursor - 1] : null;
+
+  const dayTrades = useMemo(
+    () => (row && trades ? trades.filter((t) => t.date === row.date) : []),
+    [trades, row],
+  );
+
+  const cumulativeTrades = useMemo(
+    () => rows.slice(0, safeCursor + 1).reduce((sum, r) => sum + r.trades, 0),
+    [rows, safeCursor],
+  );
+
+  const prevTradeDayIndex = useMemo(() => {
+    for (let i = safeCursor - 1; i >= 0; i -= 1) {
+      if (rows[i].trades > 0) return i;
+    }
+    return -1;
+  }, [rows, safeCursor]);
+
+  if (!row) {
+    return (
+      <section className="rounded-2xl border border-zinc-800 bg-zinc-900/30 p-6 text-center text-xs text-zinc-500">
+        选股池时间轴为空, 请调整回测区间后重试。
+      </section>
+    );
+  }
+
+  const jumpToDate = (date: string) => {
+    if (!date) return;
+    let lo = 0;
+    let hi = rows.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (rows[mid].date < date) lo = mid + 1;
+      else hi = mid;
+    }
+    setCursor(Math.min(lo, rows.length - 1));
+  };
+
+  const dayPnl = row.equity - (prevRow?.equity ?? timeline.initialCash);
+  const cumReturn =
+    timeline.initialCash > 0
+      ? ((row.equity - timeline.initialCash) / timeline.initialCash) * 100
+      : 0;
+  const positionWeight = row.equity > 0 ? (row.positionValue / row.equity) * 100 : 0;
+  const tradedSymbols = new Set(dayTrades.map((t) => t.symbol)).size;
+  const equityDates = rows.slice(0, safeCursor + 1).map((r) => r.date);
+  const equityValues = rows.slice(0, safeCursor + 1).map((r) => r.equity);
+
+  return (
+    <section className="space-y-4 md:space-y-5">
+      {/* 头部 */}
+      <section className="rounded-2xl border border-blue-500/25 bg-gradient-to-br from-blue-500/[0.08] via-zinc-900/40 to-zinc-900/30 p-4 md:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="flex items-center gap-1.5 rounded-lg border border-blue-500/30 bg-blue-500/15 px-2.5 py-1 text-[11px] font-bold text-blue-300">
+                <History className="h-3.5 w-3.5" />
+                逐日时光机 · 选股池等权组合
+              </span>
+              <span className="font-mono text-[10px] text-zinc-500">
+                {timeline.dateRange.start} ~ {timeline.dateRange.end} · {totalSteps} 个交易日 · 成功 {timeline.tested} 只
+              </span>
+              <span className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">
+                名义本金 {money(timeline.initialCash)}/只
+              </span>
+            </div>
+            <p className="text-[11px] leading-relaxed text-zinc-500">
+              只显示截至当前交易日的组合权益与成交; 池内每只标的是独立名义本金账户, 现金与持仓市值按等权平均展示。
+            </p>
+          </div>
+          <button
+            onClick={onExit}
+            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-zinc-300 transition hover:border-zinc-600 hover:text-zinc-100 cursor-pointer"
+          >
+            <X className="h-3.5 w-3.5" />
+            查看组合报告
+          </button>
+        </div>
+      </section>
+
+      {/* 时间轴控制 */}
+      <section className="rounded-2xl border border-zinc-800/80 bg-zinc-950/60 p-4 md:p-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setCursor((v) => Math.max(0, v - 1))}
+            disabled={safeCursor <= 0}
+            className="rounded-lg border border-zinc-700 bg-zinc-800 p-2 text-zinc-300 transition hover:bg-zinc-700 disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
+            title="上一天"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => setCursor((v) => Math.min(totalSteps - 1, v + 1))}
+            disabled={safeCursor >= totalSteps - 1}
+            className="rounded-lg border border-zinc-700 bg-zinc-800 p-2 text-zinc-300 transition hover:bg-zinc-700 disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
+            title="下一天"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+          <span className="ml-1 text-[11px] text-zinc-500">
+            第 <span className="font-mono text-zinc-300">{safeCursor + 1}</span> / {totalSteps} 个交易日
+          </span>
+          <span className="font-mono text-xs font-bold text-blue-300">{row.date}</span>
+          <span
+            className={`rounded px-2 py-0.5 text-[10px] font-extrabold ${
+              row.trades > 0
+                ? 'border border-blue-900/30 bg-blue-950/30 text-blue-400'
+                : 'border border-zinc-700 bg-zinc-800 text-zinc-400'
+            }`}
+          >
+            当日成交 {row.trades} 笔
+          </span>
+
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => prevTradeDayIndex >= 0 && setCursor(prevTradeDayIndex)}
+              disabled={prevTradeDayIndex < 0}
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-[11px] font-semibold text-zinc-300 transition hover:border-zinc-600 hover:text-zinc-100 disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
+              title="回到最近一个已经发生成交的交易日"
+            >
+              <SkipBack className="h-3 w-3" />
+              上一成交日
+            </button>
+            <label className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-[11px] text-zinc-400">
+              <CalendarDays className="h-3.5 w-3.5" />
+              <input
+                type="date"
+                value={row.date}
+                min={timeline.dateRange.start}
+                max={timeline.dateRange.end}
+                onChange={(e) => jumpToDate(e.target.value)}
+                className="bg-transparent font-mono text-[11px] text-zinc-200 outline-none [color-scheme:dark]"
+                aria-label="回到指定交易日"
+              />
+            </label>
+          </div>
+        </div>
+
+        <input
+          type="range"
+          min={0}
+          max={Math.max(totalSteps - 1, 0)}
+          value={safeCursor}
+          onChange={(e) => setCursor(Number(e.target.value))}
+          className="mt-3 w-full cursor-pointer accent-blue-500"
+          aria-label="拖动查看任意交易日"
+        />
+        <div className="mt-1 flex justify-between font-mono text-[10px] text-zinc-600">
+          <span>{rows[0]?.date}</span>
+          <span>
+            {safeCursor + 1} / {totalSteps}
+          </span>
+          <span>{rows[totalSteps - 1]?.date}</span>
+        </div>
+      </section>
+
+      {/* 组合账户概览 (等权平均口径) */}
+      <div className="grid grid-cols-2 gap-2.5 md:grid-cols-4 md:gap-3">
+        <Kpi
+          label="组合权益 (等权)"
+          value={money(row.equity)}
+          tone={toneOf(dayPnl)}
+          sub={`当日 ${dayPnl >= 0 ? '+' : '-'}${money(Math.abs(dayPnl))}`}
+        />
+        <Kpi
+          label="累计收益"
+          value={pct(cumReturn)}
+          tone={toneOf(cumReturn)}
+          sub={`起始 ${money(timeline.initialCash)}/只`}
+        />
+        <Kpi
+          label="组合现金 (均值)"
+          value={money(row.cash)}
+          sub={prevRow ? `前一日 ${money(prevRow.cash)}` : '起始现金'}
+        />
+        <Kpi
+          label="持仓市值 (均值)"
+          value={money(row.positionValue)}
+          sub={`仓位 ${fmt(positionWeight, 1)}%`}
+        />
+        <Kpi
+          label="持仓标的"
+          value={`${row.positions} / ${timeline.tested}`}
+          tone={row.positions > 0 ? 'accent' : 'default'}
+          sub={prevRow ? `前一日 ${prevRow.positions} 只` : '起始为空仓'}
+        />
+        <Kpi
+          label="当日成交"
+          value={`${row.trades} 笔`}
+          sub={tradedSymbols > 0 ? `${tradedSymbols} 只标的` : '当日无交易'}
+        />
+        <Kpi
+          label="累计成交"
+          value={`${cumulativeTrades} 笔`}
+          sub="截至当前交易日"
+        />
+        <Kpi
+          label="组合权益变化"
+          value={`${dayPnl >= 0 ? '+' : '-'}${money(Math.abs(dayPnl))}`}
+          tone={toneOf(dayPnl)}
+          sub={prevRow ? `前一日 ${money(prevRow.equity)}` : '起始权益'}
+        />
+      </div>
+
+      {/* 组合权益曲线: 截至当前交易日 */}
+      <section className="rounded-2xl border border-zinc-800/80 bg-zinc-950/60 p-4 md:p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h5 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
+            <LineChartIcon className="h-3.5 w-3.5 text-blue-400" />
+            组合权益曲线 (等权)
+            <span className="font-mono font-normal normal-case tracking-normal text-zinc-600">
+              截至 {row.date}
+            </span>
+          </h5>
+          <span className="font-mono text-[10px] text-zinc-500">{equityDates.length} 个交易日</span>
+        </div>
+        <EquityChart
+          dates={equityDates}
+          values={equityValues}
+          initialBalance={timeline.initialCash}
+          gradientId="equity-pool-daybyday"
+          heightClass="h-52 md:h-60"
+        />
+      </section>
+
+      {/* 当日全池成交 */}
+      <section className="rounded-2xl border border-zinc-800/80 bg-zinc-950/60 p-4 md:p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h5 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
+            <ClipboardList className="h-3.5 w-3.5 text-blue-400" />
+            当日组合成交
+            <span className="font-mono font-normal normal-case tracking-normal text-zinc-600">
+              {row.date} · {dayTrades.length} 笔
+            </span>
+          </h5>
+          <span className="text-[10px] text-zinc-600">只显示当日成交, 累计 {cumulativeTrades} 笔</span>
+        </div>
+
+        {tradesLoading ? (
+          <div className="flex items-center gap-2 py-6 text-xs text-zinc-500">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            正在加载全池成交明细…
+          </div>
+        ) : !trades ? (
+          <p className="py-6 text-center text-xs text-zinc-600">全池成交明细暂不可用。</p>
+        ) : dayTrades.length === 0 ? (
+          <p className="py-6 text-center text-xs text-zinc-600">当日无成交, 各标的保持原仓位。</p>
+        ) : (
+          <div className="max-h-80 overflow-y-auto">
+            <table className="w-full text-left font-mono text-[11px]">
+              <thead className="sticky top-0 bg-zinc-950 text-[10px] uppercase tracking-wider text-zinc-600">
+                <tr>
+                  <th className="px-2 py-2 font-semibold">标的</th>
+                  <th className="px-2 py-2 font-semibold">方向</th>
+                  <th className="px-2 py-2 text-right font-semibold">价格</th>
+                  <th className="px-2 py-2 text-right font-semibold">股数</th>
+                  <th className="px-2 py-2 text-right font-semibold">金额</th>
+                  <th className="px-2 py-2 text-right font-semibold">费用</th>
+                  <th className="px-2 py-2 text-right font-semibold">盈亏</th>
+                  <th className="px-2 py-2 font-semibold">信号依据</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dayTrades.map((t, i) => (
+                  <tr key={`pool-day-trade-${t.symbol}-${i}`} className="border-t border-zinc-800/60">
+                    <td className="px-2 py-2">
+                      <span className="text-zinc-200">{t.code}</span>
+                      {t.name ? <span className="ml-1.5 font-sans text-[10px] text-zinc-500">{t.name}</span> : null}
+                    </td>
+                    <td className="px-2 py-2">
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-extrabold ${
+                          t.type === 'BUY' ? 'bg-red-950/30 text-red-400' : 'bg-green-950/30 text-green-400'
+                        }`}
+                      >
+                        {t.type === 'BUY' ? '买' : '卖'}
+                      </span>
+                    </td>
+                    <td className="px-2 py-2 text-right text-zinc-300">{fmt(t.price)}</td>
+                    <td className="px-2 py-2 text-right text-zinc-400">{t.shares}</td>
+                    <td className="px-2 py-2 text-right text-zinc-400">{money(t.value)}</td>
+                    <td className="px-2 py-2 text-right text-zinc-600">{money(t.fee)}</td>
+                    <td className={`px-2 py-2 text-right ${(t.pnl ?? 0) >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+                      {t.pnl === undefined ? '—' : `${t.pnl >= 0 ? '+' : ''}${money(t.pnl)}`}
+                    </td>
+                    <td className="max-w-[16rem] truncate px-2 py-2 font-sans text-[10px] text-zinc-600" title={t.reason}>
+                      {t.reason ?? '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <p className="px-1 text-[10px] leading-relaxed text-zinc-600">
+        当前视图只包含截至 {row.date} 的组合信息。切换「组合报告」可查看全区间排行榜与完整成交账本。
+      </p>
+    </section>
+  );
+}
+
 /** 单标的绩效卡组 (单标的模式与池下钻共用) */
 function SymbolKpiGrid({ detail }: { detail: PoolSymbolDetailView }) {
   const r = detail.result;
@@ -553,11 +1386,17 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
     symbol: initialSymbol ? resolveSymbol(initialSymbol).resolved : '',
     ...DEFAULT_SINGLE,
   }));
+  /** 单标的运行方式: 逐日时光机 (默认) / 一次性完整回测 */
+  const [singleRunMode, setSingleRunMode] = useState<'day' | 'batch'>('day');
   const [singleResult, setSingleResult] = useState<PoolSymbolDetailView | null>(null);
   const [singleLoading, setSingleLoading] = useState(false);
   /** 单标的回测的实时进度 (请求进行中轮询服务端, 见 server/backtestProgress.ts) */
   const [singleProgress, setSingleProgress] = useState<BacktestProgressView | null>(null);
   const [progressId, setProgressId] = useState<string | null>(null);
+  /** 逐日模拟会话 (服务端录制好的时间轴 + 图表 K 线) */
+  const [daySession, setDaySession] = useState<DaySessionState | null>(null);
+  const [dayLoading, setDayLoading] = useState(false);
+  const daySessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (initialSymbol && single.symbol === '') {
@@ -596,6 +1435,14 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
   const [job, setJob] = useState<PoolBacktestJobView | null>(null);
   const [poolLoading, setPoolLoading] = useState(false);
   const [poolError, setPoolError] = useState<string | null>(null);
+  /** 池模式运行方式: 逐日时光机 (默认) / 一次性组合报告 */
+  const [poolRunMode, setPoolRunMode] = useState<'day' | 'batch'>('day');
+  /** 池逐日时间轴 (服务端按需构建, 之后本地切换) */
+  const [poolTimeline, setPoolTimeline] = useState<PoolTimelineView | null>(null);
+  const [poolTimelineLoading, setPoolTimelineLoading] = useState(false);
+  /** 池全池成交明细 (逐日模式复用同一份数据, 只展示当日) */
+  const [poolTimelineTrades, setPoolTimelineTrades] = useState<PoolTradeLogRow[] | null>(null);
+  const [poolTimelineTradesLoading, setPoolTimelineTradesLoading] = useState(false);
   const [detailSymbol, setDetailSymbol] = useState<string | null>(null);
   const [detail, setDetail] = useState<PoolSymbolDetailView | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -706,6 +1553,9 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
     setTradeLogQuery('');
     setTradeLogLimit(TRADE_LOG_PAGE_SIZE);
     setPoolTableTab('leader');
+    setPoolTimeline(null);
+    setPoolTimelineTrades(null);
+    poolTimelineJobRef.current = null;
   }, [jobId]);
 
   // 单标的回测进度: 请求进行中轮询服务端阶段进度 (拉取 K 线 → 回测计算)。
@@ -775,6 +1625,76 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
   );
 
   const commissionRateOf = (wan: number) => wan / 10_000;
+
+  // 离开页面时主动结束逐日模拟会话 (服务端也会按 TTL 自动回收)
+  useEffect(
+    () => () => {
+      if (daySessionIdRef.current) void closeStepperSession(daySessionIdRef.current);
+    },
+    [],
+  );
+
+  const handleCloseDaySession = useCallback(() => {
+    const id = daySessionIdRef.current;
+    daySessionIdRef.current = null;
+    setDaySession(null);
+    if (id) void closeStepperSession(id);
+  }, []);
+
+  // ---- 单标的逐日模拟 (时光机) ----
+  const handleRunDayByDay = useCallback(async () => {
+    setError(null);
+    setDaySession(null);
+    setDayLoading(true);
+    // 先释放上一个会话, 避免服务端堆积
+    if (daySessionIdRef.current) {
+      void closeStepperSession(daySessionIdRef.current);
+      daySessionIdRef.current = null;
+    }
+    let createdSessionId: string | null = null;
+    try {
+      if (paramValues === null) throw new Error('策略参数 JSON 格式无效, 请检查');
+      const resolved = resolveSymbol(single.symbol.trim()).resolved;
+      const body: BacktestStepperRequest = {
+        symbol: resolved,
+        strategyId,
+        period: '1d',
+        adjust: 'forward',
+        initialCash: single.initialCash,
+        commissionRate: commissionRateOf(single.commissionRateWan),
+        minCommission: single.minCommission,
+        params: paramValues,
+        refresh: single.forceRefresh,
+      };
+      if (single.rangeStart) body.rangeStart = single.rangeStart;
+      if (single.rangeEnd) body.rangeEnd = single.rangeEnd;
+      if (single.stopLossPercent) body.stopLossPercent = parseFloat(single.stopLossPercent);
+
+      const created = await createStepperSession(body);
+      createdSessionId = created.sessionId;
+      daySessionIdRef.current = created.sessionId;
+
+      // 时间轴与 K 线并行加载; 图表只负责显示, 不再参与策略计算
+      const [timeline, chartKlines] = await Promise.all([
+        getStepperTimeline(created.sessionId),
+        fetchSimulationKlines(resolved, single.forceRefresh),
+      ]);
+      setDaySession({
+        sessionId: created.sessionId,
+        timeline,
+        klines: chartKlines,
+        symbol: resolved,
+        strategyName: selectedStrategy?.name ?? strategyId,
+        initialCash: single.initialCash,
+      });
+    } catch (err) {
+      if (createdSessionId) void closeStepperSession(createdSessionId);
+      daySessionIdRef.current = null;
+      setError(err instanceof Error ? err.message : '逐日模拟失败，请检查参数与网络');
+    } finally {
+      setDayLoading(false);
+    }
+  }, [single, strategyId, paramValues, selectedStrategy?.name]);
 
   // ---- 单标的回测 ----
   const handleRunSingle = useCallback(async () => {
@@ -1140,6 +2060,43 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
     [jobId, tradeLog],
   );
 
+  // ---- 池逐日时光机: 时间轴 + 全池成交 (按需加载一次, 之后本地切换) ----
+  const poolTimelineJobRef = useRef<string | null>(null);
+
+  const handleLoadPoolTimeline = useCallback(async () => {
+    if (!jobId) return;
+    poolTimelineJobRef.current = jobId;
+    setPoolError(null);
+    setPoolTimelineLoading(true);
+    setPoolTimelineTradesLoading(true);
+    try {
+      const resp = await fetch(`/api/backtest/pool/${jobId}/timeline`);
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error((err as { error?: string })?.error || `时间轴加载失败 (${resp.status})`);
+      }
+      setPoolTimeline((await resp.json()) as PoolTimelineView);
+    } catch (err) {
+      setPoolError(err instanceof Error ? err.message : '池逐日时间轴加载失败');
+      poolTimelineJobRef.current = null;
+    } finally {
+      setPoolTimelineLoading(false);
+    }
+    // 成交明细失败不影响时间轴与组合曲线
+    const data = tradeLog ?? (await loadTradeLog());
+    if (data) setPoolTimelineTrades(data.trades);
+    setPoolTimelineTradesLoading(false);
+  }, [jobId, tradeLog, loadTradeLog]);
+
+  // 回测完成后, 逐日模式自动准备时间轴 (每个任务只自动尝试一次)
+  useEffect(() => {
+    if (mode !== 'pool' || poolRunMode !== 'day') return;
+    if (!jobId || job?.state !== 'done') return;
+    if (poolTimeline || poolTimelineLoading) return;
+    if (poolTimelineJobRef.current === jobId) return;
+    void handleLoadPoolTimeline();
+  }, [mode, poolRunMode, jobId, job?.state, poolTimeline, poolTimelineLoading, handleLoadPoolTimeline]);
+
   const handleExportTrades = useCallback(async () => {
     const data = tradeLog ?? (await loadTradeLog());
     if (!data || data.trades.length === 0) {
@@ -1208,7 +2165,8 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
     );
   }
 
-  const singleCanRun = !!single.symbol.trim() && !!strategyId && !singleLoading;
+  const singleBusy = singleRunMode === 'day' ? dayLoading : singleLoading;
+  const singleCanRun = !!single.symbol.trim() && !!strategyId && !singleBusy;
   const poolCanRun = poolEffectiveCount > 0 && !!strategyId && !poolRunning;
 
   const leaderVisible = showAllRows ? leaderRows : leaderRows.slice(0, LEADER_PAGE_SIZE);
@@ -1701,12 +2659,73 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
               </>
             )}
             </p>
+
+            {mode === 'single' && (
+              <div className="flex rounded-xl border border-zinc-800 bg-zinc-950/70 p-0.5">
+                <button
+                  onClick={() => setSingleRunMode('day')}
+                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition cursor-pointer ${
+                    singleRunMode === 'day'
+                      ? 'bg-blue-500/20 text-blue-300'
+                      : 'text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  <History className="h-3.5 w-3.5" />
+                  逐日时光机
+                </button>
+                <button
+                  onClick={() => setSingleRunMode('batch')}
+                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition cursor-pointer ${
+                    singleRunMode === 'batch'
+                      ? 'bg-blue-500/20 text-blue-300'
+                      : 'text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  <FileCode2 className="h-3.5 w-3.5" />
+                  一次性回测
+                </button>
+              </div>
+            )}
+
+            {mode === 'pool' && (
+              <div className="flex rounded-xl border border-zinc-800 bg-zinc-950/70 p-0.5">
+                <button
+                  onClick={() => setPoolRunMode('day')}
+                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition cursor-pointer ${
+                    poolRunMode === 'day'
+                      ? 'bg-blue-500/20 text-blue-300'
+                      : 'text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  <History className="h-3.5 w-3.5" />
+                  逐日时光机
+                </button>
+                <button
+                  onClick={() => setPoolRunMode('batch')}
+                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition cursor-pointer ${
+                    poolRunMode === 'batch'
+                      ? 'bg-blue-500/20 text-blue-300'
+                      : 'text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  <ClipboardList className="h-3.5 w-3.5" />
+                  组合报告
+                </button>
+              </div>
+            )}
+
             <button
-              onClick={() => void (mode === 'single' ? handleRunSingle() : handleRunPool())}
+              onClick={() =>
+                void (mode === 'single'
+                  ? singleRunMode === 'day'
+                    ? handleRunDayByDay()
+                    : handleRunSingle()
+                  : handleRunPool())
+              }
               disabled={mode === 'single' ? !singleCanRun : !poolCanRun}
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-500 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-blue-500/10 transition hover:bg-blue-400 active:bg-blue-600 disabled:opacity-50 cursor-pointer"
             >
-            {mode === 'single' && singleLoading ? (
+            {mode === 'single' && singleBusy ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : poolRunning ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -1715,9 +2734,15 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
             )}
             <span>
               {mode === 'single'
-                ? singleLoading
-                  ? '回测中…'
-                  : '运行模拟回测'
+                ? singleRunMode === 'day'
+                  ? dayLoading
+                    ? '录制时间轴…'
+                    : daySession
+                      ? '重新开始逐日模拟'
+                      : '开始逐日模拟'
+                  : singleLoading
+                    ? '回测中…'
+                    : '运行一次性回测'
                 : poolRunning
                   ? '池回测进行中…'
                   : '运行选股池回测'}
@@ -1738,12 +2763,30 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
           )}
 
           {/* ================= 单标的进度 ================= */}
-          {mode === 'single' && singleLoading && (
+          {mode === 'single' && singleRunMode === 'batch' && singleLoading && (
             <SingleRunProgress
               progress={singleProgress}
               now={now}
               title={`${single.symbol || '—'} · ${selectedStrategy?.name ?? '策略'}`}
             />
+          )}
+
+          {/* ================= 逐日模拟录制中 ================= */}
+          {mode === 'single' && singleRunMode === 'day' && dayLoading && (
+            <section className="rounded-2xl border border-blue-500/25 bg-blue-500/[0.05] p-4 md:p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-sm font-semibold text-blue-300">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  正在录制逐日时间轴…
+                </div>
+                <span className="truncate font-mono text-[11px] text-zinc-500">
+                  {single.symbol || '—'} · {selectedStrategy?.name ?? '策略'}
+                </span>
+              </div>
+              <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
+                服务端会一次性回放整段行情并记录每一天的决策、成交、账户与权益; 之后拖动时光机只切换本地索引, 不再重新计算。
+              </p>
+            </section>
           )}
 
           {/* ================= 池回测进度 ================= */}
@@ -1821,8 +2864,49 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
             </div>
           )}
 
+          {/* ================= 池逐日时光机 ================= */}
+          {mode === 'pool' && poolRunMode === 'day' && poolTimelineLoading && !poolTimeline && (
+            <section className="rounded-2xl border border-blue-500/25 bg-blue-500/[0.05] p-4 md:p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-sm font-semibold text-blue-300">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  正在准备逐日组合时间轴…
+                </div>
+                <span className="font-mono text-[11px] text-zinc-500">
+                  {selectedStrategy?.name ?? '策略'} · 等权组合
+                </span>
+              </div>
+              <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
+                组合权益直接取自回测结果, 现金 / 持仓市值按各标的等权平均; 准备完成后拖动时光机只切换本地索引。
+              </p>
+            </section>
+          )}
+          {mode === 'pool' && poolRunMode === 'day' && poolTimeline && (
+            <PoolDayByDayPanel
+              key={poolTimeline.jobId}
+              timeline={poolTimeline}
+              trades={poolTimelineTrades}
+              tradesLoading={poolTimelineTradesLoading}
+              onExit={() => setPoolRunMode('batch')}
+            />
+          )}
+
+          {/* ================= 逐日时光机 ================= */}
+          {mode === 'single' && singleRunMode === 'day' && daySession && (
+            <DayByDayPanel
+              key={daySession.sessionId}
+              sessionId={daySession.sessionId}
+              timeline={daySession.timeline}
+              klines={daySession.klines}
+              symbol={daySession.symbol}
+              strategyName={daySession.strategyName}
+              initialCash={daySession.initialCash}
+              onClose={handleCloseDaySession}
+            />
+          )}
+
           {/* ================= 单标的报告 ================= */}
-          {mode === 'single' && singleResult && (
+          {mode === 'single' && singleRunMode === 'batch' && singleResult && (
             <section className="space-y-4 md:space-y-5">
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-zinc-800/80 bg-zinc-900/30 px-4 py-3">
                 <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400">
@@ -1908,7 +2992,7 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
           )}
 
           {/* ================= 选股池报告 ================= */}
-          {mode === 'pool' && poolSummary && (
+          {mode === 'pool' && poolRunMode === 'batch' && poolSummary && (
             <section className="space-y-4 md:space-y-5">
 
               {/* 组合 KPI */}
@@ -2414,14 +3498,25 @@ export default function SimulationView({ symbol: initialSymbol, klines }: Simula
           )}
 
           {/* 空态引导 */}
-          {((mode === 'single' && !singleResult && !singleLoading) ||
-            (mode === 'pool' && !poolSummary && job?.state !== 'running')) && (
+          {((mode === 'single' &&
+            (singleRunMode === 'day'
+              ? !daySession && !dayLoading
+              : !singleResult && !singleLoading)) ||
+            (mode === 'pool' &&
+              job?.state !== 'running' &&
+              (poolRunMode === 'day'
+                ? !poolSummary || (!poolTimeline && !poolTimelineLoading)
+                : !poolSummary))) && (
             <section className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-zinc-800 bg-zinc-900/20 py-12 text-center xl:min-h-[460px]">
               <LineChartIcon className="h-7 w-7 text-zinc-700" />
               <p className="text-xs text-zinc-500">
                 {mode === 'single'
-                  ? '在左侧设置标的与策略参数后, 点击「运行模拟回测」查看绩效报告'
-                  : '在左侧选择股票池与策略后, 点击「运行选股池回测」查看组合报告与逐标的排行榜'}
+                  ? singleRunMode === 'day'
+                    ? '在左侧设置标的与策略参数后, 点击「开始逐日模拟」, 像时光机一样逐日查看账户与仓位'
+                    : '在左侧设置标的与策略参数后, 点击「运行一次性回测」查看完整绩效报告'
+                  : poolRunMode === 'day'
+                    ? '在左侧选择股票池与策略后, 点击「运行选股池回测」, 像时光机一样逐日查看组合权益与当日成交'
+                    : '在左侧选择股票池与策略后, 点击「运行选股池回测」查看组合报告与逐标的排行榜'}
               </p>
             </section>
           )}

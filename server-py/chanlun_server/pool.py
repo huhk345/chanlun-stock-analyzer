@@ -218,6 +218,8 @@ class PoolJob:
     details: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     failures: List[Dict[str, str]] = field(default_factory=list)
     summary: Optional[Dict[str, Any]] = None
+    #: 逐日组合时间轴 (等权平均口径), 首次访问时按需构建并缓存
+    timeline: Optional[Dict[str, Any]] = None
     cancelled: bool = False
     created_at: float = field(default_factory=time.time)
 
@@ -268,6 +270,105 @@ class PoolJob:
                 )
         rows.sort(key=lambda r: (r["date"], r["symbol"]))
         return {"trades": rows, "total": len(rows)}
+
+    def build_timeline(self) -> Dict[str, Any]:
+        """逐日组合时间轴: 组合权益 + 等权平均现金/持仓市值 + 当日成交笔数。
+
+        每只标的仍是独立名义本金的账户, 因此现金/持仓市值取等权平均,
+        与组合权益曲线 (各标的归一化权益的平均) 口径一致。
+        """
+        if self.timeline is not None:
+            return self.timeline
+        summary = self.summary
+        if not summary:
+            raise ValueError("回测尚未完成, 暂无逐日时间轴")
+
+        dates: List[str] = list(summary.get("equityDates") or [])
+        equity_curve: List[float] = list(summary.get("equityCurve") or [])
+        initial_cash = float(summary.get("initialCash") or DEFAULT_PER_SYMBOL_CASH)
+
+        series: List[Tuple[List[str], List[float], List[Dict[str, Any]]]] = []
+        trade_counts: Dict[str, int] = {}
+        for detail in self.details.values():
+            eq_dates = list(detail.get("equityDates") or [])
+            eq_curve = list(detail.get("equityCurve") or [])
+            trades = sorted(
+                detail.get("result", {}).get("trades") or [],
+                key=lambda t: str(t.get("date") or ""),
+            )
+            series.append((eq_dates, eq_curve, trades))
+            for trade in trades:
+                date = str(trade.get("date") or "")
+                if date:
+                    trade_counts[date] = trade_counts.get(date, 0) + 1
+
+        count = len(series)
+        eq_cursor = [0] * count
+        trade_cursor = [0] * count
+        last_equity = [initial_cash] * count
+        cash = [initial_cash] * count
+        shares = [0.0] * count
+
+        rows: List[Dict[str, Any]] = []
+        for index, date in enumerate(dates):
+            total_cash = 0.0
+            total_position = 0.0
+            held = 0
+            for i, (eq_dates, eq_curve, trades) in enumerate(series):
+                cursor = eq_cursor[i]
+                while cursor < len(eq_dates) and eq_dates[cursor] <= date:
+                    if cursor < len(eq_curve):
+                        last_equity[i] = float(eq_curve[cursor])
+                    cursor += 1
+                eq_cursor[i] = cursor
+
+                cursor = trade_cursor[i]
+                while cursor < len(trades) and str(trades[cursor].get("date") or "") <= date:
+                    trade = trades[cursor]
+                    value = float(trade.get("value") or 0.0)
+                    fee = float(trade.get("fee") or 0.0)
+                    quantity = float(trade.get("shares") or 0.0)
+                    if trade.get("type") == "BUY":
+                        cash[i] -= value + fee
+                        shares[i] += quantity
+                    else:
+                        cash[i] += value - fee
+                        shares[i] -= quantity
+                    cursor += 1
+                trade_cursor[i] = cursor
+
+                position = last_equity[i] - cash[i]
+                if -1e-6 < position < 0:
+                    position = 0.0
+                total_cash += cash[i]
+                total_position += position
+                if shares[i] > 0:
+                    held += 1
+
+            equity = float(equity_curve[index]) if index < len(equity_curve) else initial_cash
+            rows.append(
+                {
+                    "index": index,
+                    "date": date,
+                    "equity": equity,
+                    "cash": total_cash / count if count else initial_cash,
+                    "positionValue": total_position / count if count else 0.0,
+                    "positions": held,
+                    "trades": trade_counts.get(date, 0),
+                }
+            )
+
+        self.timeline = {
+            "jobId": self.id,
+            "initialCash": initial_cash,
+            "tested": len(self.rows),
+            "dateRange": {
+                "start": dates[0] if dates else "",
+                "end": dates[-1] if dates else "",
+            },
+            "rows": rows,
+        }
+        return self.timeline
 
     def cancel(self) -> None:
         self.cancelled = True

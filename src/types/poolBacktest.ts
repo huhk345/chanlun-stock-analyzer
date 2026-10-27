@@ -183,6 +183,33 @@ export interface PoolSymbolDetailView {
 }
 
 /**
+ * 选股池逐日时间轴 (GET /api/backtest/pool/:id/timeline)。
+ *
+ * 每只标的仍是独立名义本金账户, 组合按等权汇总:
+ * - equity: 组合权益 (各标的权益的等权平均)
+ * - cash / positionValue: 各标的现金 / 持仓市值的等权平均
+ * - positions: 当日有持仓的标的数
+ */
+export interface PoolTimelineRow {
+  index: number;
+  date: string;
+  equity: number;
+  cash: number;
+  positionValue: number;
+  positions: number;
+  /** 当日全池成交笔数 */
+  trades: number;
+}
+
+export interface PoolTimelineView {
+  jobId: string;
+  initialCash: number;
+  tested: number;
+  dateRange: { start: string; end: string };
+  rows: PoolTimelineRow[];
+}
+
+/**
  * 全池逐笔成交 (合并所有标的, 按 日期 -> 标的 升序)。
  * 仅包含实际成交记录 (策略买卖 + 止损平仓), 未产生交易的标的不会出现。
  */
