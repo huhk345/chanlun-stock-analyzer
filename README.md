@@ -112,39 +112,22 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
 
    The single-stock analysis endpoints (`/api/chanlun/*`) still fall back to in-browser computation when the backend is down; the 买卖点扫描 requires the backend and shows a reconnect banner when the socket drops.
 
-   **Python backend (`server-py/`, alternative)** — the analysis + backtest server has been rewritten in Python with zero third-party runtime dependencies. Same paths, same JSON keys, same status codes, same execution model, so the frontend needs no change:
-   ```bash
-   pnpm run py:setup     # create server-py/.venv and install pytest
-   pnpm run server:py    # python -m chanlun_server serve, listens on :8899
-   pnpm run test:py      # three-part test suite
-   ```
-   The port is behavioural, not approximate: on the same cached bars both engines emit the same trade ledger, fees included (asserted against the TypeScript engine and a recorded real-data golden fixture).
-
-   Tests are split into **three parts**, each a separate pytest invocation with its own marker, orchestrated by `server-py/run_tests.py`:
-
-   | Part | Marker | Scope | Time |
-   | --- | --- | --- | --- |
-   | 1 · unit | `unit` | pure functions: ChanLun, fees, metrics, indicators, sandbox | ~0.5 s |
-   | 2 · integration | `integration` | engine + registry + router + cache in-process; prefix invariance (no look-ahead), stepper parity, TS-engine parity | ~14 s |
-   | 3 · e2e | `e2e` | real server subprocess, real HTTP, CORS, CLI | ~1.5 s |
-
-   Not ported: the `/ws` scan socket, `/api/scan/cache` (explicit stub) and `/api/simulation/*` (the shared-cash simulation was replaced by the equal-weight pool backtest). See [`server-py/README.md`](server-py/README.md) for the full matrix.
+   > **The backend is no longer part of this repository.** `server-py/` has been removed; the frontend still talks to an analysis / backtest server on `:8899` over `/api` and `/ws`, so that server has to be started separately (the API contract below is unchanged).
 
    **Two interchangeable backtest engines** — the strategy contract (`decide(ctx) -> {action, amount, reason}`, where `action` is BUY / SELL / HOLD and `amount` is cash / shares / percent) is engine-agnostic. Pick one per request with `engine`:
 
    | `engine` | Implementation | Notes |
    | --- | --- | --- |
-   | `native` (default) | `chanlun_server/runner.py` — hand-rolled bar loop | zero dependencies; the ledger pinned to the TypeScript golden fixture |
-   | `backtrader` | `chanlun_server/bt_engine.py` — [backtrader](https://www.backtrader.com/) | mature broker/order model from the framework; needs `pip install backtrader` |
+   | `native` (default) | hand-rolled bar loop | zero dependencies; the ledger pinned to the TypeScript golden fixture |
+   | `backtrader` | [backtrader](https://www.backtrader.com/) | mature broker/order model from the framework; needs `pip install backtrader` |
 
    ```bash
    pip install backtrader                       # optional, only for engine=backtrader
-   python -m chanlun_server backtest --symbol 300750.SZ --strategy ma-cross --engine backtrader
    curl -s localhost:8899/api/backtest/run -H 'Content-Type: application/json' \
      -d '{"symbol":"300750.SZ","strategyId":"ma-cross","engine":"backtrader"}'
    ```
 
-   Both engines fill at the signal bar's close (`broker.set_coc(True)` in backtrader), enforce 100-share lots, T+1, limit-up/limit-down rejection and the same commission + stamp-duty + transfer-fee model, and return the same `BacktestResult` JSON. `tests/part2_integration/test_backtrader_engine.py` asserts trade-for-trade equality between them — including the stop-loss ledger and the recorded real-data golden fixture — so switching engines changes features, not numbers.
+   Both engines fill at the signal bar's close (`broker.set_coc(True)` in backtrader), enforce 100-share lots, T+1, limit-up/limit-down rejection and the same commission + stamp-duty + transfer-fee model, and return the same `BacktestResult` JSON — switching engines changes features, not numbers.
 
    **The strategy owns its K-lines.** The backtrader adapter keeps an append-only `list[Kline]` and recomputes ChanLun + indicator snapshots from it on every bar, handing them to the strategy as `ctx.klines` / `ctx.chanlun` / `ctx.indicators`. A strategy never re-reads the feed and physically cannot see a future bar:
 
@@ -302,39 +285,22 @@ pnpm exec tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
    ```
    922 根 K 线实测: 录制 ~1.9s (与批量回测同价), 时间轴 200KB, 跳转 ~10µs, 再次打开命中磁盘录制 ~20ms。每一天都带着决策、成交、现金/持仓、收盘盯市权益、指标快照与缠论摘要。
 
-7. **Python 后端 (`server-py/`, 可选替换)** — 分析与回测服务端已用 Python 重写, 运行时零第三方依赖; 路径、JSON 字段、状态码与撮合规则都与 Node 版一致, 前端无需改动:
-   ```bash
-   pnpm run py:setup   # 创建 server-py/.venv 并安装 pytest
-   pnpm run server:py  # python -m chanlun_server serve, 监听 :8899
-   pnpm run test:py    # 三阶段测试
-   ```
-   这是行为级移植而非近似实现: 同一份缓存 K 线在两侧引擎上跑出的逐笔成交 (含每笔费用)、期末权益与权益曲线长度完全一致 —— 由「与 TypeScript 引擎实时比对」和「真实行情 golden 用例」共同保证。
-
-   测试按**三部分**拆分, 每部分是一个独立的 pytest 调用 (各自带 marker), 由 `server-py/run_tests.py` 统一调度并汇总:
-
-   | 阶段 | marker | 覆盖范围 | 耗时 |
-   | --- | --- | --- | --- |
-   | 1 · 单元 | `unit` | 纯函数: 缠论 / 费用 / 指标 / 沙箱 | ~0.5s |
-   | 2 · 集成 | `integration` | 引擎 + 注册表 + 路由 + 缓存, 进程内; 前缀不变性 (无未来数据)、单步与批量一致、与 TS 引擎逐笔一致 | ~14s |
-   | 3 · 端到端 | `e2e` | 真实子进程 + 真实 HTTP: CORS、错误码、并发、CLI | ~1.5s |
-
-   未移植: `/ws` 扫描通道、`/api/scan/cache` (返回明确占位)、`/api/simulation/*` (共享资金模拟已由等权选股池回测取代)。完整对照见 [`server-py/README.md`](server-py/README.md)。
+   > **后端已不在本仓库内。** `server-py/` 已删除; 前端仍然通过 `/api` 与 `/ws` 访问 `:8899` 上的分析 / 回测服务端, 需另行启动 (下面的接口契约不变)。
 
    **两套可互换的回测引擎** —— 策略契约 (`decide(ctx) -> {action, amount, reason}`, `action` 为 BUY / SELL / HOLD, `amount` 支持 cash / shares / percent) 与引擎无关, 每次请求用 `engine` 选一个:
 
    | `engine` | 实现 | 说明 |
    | --- | --- | --- |
-   | `native` (默认) | `chanlun_server/runner.py`, 手写逐根循环 | 零依赖; 账本锚定 TypeScript golden 用例 |
-   | `backtrader` | `chanlun_server/bt_engine.py`, 开源 [backtrader](https://www.backtrader.com/) | 撮合/委托模型交给框架; 需 `pip install backtrader` |
+   | `native` (默认) | 手写逐根循环 | 零依赖; 账本锚定 TypeScript golden 用例 |
+   | `backtrader` | 开源 [backtrader](https://www.backtrader.com/) | 撮合/委托模型交给框架; 需 `pip install backtrader` |
 
    ```bash
    pip install backtrader                       # 可选, 仅 engine=backtrader 需要
-   python -m chanlun_server backtest --symbol 300750.SZ --strategy ma-cross --engine backtrader
    curl -s localhost:8899/api/backtest/run -H 'Content-Type: application/json' \
      -d '{"symbol":"300750.SZ","strategyId":"ma-cross","engine":"backtrader"}'
    ```
 
-   两套引擎都按信号当根收盘价成交 (backtrader 侧用 `broker.set_coc(True)`), 都执行 100 股整手、T+1、涨跌停拦截与同一套佣金 + 印花税 + 过户费模型, 返回同一个 `BacktestResult` JSON。`tests/part2_integration/test_backtrader_engine.py` 逐笔比对两套引擎 (含止损账本与真实行情 golden 用例), 所以换引擎只换能力, 不换数字。
+   两套引擎都按信号当根收盘价成交 (backtrader 侧用 `broker.set_coc(True)`), 都执行 100 股整手、T+1、涨跌停拦截与同一套佣金 + 印花税 + 过户费模型, 返回同一个 `BacktestResult` JSON —— 换引擎只换能力, 不换数字。
 
    **K 线由策略自己保管** —— backtrader 适配器维护一份只增不改的 `list[Kline]`, 每根 K 线都从这份缓冲重算缠论结构与指标快照, 再作为 `ctx.klines` / `ctx.chanlun` / `ctx.indicators` 交给策略。策略因此不需要回读数据源, 也物理上拿不到未来数据:
 
