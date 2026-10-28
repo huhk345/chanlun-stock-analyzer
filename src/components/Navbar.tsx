@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User, LogOut, CheckCircle, AlertTriangle, Settings, Search, LineChart, Clock, X, ChevronDown, TrendingUp, TrendingDown, Info, LayoutDashboard, ChartCandlestick, Play } from 'lucide-react';
+import { User, LogOut, CheckCircle, AlertTriangle, Settings, Search, LineChart, Clock, X, ChevronDown, TrendingUp, TrendingDown, Info, LayoutDashboard, ChartCandlestick } from 'lucide-react';
 import { getCurrentUser, signInUser, signUpUser, signOutUser, isUsingMockDb, SupabaseUser } from '../utils/supabase';
 import { Kline, StockBasicInfo } from '../types/stock';
 
-type ViewMode = 'dashboard' | 'indexes' | 'analyzer' | 'simulation';
+type ViewMode = 'dashboard' | 'indexes' | 'analyzer';
 
 interface NavbarProps {
   onUserChanged: (user: SupabaseUser | null) => void;
@@ -294,7 +294,7 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
   };
 
   const routeFor = (nextView: ViewMode) => {
-    if (nextView === 'analyzer' || nextView === 'simulation') {
+    if (nextView === 'analyzer') {
       return activeSymbol
         ? `/${nextView}/${encodeURIComponent(activeSymbol)}`
         : `/${nextView}`;
@@ -384,22 +384,6 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
             >
               <LineChart className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">个股分析</span>
-            </a>
-            <a
-              href={routeFor('simulation')}
-              onClick={(e) => {
-                e.preventDefault();
-                onViewChange('simulation');
-              }}
-              className={`flex items-center gap-1.5 h-8 px-2 md:px-3 rounded-md text-xs font-medium transition-all cursor-pointer ${
-                view === 'simulation'
-                  ? 'bg-blue-500/15 text-blue-400 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.3)]'
-                  : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60'
-              }`}
-              title="策略模拟回测"
-            >
-              <Play className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">策略模拟</span>
             </a>
           </div>
         )}

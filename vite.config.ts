@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import { defineConfig } from 'vite';
 
-/** 分析后端地址 (server/index.ts 默认 :8899); 端口被占用时可用环境变量改道 */
+/** 分析后端地址 (默认 :8899); 端口被占用时可用环境变量改道。后端已从本仓库移除, 需另行启动 */
 const ANALYSIS_API_TARGET = process.env.ANALYSIS_API_TARGET || 'http://localhost:8899';
 
 const proxy = {

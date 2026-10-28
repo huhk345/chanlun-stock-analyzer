@@ -9,7 +9,6 @@ import AboutView from './components/AboutView';
 import StockInfoPanel from './components/StockInfoPanel';
 import MarketDashboard from './components/MarketDashboard';
 import IndexAnalysis from './components/IndexAnalysis';
-import SimulationView from './components/SimulationView';
 import KeepAlive from './components/KeepAlive';
 import { SupabaseUser } from './utils/supabase';
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade, BSPoint } from './types/stock';
@@ -40,7 +39,7 @@ const CHAT_RAIL_DEFAULT = 420;
 const NAVBAR_HEIGHT = 56;
 const DEFAULT_SYMBOL = '000001.ss';
 
-type ViewMode = 'dashboard' | 'indexes' | 'analyzer' | 'simulation';
+type ViewMode = 'dashboard' | 'indexes' | 'analyzer';
 
 interface AppRoute {
   view: ViewMode;
@@ -48,10 +47,10 @@ interface AppRoute {
   timeframe: KlineTimeframe;
 }
 
-// Canonical path for each tab. The analyzer and simulation keep the active
-// symbol in the path so every tab is directly linkable/bookmarkable.
+// Canonical path for each tab. The analyzer keeps the active symbol in the
+// path so every tab is directly linkable/bookmarkable.
 function routePath(view: ViewMode, symbol: string): string {
-  if (view === 'analyzer' || view === 'simulation') {
+  if (view === 'analyzer') {
     return symbol ? `/${view}/${encodeURIComponent(symbol)}` : `/${view}`;
   }
   return `/${view}`;
@@ -66,9 +65,10 @@ function decodePathSegment(segment: string): string {
 }
 
 // Parse the current location into app routing state from real paths
-// (`/dashboard`, `/indexes`, `/analyzer/600519`, `/simulation/600519`).
+// (`/dashboard`, `/indexes`, `/analyzer/600519`).
 // Legacy query-param links (`?view=analyzer&code=...`) still parse and are
-// rewritten to their path equivalent on boot.
+// rewritten to their path equivalent on boot. Old `/simulation/...` bookmarks
+// fall back to the dashboard since that view was removed.
 function parseAppUrl(): AppRoute {
   const url = new URL(window.location.href);
   const params = url.searchParams;
@@ -78,13 +78,6 @@ function parseAppUrl(): AppRoute {
   if (first === 'analyzer') {
     return {
       view: 'analyzer',
-      code: decodePathSegment(second || params.get('code') || DEFAULT_SYMBOL),
-      timeframe,
-    };
-  }
-  if (first === 'simulation') {
-    return {
-      view: 'simulation',
       code: decodePathSegment(second || params.get('code') || DEFAULT_SYMBOL),
       timeframe,
     };
@@ -99,9 +92,6 @@ function parseAppUrl(): AppRoute {
     return { view: 'analyzer', code: params.get('code') || DEFAULT_SYMBOL, timeframe };
   }
   if (legacyView === 'indexes') return { view: 'indexes', code: DEFAULT_SYMBOL, timeframe };
-  if (legacyView === 'simulation') {
-    return { view: 'simulation', code: params.get('code') || DEFAULT_SYMBOL, timeframe };
-  }
 
   return { view: 'dashboard', code: DEFAULT_SYMBOL, timeframe };
 }
@@ -134,7 +124,7 @@ export default function App() {
   const [isChatVisible, setIsChatVisible] = useState(true);
 
   // View routing: each tab is a real path (/dashboard, /indexes,
-  // /analyzer/:symbol, /simulation/:symbol); legacy ?view= links still work.
+  // /analyzer/:symbol); legacy ?view= links still work.
   const initialRoute = parseAppUrl();
   const initialView: ViewMode = initialRoute.view;
   const [view, setView] = useState<ViewMode>(initialView);
@@ -349,7 +339,7 @@ export default function App() {
   };
 
   const handleViewChange = (nextView: ViewMode) => {
-    if (nextView === viewRef.current && nextView !== 'analyzer' && nextView !== 'simulation') return;
+    if (nextView === viewRef.current && nextView !== 'analyzer') return;
     setView(nextView);
     syncAppUrl(nextView, symbolRef.current, timeframeRef.current, 'push');
 
@@ -588,13 +578,6 @@ export default function App() {
       </main>
       </KeepAlive>
 
-      {/* Main Container - Strategy Simulation view */}
-      <KeepAlive active={view === 'simulation'}>
-        <main className="flex-1 w-full px-[10px] py-[10px] md:px-6 md:py-6 lg:px-8">
-          <SimulationView symbol={symbol} klines={klines} />
-        </main>
-      </KeepAlive>
-
       {/* Fixed AI Right Rail - always-on-top side panel (desktop only, analyzer view).
           Kept alive too so hiding the rail or visiting another tab does not
           throw away the current AI conversation. */}
@@ -666,17 +649,14 @@ export default function App() {
         </button>
       )}
 
-      {/* Humble Footer - hidden on the simulation view to keep the backtest
-          workspace as tall as possible */}
-      {view !== 'simulation' && (
-        <footer
-          className="border-t border-zinc-850 py-3 md:py-6 mt-0 text-center text-[10px] font-mono text-zinc-500 transition-[padding] duration-200 px-3"
-          style={{ paddingRight: isMobile || view !== 'analyzer' ? 0 : `${railOffset}px` }}
-        >
-          <p>© 2026 缠论量化工作台。由 Google AI Studio 构建。<a href="https://github.com/huhk345/chanlun-stock-analyzer" target="_blank" rel="noopener noreferrer" className="underline hover:text-zinc-300 transition-colors">源代码</a></p>
-          <p className="mt-1">本工具仅供学习研究使用, 不构成任何投资建议, 投资有风险, 入市需谨慎。</p>
-        </footer>
-      )}
+      {/* Humble Footer */}
+      <footer
+        className="border-t border-zinc-850 py-3 md:py-6 mt-0 text-center text-[10px] font-mono text-zinc-500 transition-[padding] duration-200 px-3"
+        style={{ paddingRight: isMobile || view !== 'analyzer' ? 0 : `${railOffset}px` }}
+      >
+        <p>© 2026 缠论量化工作台。由 Google AI Studio 构建。<a href="https://github.com/huhk345/chanlun-stock-analyzer" target="_blank" rel="noopener noreferrer" className="underline hover:text-zinc-300 transition-colors">源代码</a></p>
+        <p className="mt-1">本工具仅供学习研究使用, 不构成任何投资建议, 投资有风险, 入市需谨慎。</p>
+      </footer>
 
     </div>
   );
