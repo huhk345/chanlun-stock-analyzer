@@ -10,6 +10,7 @@ import StockInfoPanel from './components/StockInfoPanel';
 import MarketDashboard from './components/MarketDashboard';
 import IndexAnalysis from './components/IndexAnalysis';
 import KeepAlive from './components/KeepAlive';
+import RustSimulation from './components/RustSimulation';
 import { SupabaseUser } from './utils/supabase';
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade, BSPoint } from './types/stock';
 import { analyzeChanlunWithFallback } from './utils/analysisApi';
@@ -39,7 +40,7 @@ const CHAT_RAIL_DEFAULT = 420;
 const NAVBAR_HEIGHT = 56;
 const DEFAULT_SYMBOL = '000001.ss';
 
-type ViewMode = 'dashboard' | 'indexes' | 'analyzer';
+type ViewMode = 'dashboard' | 'indexes' | 'analyzer' | 'simulation';
 
 interface AppRoute {
   view: ViewMode;
@@ -82,7 +83,7 @@ function parseAppUrl(): AppRoute {
       timeframe,
     };
   }
-  if (first === 'dashboard' || first === 'indexes') {
+  if (first === 'dashboard' || first === 'indexes' || first === 'simulation') {
     return { view: first, code: params.get('code') || DEFAULT_SYMBOL, timeframe };
   }
 
@@ -487,6 +488,15 @@ export default function App() {
         </main>
       </KeepAlive>
 
+      {/* Main Container - Rust day-by-day simulation (barter-rs engine).
+          Fixed-height pane: the settings column and the results column scroll
+          independently, so the page itself never scrolls. */}
+      <KeepAlive active={view === 'simulation'}>
+        <main className="flex-1 w-full px-[10px] py-[10px] md:px-6 md:py-6 lg:px-8 xl:flex-none xl:h-[calc(100vh-56px)] xl:overflow-hidden">
+          <RustSimulation />
+        </main>
+      </KeepAlive>
+
       {/* Main Container - Chart + Backtest scroll under the fixed right rail */}
       <KeepAlive active={view === 'analyzer'}>
       <main
@@ -649,14 +659,16 @@ export default function App() {
         </button>
       )}
 
-      {/* Humble Footer */}
-      <footer
-        className="border-t border-zinc-850 py-3 md:py-6 mt-0 text-center text-[10px] font-mono text-zinc-500 transition-[padding] duration-200 px-3"
-        style={{ paddingRight: isMobile || view !== 'analyzer' ? 0 : `${railOffset}px` }}
-      >
-        <p>© 2026 缠论量化工作台。由 Google AI Studio 构建。<a href="https://github.com/huhk345/chanlun-stock-analyzer" target="_blank" rel="noopener noreferrer" className="underline hover:text-zinc-300 transition-colors">源代码</a></p>
-        <p className="mt-1">本工具仅供学习研究使用, 不构成任何投资建议, 投资有风险, 入市需谨慎。</p>
-      </footer>
+      {/* Humble Footer —— 模拟页是整屏双栏滚动布局，没有 footer 的位置 */}
+      {view !== 'simulation' && (
+        <footer
+          className="border-t border-zinc-850 py-3 md:py-6 mt-0 text-center text-[10px] font-mono text-zinc-500 transition-[padding] duration-200 px-3"
+          style={{ paddingRight: isMobile || view !== 'analyzer' ? 0 : `${railOffset}px` }}
+        >
+          <p>© 2026 缠论量化工作台。由 Google AI Studio 构建。<a href="https://github.com/huhk345/chanlun-stock-analyzer" target="_blank" rel="noopener noreferrer" className="underline hover:text-zinc-300 transition-colors">源代码</a></p>
+          <p className="mt-1">本工具仅供学习研究使用, 不构成任何投资建议, 投资有风险, 入市需谨慎。</p>
+        </footer>
+      )}
 
     </div>
   );

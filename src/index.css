@@ -100,3 +100,13 @@ html {
     -webkit-tap-highlight-color: transparent;
   }
 }
+
+/* 右侧抽屉：模拟页点开个股 K 线时滑入 */
+@keyframes drawer-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}

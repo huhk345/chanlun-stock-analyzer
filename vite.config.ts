@@ -7,6 +7,11 @@ import { defineConfig } from 'vite';
 const ANALYSIS_API_TARGET = process.env.ANALYSIS_API_TARGET || 'http://localhost:8899';
 
 const proxy = {
+  // Rust 模拟引擎 (barter-rs): 独立服务, 必须排在 /api 之前 (Vite 按声明顺序匹配)
+  '/api/rust': {
+    target: process.env.RUST_ENGINE_TARGET || 'http://127.0.0.1:8901',
+    changeOrigin: true,
+  },
   '/api': {
     target: ANALYSIS_API_TARGET,
     changeOrigin: true,

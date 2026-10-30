@@ -23,3 +23,7 @@ autoresearch/
 
 doc/
 .workbuddy-ai/
+
+# Rust 模拟引擎 (barter-rs): 构建产物与本地工具链
+engine-rs/target/
+engine-rs/.toolchain/

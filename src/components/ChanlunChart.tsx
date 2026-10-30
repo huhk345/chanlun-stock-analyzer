@@ -35,13 +35,20 @@ interface ChanlunChartProps {
   dataPeriod?: string;
   isLoading?: boolean;
   onTimeframeChange?: (tf: KlineTimeframe) => void;
+  /**
+   * 初始显示最近多少根 K 线。默认 80（看盘视角）；
+   * 传 0 表示一次性铺满全区间（回看整段回测用）。
+   */
+  initialVisibleBars?: number;
+  /** 图表容器高度类名（弹窗里想画得更高时覆盖） */
+  chartHeightClass?: string;
 }
 
 function dateToTime(dateStr: string): Time {
   return dateStr as Time;
 }
 
-export default function ChanlunChart({ klines, fractions, strokes, segments, hubs, bsPoints, symbol, stockBasicInfo, industry, actualController, reductionPlans, backtestTrades, timeframe = 'daily', dataPeriod, isLoading = false, onTimeframeChange }: ChanlunChartProps) {
+export default function ChanlunChart({ klines, fractions, strokes, segments, hubs, bsPoints, symbol, stockBasicInfo, industry, actualController, reductionPlans, backtestTrades, timeframe = 'daily', dataPeriod, isLoading = false, onTimeframeChange, initialVisibleBars, chartHeightClass = 'h-72 sm:h-96 md:sm:h-[480px]' }: ChanlunChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -404,15 +411,16 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
     volumeSeriesRef.current?.setData(volumeData);
 
     const n = klines.length;
-    if (n > 80) {
+    const visible = initialVisibleBars ?? 80;
+    if (visible > 0 && n > visible) {
       chartRef.current?.timeScale().setVisibleLogicalRange({
-        from: n - 80,
+        from: n - visible,
         to: n,
       });
     } else {
       chartRef.current?.timeScale().fitContent();
     }
-  }, [candleData, volumeData, klines]);
+  }, [candleData, volumeData, klines, initialVisibleBars]);
 
   // Update MA indicators
   useEffect(() => {
@@ -1570,7 +1578,7 @@ export default function ChanlunChart({ klines, fractions, strokes, segments, hub
         {/* TradingView Chart Container */}
         <div
           ref={chartContainerRef}
-          className="w-full h-72 sm:h-96 md:sm:h-[480px] bg-zinc-950/80 md:rounded-b-xl md:border md:border-zinc-800 relative overflow-hidden select-none"
+          className={`w-full ${chartHeightClass} bg-zinc-950/80 md:rounded-b-xl md:border md:border-zinc-800 relative overflow-hidden select-none`}
         >
           {/* Loading state: only the lightweight-charts canvas area.
               Shown while switching 日线/周线 (old bars stay mounted beneath). */}

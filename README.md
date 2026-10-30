@@ -31,6 +31,7 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
 - **Two Backtest Engines** — The same `BUY / SELL / HOLD + amount` strategy contract runs on a dependency-free native loop (`native`) or on [backtrader](https://www.backtrader.com/) (`engine: "backtrader"`). Both fill at the signal bar's close and apply A-share rules (T+1, 100-share lots, price-limit rejection, commission + stamp duty + transfer fee, optional fixed stop-loss), and a parity suite asserts the two produce an identical trade ledger
 - **Day-by-Day Simulation** — One pass over the cached bars records every trading day (decision, fills, cash/position, mark-to-market equity, indicator snapshot, ChanLun summary), then you scrub, step and jump across the whole run instantly — navigation is an index lookup, not a re-run. Recordings are cached on disk, so re-opening the same simulation is instant
 - **Pool Backtest** — Equal-weight backtest of one strategy across 沪深300 / 中证500, with an equity curve vs. an equal-weight buy-and-hold benchmark, KPI cards, trade ledger and per-symbol table
+- **Rust Backtest Engine** — the same pool backtest on [barter-rs](https://github.com/barter-rs/barter-rs) 0.14: the framework feeds the pool day by day, the strategy answers `BUY / SELL / HOLD + amount`, an A-share execution layer fills it, and the whole run is recorded once then played back in `/simulation`
 - **Search History** — Persistent stock search history with preset quick-access stocks
 - **Resizable AI Rail** — Draggable side panel with persistent width, responsive mobile layout
 - **Dark Theme** — Polished dark UI with smooth animations
@@ -159,6 +160,147 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
 
    On a 922-bar run: the recording pass takes ~1.9 s (the same cost as the batch backtest), the timeline payload is ~200 KB, a jump is ~10 µs server-side, and re-opening the same simulation hits the on-disk recording and returns in ~20 ms. Each day carries the decision, the fills, cash / position, mark-to-market equity, the indicator snapshot and a ChanLun summary, so the UI can show what happened on every single day without recomputing anything.
 
+### Rust Backtest Engine (barter-rs)
+
+The pool backtest also runs on a Rust engine built on [barter-rs](https://github.com/barter-rs/barter-rs)
+0.14 — the open-source event-driven framework for live trading and backtesting. The split of
+responsibilities is the point:
+
+```text
+public/index-members.*.json + .cache/klines/*.json
+        │  pool members + cached daily bars
+        ▼
+   Rust data layer ──► barter Engine (HistoricalClock + EngineState)
+                             │  MarketEvent<Candle>, one per symbol per day
+                             ▼
+                       AlgoStrategy ──► Strategy::on_day(ctx) -> Signal
+                             │              BUY / SELL / HOLD + amount
+                             ▼
+                       OrderRequestOpen ──► A-share execution layer
+                                           (lots · T+1 · limits · fees)
+                             │
+                             ▼
+   DayRow recorder ◄── fills reported back as AccountEvent
+```
+
+**Why barter-rs.** It is the actively maintained Rust framework that actually ships an event
+loop, pluggable strategy + execution, position tracking and a statistics package. Its own
+`MockExchange` fills at the requested price and settles in quote currency only, so it cannot
+express 100-share lots, T+1, price limits, stamp duty or transfer fees. So the engine is
+barter's and the venue is `AShareBroker` — barter is designed for exactly this swap.
+
+| Piece | Where | Role |
+| --- | --- | --- |
+| Data feed | `engine-rs/src/data.rs` | pool members + cached bars → aligned trading calendar |
+| Strategy contract | `engine-rs/src/strategy.rs` | `on_day(&DayContext) -> Signal` (BUY/SELL/HOLD + amount) |
+| Built-ins | `engine-rs/src/strategies.rs` | `ma-cross`, `donchian-breakout`, `rsi-reversion`, `momentum` |
+| Engine adapter | `engine-rs/src/barter_engine.rs` | `AlgoStrategy` + `Ledger` (`GlobalData`) + `BarState` (`InstrumentData`) |
+| A-share execution | `engine-rs/src/barter_engine.rs` | lots / T+1 / limits / commission + stamp duty + transfer fee |
+| Recorder | `engine-rs/src/barter_engine.rs` | one `DayRow` per trading day (decision, fills, cash, equity) |
+| HTTP | `engine-rs/src/api.rs` | axum: record once, then scrub by index |
+
+**Run it**
+
+```bash
+pnpm start      # builds the Rust engine if needed, then runs engine (:8901) + Vite together
+```
+
+`pnpm start` is the one-command path: it compiles `engine-rs` when the binary is missing **or
+older than its sources**, reuses an engine already listening on `:8901`, runs both processes with
+prefixed logs, and stops both on Ctrl+C. Run the halves separately when you need to:
+
+```bash
+cargo build --release --manifest-path engine-rs/Cargo.toml
+./engine-rs/target/release/chanlun-engine-rs --port 8901   # or: pnpm engine
+pnpm dev                                                   # Vite proxies /api/rust → :8901
+```
+
+Open `/simulation`, pick a pool / strategy / capital and hit 运行模拟. The engine records the
+whole run in one pass (300 symbols × 923 days ≈ 1.3 s, ~1.3 MB gzipped); the page then plays
+it back day by day — play/pause, step, scrub, per-day signals with reasons, fills,
+cash / position / equity, and the equal-weight buy-and-hold benchmark.
+
+**HTTP contract**
+
+| Endpoint | Meaning |
+| --- | --- |
+| `GET /api/rust/health` | framework version + engine liveness |
+| `GET /api/rust/strategies` | strategy registry + parameter specs |
+| `GET /api/rust/pools` | 沪深300 / 中证500 sizes |
+| `GET /api/rust/pool/coverage` | per-pool cached / missing / incomplete counts + usable date span |
+| `POST /api/rust/pool/update` | start a pool refresh (`incremental` or `full`) |
+| `GET /api/rust/pool/update/:id` | refresh progress (counters, current symbol, errors) |
+| `POST /api/rust/sim` | record a run, returns the full timeline |
+| `GET /api/rust/sim/:id` | replay a recorded run |
+| `POST /api/rust/sim/:id/step` | move the cursor (`next` / `prev` / `jump`) |
+
+**Pool data maintenance.** The engine reads the same `.cache/klines/*_1d_forward.json`
+the web app uses, and keeps it current against the free Tencent quote endpoint:
+
+* **incremental** — fetch the last 40 bars, compare them against the cache, append only the
+  bars after the last cached date.
+* **full refresh** — re-pull the whole series from 2023-01-01. Triggered automatically when an
+  overlapping bar no longer matches (a dividend / split / rights issue re-bases the 前复权
+  series, so *every* historical price shifts).
+
+Both run **automatically before every simulation** — there is no "update data" button to
+forget. `POST /api/rust/sim` first refreshes whatever the run actually needs (stale tails, plus
+one full rebuild for any member whose history starts late and is not a known late listing), then
+loads the pool. The sweep is capped by a 25 s budget and a circuit breaker, so a blocked or slow
+quote endpoint degrades to "run on cached bars" with the reason reported in `refresh` rather than
+turning a 1-second simulation into a multi-minute wait. Pass `autoRefresh: false` to skip it.
+
+The ex-rights rule is the important one: appending across an ex-rights date would silently
+splice two incompatible price scales and corrupt every backtest touching that symbol, so the
+whole series is rebuilt instead of patched. Two implementation notes, both learned the hard way:
+
+* the endpoint caps a response at **640 bars** but honours the `end` date, so a full refresh
+  pages backwards from today rather than asking for "everything";
+* it sits behind a WAF that answers **HTTP 501** once a burst is too fast, so requests are
+  paced globally (~10 rps, 4 concurrent) and a run aborts after 10 consecutive failures
+  instead of grinding through hundreds of doomed requests.
+
+`coverage` reports an `incomplete` count for members whose history starts later than the
+analysis window; the automatic sweep heals those once (a symbol that really did list late is
+remembered as such, so it is not re-fetched every run).
+
+**Writing a strategy** — one method; the framework hands you bars through today plus the
+account and position, and takes back an intent:
+
+```rust
+impl Strategy for MyStrategy {
+    fn id(&self) -> &'static str { "my-strategy" }
+
+    fn on_day(&mut self, ctx: &DayContext<'_>) -> Signal {
+        // ctx.bars is a prefix ending at ctx.date — no future bar is reachable.
+        if ctx.position.shares > 0.0 && ctx.close() < ctx.sma(20).unwrap_or(0.0) {
+            return Signal::sell_percent(100.0, "跌破 MA20");
+        }
+        if ctx.close() > ctx.highest_close(20).unwrap_or(f64::MAX) {
+            return Signal::buy_percent(30.0, "创 20 日新高");
+        }
+        Signal::hold()
+    }
+}
+```
+
+Every fill follows the signal bar's close, 100-share lots, T+1 (shares bought today cannot be
+sold today), limit-up / limit-down rejection (10% main board / 20% ChiNext & STAR / 30% BSE),
+commission 0.025% (min ¥5) + stamp duty 0.05% on sells + transfer fee 0.001%.
+
+Position sizing is capital-driven, not universe-driven: the slot is `capital ÷ N`, where `N` is
+how many names that capital can actually hold at a typical one-lot cost (median lot price × 1.05),
+capped by the universe **and** by the minimum-position floor. With ¥5M across 300 names that is the
+full 300 at ¥16.7k each; with ¥20k it becomes 4 names at ¥5k each, so a small account still trades
+instead of producing zero fills.
+
+**Minimum position size (hard rule).** A newly opened position is never smaller than
+`minPositionValue` (default **¥5,000**, `0` disables it). The strategy's own sizing is treated as a
+target: it is raised to the floor, rounded to whole lots (rounding *up* when flooring would drop
+below the floor), and the fill is rejected if available cash would shrink it under the floor. Names
+whose single lot exceeds 1.5× the slot are skipped as `一手 ... 超出仓位上限`, and a spent account
+reports `现金不足` — never a silent runt position.
+
 **Troubleshooting:** an error like `Cannot find module '.../node_modules/.pnpm/vite.../dist/node/chunks/dep-*.js'` means `node_modules` was checked out as a (possibly self-referential) symlink, which breaks module resolution. `node_modules` is never tracked; remove the bad link and reinstall:
 ```bash
 rm -rf node_modules && pnpm install
@@ -219,6 +361,7 @@ pnpm exec tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
 - **双回测引擎** — 同一套 `BUY / SELL / HOLD + 数量` 策略契约可跑在零依赖的 native 循环上, 也可跑在开源框架 [backtrader](https://www.backtrader.com/) 上 (`engine: "backtrader"`); 两者都按信号当日收盘价成交并遵守 A 股规则 (T+1、100 股一手、涨跌停拦截、佣金 + 印花税 + 过户费, 可选固定止损), 且有逐笔一致性测试钉住两边账本
 - **逐日模拟** — 用缓存的 K 线一次性录完每个交易日 (策略决策 / 成交 / 现金持仓 / 收盘盯市权益 / 指标快照 / 缠论摘要), 之后拖动、单步、跳转全是索引查找而不是重跑策略; 录制结果落盘缓存, 再次打开同一段模拟几乎瞬时
 - **选股池等权回测** — 对沪深300 / 中证500 全池等权回测同一策略, 输出组合权益曲线、等权买入持有基准、KPI 卡片、成交账本与逐标的排行
+- **Rust 回测引擎** — 同一套选股池回测跑在 [barter-rs](https://github.com/barter-rs/barter-rs) 0.14 上: 框架逐日喂池内数据, 策略回答 `BUY / SELL / HOLD + 数量`, A 股撮合层负责成交, 整段模拟一次录完后在 `/simulation` 逐日回放
 - **默认市场基准数据** — 组合模拟默认自带市场环境上下文 (不参与选股): 中证指数官网的沪深300全收益 H00300、沪深300 000300、中证500 000905、中证1000 000852、中证全债 H11001、沪深300 PE, 以及东方财富的 10Y / 2Y 国债收益率与 10Y-2Y 期限利差, 并派生股权风险溢价 ERP (100/PE − 10Y); 基准默认取沪深300全收益, 可切换沪深300价格指数或池内等权买入持有; 数据落盘缓存 `.cache/market/`, TTL 2 小时, 接口失败时自动回退旧缓存
 - **搜索历史** — 持久化股票搜索记录, 预设热门股票快速访问
 - **可调整 AI 侧栏** — 可拖拽调整宽度的 AI 顾问面板, 移动端自适应布局
@@ -319,6 +462,132 @@ pnpm exec tsx scripts/chanlun-report.ts --stocks 000001,600519 --notify console
                            reason="跌破中枢")
        return Decision.hold()                # HOLD = 持仓不动
    ```
+
+### Rust 回测引擎 (barter-rs)
+
+选股池回测还有一条 Rust 路径: 引擎是开源事件驱动框架 [barter-rs](https://github.com/barter-rs/barter-rs)
+0.14, 职责边界就是这次要验证的东西 —— **框架喂数据, 策略算信号, 撮合按 A 股规则**:
+
+```text
+public/index-members.*.json + .cache/klines/*.json
+        │  池成分 + 已缓存的日线
+        ▼
+   Rust 数据层 ──► barter Engine (HistoricalClock + EngineState)
+                        │  每个标的每个交易日一个 MarketEvent<Candle>
+                        ▼
+                  AlgoStrategy ──► Strategy::on_day(ctx) -> Signal
+                        │             BUY / SELL / HOLD + 数量
+                        ▼
+                  OrderRequestOpen ──► A 股撮合层
+                                      (整手 · T+1 · 涨跌停 · 费用)
+                        │
+                        ▼
+   逐日录制器 ◄── 成交以 AccountEvent 回报给引擎
+```
+
+**为什么是 barter-rs。** 它是目前仍在维护、且真正提供事件循环 / 可插拔策略与执行 / 持仓跟踪 /
+绩效统计的 Rust 框架。但它自带的 `MockExchange` 按请求价成交、且只用计价货币结算 (卖出不返钱),
+无法表达 100 股整手、T+1、涨跌停、印花税与过户费 —— 所以引擎用 barter 的, 交易所换成
+`AShareBroker` (barter 本身就是为这种替换设计的)。
+
+| 层 | 位置 | 职责 |
+| --- | --- | --- |
+| 数据层 | `engine-rs/src/data.rs` | 池成分 + 缓存日线 → 对齐的交易日历 |
+| 策略契约 | `engine-rs/src/strategy.rs` | `on_day(&DayContext) -> Signal` (BUY/SELL/HOLD + 数量) |
+| 内置策略 | `engine-rs/src/strategies.rs` | `ma-cross`、`donchian-breakout`、`rsi-reversion`、`momentum` |
+| 引擎适配 | `engine-rs/src/barter_engine.rs` | `AlgoStrategy` + `Ledger`(GlobalData) + `BarState`(InstrumentData) |
+| A 股撮合 | `engine-rs/src/barter_engine.rs` | 整手 / T+1 / 涨跌停 / 佣金 + 印花税 + 过户费 |
+| 逐日录制 | `engine-rs/src/barter_engine.rs` | 每个交易日一行 (决策 / 成交 / 现金 / 权益) |
+| HTTP | `engine-rs/src/api.rs` | axum: 一次录完, 之后按索引拖动 |
+
+**启动**
+
+```bash
+pnpm start      # 缺二进制/源码有改动时自动编译, 然后同时拉起引擎 (:8901) 与 Vite
+```
+
+`pnpm start` 是一条命令的路径: 二进制不存在**或比源码旧**时自动 `cargo build --release`;
+若 `:8901` 上已有引擎在跑则直接复用; 两个进程的日志带前缀输出, Ctrl+C 一起停。
+需要单独跑时:
+
+```bash
+cargo build --release --manifest-path engine-rs/Cargo.toml
+./engine-rs/target/release/chanlun-engine-rs --port 8901   # 或: pnpm engine
+pnpm dev                                                   # Vite 把 /api/rust 代理到 :8901
+```
+
+打开 `/simulation`, 选池 / 策略 / 资金, 点「运行模拟」。引擎用缓存的日线**一次录完**整段
+(300 只 × 923 个交易日 ≈ 1.3s, gzip 后约 1.3MB), 页面随后逐日回放: 播放 / 暂停 / 单步 /
+拖动, 每日信号带理由、成交、现金持仓权益, 以及与等权买入持有基准的对比曲线。
+
+**接口**
+
+| 接口 | 说明 |
+| --- | --- |
+| `GET /api/rust/health` | 框架版本 + 引擎存活 |
+| `GET /api/rust/strategies` | 策略注册表 + 参数定义 |
+| `GET /api/rust/pools` | 沪深300 / 中证500 标的数 |
+| `GET /api/rust/pool/coverage` | 各池已缓存 / 缺失 / 历史不全 数量 + 可用区间 |
+| `POST /api/rust/pool/update` | 发起池数据更新 (`incremental` 增量 / `full` 全量) |
+| `GET /api/rust/pool/update/:id` | 更新进度 (计数 / 当前标的 / 错误) |
+| `POST /api/rust/sim` | 录制一整段模拟, 返回完整时间轴 |
+| `GET /api/rust/sim/:id` | 取回已录制的模拟 |
+| `POST /api/rust/sim/:id/step` | 移动游标 (`next` / `prev` / `jump`) |
+
+**池数据维护.** 引擎读的就是前端在用的 `.cache/klines/*_1d_forward.json`, 并用免费的腾讯行情
+接口保持更新, 两种模式:
+
+* **增量** —— 只取最近 40 根, 与缓存逐根比对, 仅追加最后一根之后的交易日;
+* **全量刷新** —— 从 2023-01-01 重新拉整段。重叠区间任何一根对不上就会自动触发
+  (分红 / 送转 / 配股都会让前复权基准整体平移, 每一根历史价格都变)。
+
+两者都在**每次模拟前自动执行** —— 没有需要记得点的「更新数据」按钮。`POST /api/rust/sim` 会先补
+本次真正用到的数据 (落后的尾部, 以及历史起点偏晚且不是新股上市的标的做一次全量重建), 再加载池。
+整个更新有 25s 时间预算和熔断保护, 行情接口被限流或变慢时会退化为「直接用缓存跑」, 原因写在
+`refresh` 字段里, 而不是把 1 秒的模拟拖成几分钟。传 `autoRefresh: false` 可跳过。
+
+除权规则是关键: 跨除权日直接追加等于把两套不可比的价格尺度拼在一起, 会让该标的的每一次回测
+都失真 —— 所以宁可整段重建, 也不做局部补丁。两个实现细节都是踩过坑才定下来的:
+
+* 该接口单次最多返回 **640 根**, 但会认 `end` 日期, 所以全量刷新是从今天往前**翻页**拉, 而不是
+  一次性请求「全部」;
+* 它前面挂着 WAF, 突发太快会直接返回 **HTTP 501** 的 HTML 拦截页 —— 因此请求全局限速
+  (约 10 次/秒, 4 并发), 且连续失败 10 个就中止整次任务, 而不是硬跑完几百个注定失败的请求。
+
+`coverage` 会给出 `incomplete` 计数 (历史起点晚于分析窗口的标的数); 自动更新会把这类标的补一次,
+真正的新股则记成 `at_ipo`, 之后不再重复拉取。
+
+**写一个策略** —— 只实现一个方法, 框架交给你截至今日的 K 线、账户和持仓, 你交回一个意图:
+
+```rust
+impl Strategy for MyStrategy {
+    fn id(&self) -> &'static str { "my-strategy" }
+
+    fn on_day(&mut self, ctx: &DayContext<'_>) -> Signal {
+        // ctx.bars 是截止 ctx.date 的前缀, 物理上拿不到未来 K 线。
+        if ctx.position.shares > 0.0 && ctx.close() < ctx.sma(20).unwrap_or(0.0) {
+            return Signal::sell_percent(100.0, "跌破 MA20");
+        }
+        if ctx.close() > ctx.highest_close(20).unwrap_or(f64::MAX) {
+            return Signal::buy_percent(30.0, "创 20 日新高");
+        }
+        Signal::hold()
+    }
+}
+```
+
+成交口径: 信号当根收盘价、100 股整手、T+1 (当日买入不可卖)、涨跌停拦截 (主板 10% / 创业板·
+科创板 20% / 北交所 30%)、佣金万 2.5 (最低 5 元) + 卖出印花税千 0.5 + 过户费万 0.1。
+仓位上限由资金决定而不是由标的数决定: 上限 = 资金 ÷ N, 其中 N 是这笔钱按「一手成本中位数 × 1.05」
+真正能同时持有几只 (不超过标的数, 也受最小开仓金额约束)。500 万配 300 只 → 300 只 × 1.67 万;
+2 万 → 4 只 × 5000 元, 小资金也能成交, 而不是所有信号都算成 0 股。
+
+**最小开仓金额 (硬规则).** 每次开仓金额不低于 `minPositionValue` (默认 **5000 元**, 传 0 关闭)。
+策略给出的仓位只当作目标值: 低于下限时抬到下限, 再按整手取整 (向下取整会跌破下限时改为向上补一手),
+撮合阶段若因现金不足被削减到下限以下则整笔拒绝。一手就超过仓位上限 1.5 倍的高价股直接跳过
+(`一手 ... 超出仓位上限`), 钱花完了报 `现金不足` —— 任何情况下都不会开出一个低于下限的碎仓。
+组合共用同一现金账户 —— 连一手都买不起的
+信号会明确记成 `仓位不足一手`, 而不是静默丢弃。
 
 **疑难排查:** 出现 `Cannot find module '.../node_modules/.pnpm/vite.../dist/node/chunks/dep-*.js'` 报错，通常是因为 `node_modules` 被检出成了（可能自引用的）符号链接，导致模块解析失败。仓库不跟踪 `node_modules`；删除坏链接后重装即可:
 ```bash

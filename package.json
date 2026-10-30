@@ -6,10 +6,14 @@
   "packageManager": "pnpm@10.34.5",
   "scripts": {
     "dev": "vite",
+    "start": "node scripts/start.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
-    "sync-index": "cp data/hs300/_constituents.json public/index-members.hs300.json && cp data/zz500/_constituents.json public/index-members.zz500.json"
+    "sync-index": "cp data/hs300/_constituents.json public/index-members.hs300.json && cp data/zz500/_constituents.json public/index-members.zz500.json",
+    "engine": "./engine-rs/target/release/chanlun-engine-rs --port 8901",
+    "engine:build": "cd engine-rs && cargo build --release",
+    "strategy:check": "node scripts/validate-cl-trend-b3.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",
