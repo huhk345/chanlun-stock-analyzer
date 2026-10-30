@@ -1584,20 +1584,14 @@ export async function fetchStockBasicInfo(symbol: string): Promise<StockBasicInf
     return fetchUsHkBasicInfo(parsed.txSymbol, parsed.resolved, parsed.market);
   }
 
-  // Determine if it's a Shanghai or Shenzhen stock
+  // A 股 / 指数: 交易所前缀统一由 resolveSymbol 决定 (后缀优先, 见 symbols.ts),
+  // 避免这里再按代码段推断一次 —— 000001.SS 是上证指数, 000001 才是平安银行。
   let tencentSymbol = '';
   let pureCode = '';
 
-  if (/^\d{6}$/.test(clean)) {
-    const isSS = /^(60|68|90|11|13|51|58|60)/.test(clean);
-    tencentSymbol = `${isSS ? 'sh' : 'sz'}${clean}`;
-    pureCode = clean;
-  } else if (clean.endsWith('.SH') || clean.endsWith('.SS')) {
-    pureCode = clean.replace(/\.(SH|SS)$/, '');
-    tencentSymbol = `sh${pureCode}`;
-  } else if (clean.endsWith('.SZ')) {
-    pureCode = clean.replace('.SZ', '');
-    tencentSymbol = `sz${pureCode}`;
+  if (/^\d{6}$/.test(clean) || /\.(SH|SS|SZ|BJ)$/.test(clean)) {
+    tencentSymbol = parsed.txSymbol;
+    pureCode = parsed.resolved.split('.')[0];
   } else {
     throw new Error('无法识别的代码。请使用 A股6位代码 (如 600519), 美股 (如 AAPL / AAPL.US), 港股 (如 00700 / 00700.HK)。');
   }

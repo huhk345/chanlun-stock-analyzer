@@ -73,6 +73,22 @@ export function describeExcludedBoards(exclude: readonly ExcludableBoard[] | und
 }
 
 /**
+ * 交易所前缀 (腾讯代码 sh/sz/bj): **显式后缀优先**, 只有无后缀时才按代码段推断。
+ *
+ * 这一步不能只看代码段: 000001.SH 是上证指数 (3599 点), 000001.SZ 才是平安银行 (11 元);
+ * 同理 000300.SH (沪深300)、000016.SH (上证50)、000905.SH (中证500)、000688.SH (科创50)
+ * 都以 000 开头, 按代码段推断会全部错落到深市, 拉到完全不相干的个股K线。
+ */
+function exchangePrefix(code: string, suffix: string): 'sh' | 'sz' | 'bj' {
+  if (suffix === 'SH' || suffix === 'SS') return 'sh';
+  if (suffix === 'BJ') return 'bj';
+  // 北交所代码段 (43/83/87/88/92) 无歧义, 裸代码推断出的 .SZ 也归 bj
+  if (/^(43|83|87|88|92)/.test(code)) return 'bj';
+  if (suffix === 'SZ') return 'sz';
+  return /^(60|68|90|11|13|51|58)/.test(code) ? 'sh' : 'sz';
+}
+
+/**
  * Resolve user input into a canonical symbol + market.
  * (见文件头注释中的格式列表)
  */
@@ -86,10 +102,8 @@ export function resolveSymbol(symbol: string): {
 } {
   const clean = symbol.trim().toUpperCase();
   const cn = (resolved: string, displayName: string) => {
-    const code = resolved.split('.')[0];
-    const isSS = /^(60|68|90|11|13|51|58)/.test(code);
-    const isBJ = /^(43|83|87|88|92)/.test(code);
-    const prefix = isSS ? 'sh' : isBJ ? 'bj' : 'sz';
+    const [code, suffix = ''] = resolved.split('.');
+    const prefix = exchangePrefix(code, suffix);
     return {
       resolved,
       displayName,
@@ -108,7 +122,7 @@ export function resolveSymbol(symbol: string): {
   if (clean.endsWith('.SS')) {
     return cn(clean.replace('.SS', '.SH'), clean);
   }
-  if (clean.endsWith('.SH') || clean.endsWith('.SZ')) {
+  if (clean.endsWith('.SH') || clean.endsWith('.SZ') || clean.endsWith('.BJ')) {
     return cn(clean, clean);
   }
   // HK: '00700.HK' / '0700.HK'
@@ -187,8 +201,8 @@ export function toTencentSymbol(symbol: string): string {
   if (dot < 0) return symbol;
   const code = symbol.slice(0, dot);
   const market = symbol.slice(dot + 1).toUpperCase();
-  if (market === 'SH' || market === 'SS') return `sh${code}`;
-  if (market === 'SZ') return `sz${code}`;
-  if (market === 'BJ') return `bj${code}`;
+  if (market === 'SH' || market === 'SS' || market === 'SZ' || market === 'BJ') {
+    return `${exchangePrefix(code, market)}${code}`;
+  }
   return symbol;
 }
