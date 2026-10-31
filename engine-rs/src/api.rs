@@ -101,6 +101,9 @@ pub struct SimRequest {
     /// Refresh stale pool data before the run (default true).
     #[serde(default)]
     pub auto_refresh: Option<bool>,
+    /// 从股票池里剔除的板块: "chinext" / "star" / "bse" (ST/退市 恒定剔除)
+    #[serde(default)]
+    pub exclude_boards: Vec<String>,
 }
 
 fn default_strategy() -> String {
@@ -337,6 +340,7 @@ async fn start_sim(
     load.start = start;
     load.end = end;
     load.limit = req.limit;
+    load.exclude_boards = req.exclude_boards.clone();
 
     let mut cfg = SimConfig::default();
     if let Some(v) = req.initial_cash {

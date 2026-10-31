@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { Activity, BrainCircuit, GripVertical } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Activity, AlertTriangle, BrainCircuit, GripVertical } from 'lucide-react';
 import Navbar from './components/Navbar';
 import ChanlunChart from './components/ChanlunChart';
 import BacktestManager from './components/BacktestManager';
@@ -12,6 +12,8 @@ import IndexAnalysis from './components/IndexAnalysis';
 import KeepAlive from './components/KeepAlive';
 import RustSimulation from './components/RustSimulation';
 import useEngineStatus from './hooks/useEngineStatus';
+import useTradeFilter from './hooks/useTradeFilter';
+import { exclusionReason } from './utils/tradeFilter';
 import { SupabaseUser } from './utils/supabase';
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade, BSPoint } from './types/stock';
 import { analyzeChanlunWithFallback } from './utils/analysisApi';
@@ -193,6 +195,14 @@ export default function App() {
   const [stockBasicInfo, setStockBasicInfo] = useState<StockBasicInfo | null>(null);
   const [stockMeta, setStockMeta] = useState<StockMeta | null>(null);
   const [backtestTrades, setBacktestTrades] = useState<BacktestTrade[]>([]);
+
+  // 「可交易范围」设置: 当前个股落在被排除的板块时, 在图表上方给一条提示
+  // (单股分析本身不受影响, 只是告诉用户它不会出现在扫描列表/回测里)
+  const [tradeFilter] = useTradeFilter();
+  const excludedReason = useMemo(
+    () => exclusionReason(symbol, stockBasicInfo?.name ?? stockMeta?.stock_name, tradeFilter),
+    [symbol, stockBasicInfo, stockMeta, tradeFilter],
+  );
 
   const fetchAndProcessStock = async (querySymbol: string, forcedTimeframe?: KlineTimeframe) => {
     const tf = forcedTimeframe ?? timeframeRef.current;
@@ -549,6 +559,17 @@ export default function App() {
             shows loading instead of unmounting. */}
         {klines.length > 0 && (
           <div className="flex flex-col gap-0 md:gap-6 h-full min-w-0">
+
+            {/* 可交易范围提示: 该股属于你排除的板块 (创业板/科创板/北交所/ST) */}
+            {excludedReason && (
+              <div className="mb-2 md:mb-0 flex items-start gap-2 rounded-lg border border-amber-900/40 bg-amber-950/20 px-3 py-2 text-[12px] text-amber-300/90 leading-relaxed">
+                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <span>
+                  这只票属于 <b className="text-amber-200 font-semibold">{excludedReason}</b>, 已在「可交易范围」里被排除 ——
+                  缠论扫描列表和策略回测都不会出现它。单股分析不受影响; 要改设置, 去「缠论扫描」或「策略回测」顶部的可交易 chip。
+                </span>
+              </div>
+            )}
 
             {/* Main Chart (stays mounted during 日线/周线 refetch;
                 the lightweight-charts canvas itself shows loading state) */}

@@ -344,6 +344,23 @@ pub struct TradeRow {
     pub reason: Option<String>,
 }
 
+/// 当日收盘后的持仓快照 (逐日录制, 前端拖进度条时直接索引, 不用重算)。
+#[derive(Debug, Clone, Serialize)]
+pub struct HoldingRow {
+    pub symbol: String,
+    pub shares: f64,
+    /// 加权平均成本
+    pub avg_cost: f64,
+    /// 当日收盘价
+    pub close: f64,
+    pub value: f64,
+    /// 浮动盈亏 = (close - avg_cost) * shares
+    pub pnl: f64,
+    pub pnl_percent: f64,
+    /// 建仓日 (首次买入), 老仓位可能为空
+    pub opened_on: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DayRow {
     pub index: usize,
@@ -358,6 +375,8 @@ pub struct DayRow {
     pub holds: usize,
     pub trades: usize,
     pub decisions: Vec<DecisionRow>,
+    /// 当日收盘后的持仓明细 (按市值降序)
+    pub holdings: Vec<HoldingRow>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -385,6 +404,8 @@ pub struct SimOutput {
     pub start: String,
     pub end: String,
     pub universe: usize,
+    /// 按「可交易范围」从股票池里剔除的标的数 (创业板/科创板/北交所/ST)
+    pub filtered_out: usize,
     /// Names this capital can hold at a typical lot cost (equal-weight slots).
     pub max_positions: usize,
     /// Per-name capital ceiling implied by `max_positions`.
@@ -1191,6 +1212,46 @@ pub fn run(req: RunRequest<'_>) -> Result<SimOutput, String> {
         let buys = day_decisions.iter().filter(|d| d.action == "BUY").count();
         let sells = day_decisions.iter().filter(|d| d.action == "SELL").count();
 
+        // 持仓快照: 收盘价刚在上面刷过 last_price, 这里直接用。
+        let mut day_holdings: Vec<HoldingRow> = engine
+            .state
+            .global
+            .positions
+            .iter()
+            .filter(|(_, p)| p.shares > 0.0)
+            .filter_map(|(idx, p)| {
+                let symbol = symbols.get(idx.0)?.clone();
+                let close = engine
+                    .state
+                    .global
+                    .last_price
+                    .get(idx)
+                    .copied()
+                    .unwrap_or(p.avg_cost);
+                let value = p.shares * close;
+                let pnl = (close - p.avg_cost) * p.shares;
+                Some(HoldingRow {
+                    symbol,
+                    shares: r4(p.shares),
+                    avg_cost: r4(p.avg_cost),
+                    close: r4(close),
+                    value: r4(value),
+                    pnl: r4(pnl),
+                    pnl_percent: if p.avg_cost > 0.0 {
+                        r4((close / p.avg_cost - 1.0) * 100.0)
+                    } else {
+                        0.0
+                    },
+                    opened_on: p.opened_on.map(|d| d.format("%Y-%m-%d").to_string()),
+                })
+            })
+            .collect();
+        day_holdings.sort_by(|a, b| {
+            b.value
+                .partial_cmp(&a.value)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
         days.push(DayRow {
             index: day_index,
             date: date.format("%Y-%m-%d").to_string(),
@@ -1204,6 +1265,7 @@ pub fn run(req: RunRequest<'_>) -> Result<SimOutput, String> {
             holds: evaluated.saturating_sub(buys + sells),
             trades: day_trades,
             decisions: day_decisions,
+            holdings: day_holdings,
         });
     }
 
@@ -1277,6 +1339,7 @@ pub fn run(req: RunRequest<'_>) -> Result<SimOutput, String> {
             .map(|d| d.format("%Y-%m-%d").to_string())
             .unwrap_or_default(),
         universe: symbols.len(),
+        filtered_out: market.filtered_out,
         max_positions: engine.strategy.max_positions,
         slot_cash: r4(engine.strategy.slot_cash),
         min_position_value: r4(cfg.min_position_value),

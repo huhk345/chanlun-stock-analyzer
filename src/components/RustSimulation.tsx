@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
   ArrowDownRight,
@@ -12,6 +12,7 @@ import {
   Pause,
   Play,
   RotateCcw,
+  ShieldCheck,
   SkipBack,
   SkipForward,
   Sliders,
@@ -38,6 +39,9 @@ import {
 import SymbolDetailDrawer from './SymbolDetailDrawer';
 import Select from './ui/Select';
 import DateField from './ui/DateField';
+import TradeFilterBar from './TradeFilterBar';
+import useTradeFilter from '../hooks/useTradeFilter';
+import { describeTradeFilter, isTradeFilterActive } from '../utils/tradeFilter';
 import type {
   RustDay,
   RustPool,
@@ -88,6 +92,9 @@ export default function RustSimulation() {
 
   const [strategyId, setStrategyId] = useState('ma-cross');
   const [selectedPools, setSelectedPools] = useState<string[]>(['hs300']);
+  // 可交易范围 (与扫描页共用同一份 localStorage 设置)
+  const [tradeFilter] = useTradeFilter();
+  const filterActive = isTradeFilterActive(tradeFilter);
   const [params, setParams] = useState<Record<string, number>>({});
   const [initialCash, setInitialCash] = useState(20_000);
   const [minPosition, setMinPosition] = useState(5_000);
@@ -106,6 +113,8 @@ export default function RustSimulation() {
   const [tab, setTab] = useState<'decisions' | 'trades' | 'all'>('decisions');
   // 点开个股 K 线的标的（null = 弹窗关闭）
   const [detailSymbol, setDetailSymbol] = useState<string | null>(null);
+  // 个股总体情况里展开买卖明细的标的
+  const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
   // The full ledger can be 15k+ fills; render it in windows instead of all at once.
   const [ledgerLimit, setLedgerLimit] = useState(200);
 
@@ -230,6 +239,23 @@ export default function RustSimulation() {
   const total = result?.days.length ?? 0;
   const day: RustDay | null = result ? (result.days[Math.min(cursor, total - 1)] ?? null) : null;
 
+  // 当日变化 / 累计收益 / 持仓浮动: 全部从录制的权益曲线与持仓快照直接算, 不重跑策略
+  const prevEquity = result
+    ? cursor > 0
+      ? result.equity[Math.min(cursor, total) - 1]
+      : result.metrics.initial_cash
+    : 0;
+  const dayEquity = day?.equity ?? 0;
+  const dayChange = {
+    value: dayEquity - prevEquity,
+    pct: prevEquity > 0 ? (dayEquity / prevEquity - 1) * 100 : 0,
+  };
+  const cumReturn =
+    result && result.metrics.initial_cash > 0
+      ? (dayEquity / result.metrics.initial_cash - 1) * 100
+      : 0;
+  const dayHoldingsPnl = day ? day.holdings.reduce((s, h) => s + h.pnl, 0) : 0;
+
   useEffect(() => {
     if (!playing || !result) return;
     const interval = Math.max(40, 1000 / Math.max(1, speed));
@@ -260,6 +286,7 @@ export default function RustSimulation() {
         initialCash,
         minPositionValue: minPosition,
         stopLossPercent: stopLoss > 0 ? stopLoss : undefined,
+        excludeBoards: tradeFilter.boards,
       });
       setResult(res);
       setCursor(0);
@@ -268,7 +295,7 @@ export default function RustSimulation() {
     } finally {
       setRunning(false);
     }
-  }, [strategyId, params, selectedPools, startDate, endDate, initialCash, minPosition, stopLoss]);
+  }, [strategyId, params, selectedPools, startDate, endDate, initialCash, minPosition, stopLoss, tradeFilter]);
 
   // --- derived ------------------------------------------------------------
   const chartData = useMemo(() => {
@@ -326,23 +353,42 @@ export default function RustSimulation() {
 
   useEffect(() => {
     setLedgerLimit(200);
+    setExpandedSymbol(null);
   }, [result]);
 
   // 个股总体情况：引擎给了每只标的的已实现盈亏/胜率/同期涨跌，
-  // 买卖笔数和期末股数从成交流水推出来（framework_shares 不填）。
+  // 买卖笔数、期末股数、首次买入日、买入/卖出金额都从成交流水推出来
+  // （framework_shares 不填）。
   const symbolRows = useMemo(() => {
     if (!result) return [];
-    const agg = new Map<string, { buys: number; sells: number; shares: number; lastDate: string }>();
+    type Agg = {
+      buys: number;
+      sells: number;
+      shares: number;
+      firstBuy: string | null;
+      lastTrade: string | null;
+      buyAmount: number;
+      sellAmount: number;
+      tradeList: RustTrade[];
+    };
+    const agg = new Map<string, Agg>();
     for (const t of result.trades) {
-      const a = agg.get(t.symbol) ?? { buys: 0, sells: 0, shares: 0, lastDate: '' };
+      const a =
+        agg.get(t.symbol) ??
+        { buys: 0, sells: 0, shares: 0, firstBuy: null, lastTrade: null, buyAmount: 0, sellAmount: 0, tradeList: [] };
       if (t.action === 'BUY') {
         a.buys += 1;
         a.shares += t.shares;
+        a.buyAmount += t.value;
+        if (!a.firstBuy) a.firstBuy = t.date;
       } else {
         a.sells += 1;
         a.shares -= t.shares;
+        a.sellAmount += t.value;
       }
-      a.lastDate = t.date;
+      // result.trades 本身按日期升序, 所以最后 push 进来的就是最近一笔
+      a.lastTrade = t.date;
+      a.tradeList.push(t);
       agg.set(t.symbol, a);
     }
     return result.symbols
@@ -354,6 +400,11 @@ export default function RustSimulation() {
           buys: a?.buys ?? 0,
           sells: a?.sells ?? 0,
           shares: Math.max(0, Math.round(a?.shares ?? 0)),
+          firstBuy: a?.firstBuy ?? null,
+          lastTrade: a?.lastTrade ?? null,
+          buyAmount: a?.buyAmount ?? 0,
+          sellAmount: a?.sellAmount ?? 0,
+          tradeList: a?.tradeList ?? [],
         };
       })
       .sort((x, y) => y.realized_pnl - x.realized_pnl);
@@ -512,6 +563,7 @@ export default function RustSimulation() {
           {result && (
             <span className="hidden lg:inline text-[13px] text-zinc-500 font-mono">
               录制 {result.elapsed_ms} ms · {result.universe} 只 · {result.days.length} 个交易日
+              {result.filtered_out ? ` · 剔除 ${result.filtered_out}` : ''}
             </span>
           )}
           <span
@@ -588,20 +640,15 @@ export default function RustSimulation() {
                 );
               })}
             </div>
+          </Card>
 
-            <div className="mt-2.5 flex items-center justify-between text-[12px] font-mono text-zinc-500">
-              <span>
-                {range.first || '—'} ~ {range.last || '—'}
-              </span>
-              {selectedCoverage.some((c) => c.missing > 0) && (
-                <span className="text-amber-500">
-                  缺 {selectedCoverage.reduce((a, c) => a + c.missing, 0)}
-                </span>
-              )}
-            </div>
-            <p className="mt-1.5 text-[13px] text-zinc-600 leading-relaxed">
-              回测时会自动补齐缺失的交易日; 若某只标的除权 (前复权基准整体变化), 该标的会自动全量重拉,
-              不会把两套价格尺度拼在一起。
+          {/* 可交易范围: 与扫描页共用同一份设置, 被排除的标的不会进入回测池 */}
+          <Card title="可交易范围" icon={<ShieldCheck className="h-3.5 w-3.5 text-amber-400" />}>
+            <TradeFilterBar size="md" hiddenUnit="只" />
+            <p className="mt-2 text-[12px] text-zinc-600 leading-relaxed">
+              {filterActive
+                ? `回测池会剔除 ${describeTradeFilter(tradeFilter)}, 与「缠论扫描」共用同一设置。`
+                : '回测池不按板块过滤: 创业板 / 科创板 / 北交所都会参与回测。'}
             </p>
           </Card>
 
@@ -979,44 +1026,119 @@ export default function RustSimulation() {
 
               {day && (
                 <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 overflow-hidden flex flex-col min-w-0">
-                  {/* 当日概览压成一条横带：宽度全留给下面的成交表，不再被 240px 侧栏吃掉 */}
-                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 px-3 py-2 border-b border-zinc-800/80">
-                    <div className="flex items-baseline gap-2 shrink-0">
-                      <span className="text-[12px] text-zinc-500 uppercase tracking-wider font-semibold">
-                        第 {day.index + 1} / {total} 日
-                      </span>
-                      <span className="text-[16px] font-bold text-zinc-100 font-mono">
-                        {day.date}
-                      </span>
+                  {/* 当日概览: 左日期 / 右权益三连 / 下方等宽统计, 整体是一块而不是散落的标签 */}
+                  <div className="px-3 py-2.5 border-b border-zinc-800/80 space-y-2">
+                    <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
+                      <div className="min-w-0">
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-[12px] text-zinc-500 uppercase tracking-wider font-semibold">
+                            第 {day.index + 1} / {total} 日
+                          </span>
+                          <span className="text-[18px] font-bold text-zinc-100 font-mono leading-none">
+                            {day.date}
+                          </span>
+                        </div>
+                        <div className="mt-1 text-[12px] text-zinc-600 font-mono">
+                          评估 {day.evaluated} 只 · 持有 {day.holds} · 成交 {day.trades}
+                        </div>
+                      </div>
+
+                      <div className="flex items-end gap-4">
+                        <div className="text-right">
+                          <div className="text-[12px] text-zinc-600">盯市权益</div>
+                          <div className="text-[20px] font-bold font-mono text-zinc-100 leading-tight">
+                            {fmtMoney(day.equity)}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-[12px] text-zinc-600">当日变化</div>
+                          <div className={`text-[14px] font-mono font-semibold leading-tight ${upDown(dayChange.value)}`}>
+                            {dayChange.value >= 0 ? '+' : ''}
+                            {fmtMoney(dayChange.value)}
+                            <span className="ml-1 text-[12px] opacity-75">{fmtPct(dayChange.pct)}</span>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-[12px] text-zinc-600">累计收益</div>
+                          <div className={`text-[14px] font-mono font-semibold leading-tight ${upDown(cumReturn)}`}>
+                            {fmtPct(cumReturn)}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <div className="h-4 w-px bg-zinc-800 shrink-0" />
-                    <div className="flex items-baseline gap-1.5 whitespace-nowrap">
-                      <span className="text-[12px] text-zinc-600">盯市权益</span>
-                      <span className="text-[14px] font-mono font-semibold text-zinc-100">
-                        {fmtMoney(day.equity)}
-                      </span>
-                    </div>
-                    <div className="flex items-baseline gap-1.5 whitespace-nowrap">
-                      <span className="text-[12px] text-zinc-600">现金</span>
-                      <span className="text-[14px] font-mono text-zinc-300">
-                        {fmtMoney(day.cash)}
-                      </span>
-                    </div>
-                    <div className="flex items-baseline gap-1.5 whitespace-nowrap">
-                      <span className="text-[12px] text-zinc-600">持仓市值</span>
-                      <span className="text-[14px] font-mono text-zinc-300">
-                        {fmtMoney(day.position_value)}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Mini label="持仓" value={String(day.positions)} />
-                      <Mini label="买入" value={String(day.buys)} tone="text-red-400" />
-                      <Mini label="卖出" value={String(day.sells)} tone="text-green-400" />
-                      <Mini label="持有" value={String(day.holds)} />
-                      <Mini label="评估" value={String(day.evaluated)} />
-                      <Mini label="成交" value={String(day.trades)} />
+
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+                      <Stat label="现金" value={fmtMoney(day.cash)} />
+                      <Stat label="持仓市值" value={fmtMoney(day.position_value)} />
+                      <Stat label="持仓" value={`${day.positions} 只`} />
+                      <Stat label="今日买入信号" value={String(day.buys)} tone="text-red-400" />
+                      <Stat label="今日卖出信号" value={String(day.sells)} tone="text-green-400" />
+                      <Stat
+                        label="仓位"
+                        value={`${day.equity > 0 ? ((day.position_value / day.equity) * 100).toFixed(0) : 0}%`}
+                      />
                     </div>
                   </div>
+
+                  {/* 当日持仓明细: 逐日快照来自引擎, 拖动进度条时直接跟着变 */}
+                  {day.holdings.length > 0 && (
+                    <div className="border-b border-zinc-800/80">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 pt-2 pb-1">
+                        <Wallet className="h-3.5 w-3.5 text-emerald-400" />
+                        <span className="text-[12px] font-semibold text-zinc-400">当日持仓</span>
+                        <span className="text-[12px] text-zinc-600 font-mono">
+                          {day.holdings.length} 只 · 市值 {fmtMoney(day.position_value)}
+                        </span>
+                        <span className="ml-auto text-[12px] font-mono text-zinc-600">
+                          浮动{' '}
+                          <span className={upDown(dayHoldingsPnl)}>
+                            {dayHoldingsPnl >= 0 ? '+' : ''}
+                            {fmtMoney(dayHoldingsPnl)}
+                          </span>
+                        </span>
+                      </div>
+                      <div className="max-h-[136px] overflow-auto">
+                        <table className="w-full min-w-[620px] text-[13px]">
+                          <thead className="sticky top-0 bg-zinc-900/95 backdrop-blur text-zinc-500">
+                            <tr>
+                              <Th>标的</Th>
+                              <Th right>股数</Th>
+                              <Th right>成本</Th>
+                              <Th right>现价</Th>
+                              <Th right>市值</Th>
+                              <Th right>浮动盈亏</Th>
+                              <Th>建仓日</Th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {day.holdings.map((h) => (
+                              <tr key={h.symbol} className="border-t border-zinc-800/40">
+                                <Td>
+                                  <SymbolCell
+                                    symbol={h.symbol}
+                                    name={nameOf(h.symbol)}
+                                    onOpen={() => setDetailSymbol(h.symbol)}
+                                  />
+                                </Td>
+                                <Td right mono>{h.shares.toLocaleString()}</Td>
+                                <Td right mono>{h.avg_cost.toFixed(2)}</Td>
+                                <Td right mono>{h.close.toFixed(2)}</Td>
+                                <Td right mono>{fmtMoney(h.value)}</Td>
+                                <Td right mono className={upDown(h.pnl)}>
+                                  {h.pnl >= 0 ? '+' : ''}
+                                  {fmtMoney(h.pnl)}
+                                  <span className="ml-1 text-[11px] opacity-70">
+                                    {fmtPct(h.pnl_percent)}
+                                  </span>
+                                </Td>
+                                <Td mono>{h.opened_on ?? '—'}</Td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="flex items-center gap-1 px-2 py-1.5 border-b border-zinc-800/80">
                     {(
@@ -1296,60 +1418,147 @@ export default function RustSimulation() {
                     </div>
                   </div>
 
-                  <div className="flex-1 min-h-0 overflow-y-auto">
+                  <div className="flex-1 min-h-0 overflow-auto">
                     {symbolRows.length === 0 ? (
                       <Empty text="这段区间没有任何标的成交" />
                     ) : (
-                      <table className="w-full text-[13px]">
+                      <table className="w-full min-w-[880px] text-[13px]">
                         <thead className="sticky top-0 bg-zinc-900/95 backdrop-blur text-zinc-500">
                           <tr>
                             <Th>标的</Th>
                             <Th right>买 / 卖</Th>
-                            <Th right>持仓</Th>
+                            <Th right>买入额</Th>
+                            <Th right>卖出额</Th>
                             <Th right>已实现盈亏</Th>
+                            <Th right>持仓</Th>
+                            <Th>首次买入</Th>
+                            <Th>最近交易</Th>
                             <Th right>胜率</Th>
-                            <Th right>手续费</Th>
                             <Th right>同期涨跌</Th>
-                            <Th right>最后收盘</Th>
                           </tr>
                         </thead>
                         <tbody>
-                          {symbolRows.map((r) => (
-                            <tr
-                              key={r.symbol}
-                              onClick={() => setDetailSymbol(r.symbol)}
-                              className="border-t border-zinc-800/40 hover:bg-zinc-900/70 cursor-pointer"
-                              title="点开该股的 K 线与缠论结构"
-                            >
-                              <Td>
-                                <SymbolCell
-                                  symbol={r.symbol}
-                                  name={nameOf(r.symbol)}
-                                  onOpen={() => setDetailSymbol(r.symbol)}
-                                />
-                              </Td>
-                              <Td right mono>
-                                <span className="text-red-400">{r.buys}</span>
-                                <span className="text-zinc-600"> / </span>
-                                <span className="text-green-400">{r.sells}</span>
-                              </Td>
-                              <Td right mono>
-                                {r.shares > 0 ? r.shares.toLocaleString() : '—'}
-                              </Td>
-                              <Td right mono className={upDown(r.realized_pnl)}>
-                                {r.realized_pnl >= 0 ? '+' : ''}
-                                {fmtMoney(r.realized_pnl)}
-                              </Td>
-                              <Td right mono>
-                                {r.win_rate > 0 ? `${r.win_rate.toFixed(0)}%` : '—'}
-                              </Td>
-                              <Td right mono>{fmtMoney(r.fees)}</Td>
-                              <Td right mono className={upDown(r.buy_hold_percent)}>
-                                {fmtPct(r.buy_hold_percent)}
-                              </Td>
-                              <Td right mono>{r.last_close.toFixed(2)}</Td>
-                            </tr>
-                          ))}
+                          {symbolRows.map((r) => {
+                            const expanded = expandedSymbol === r.symbol;
+                            return (
+                              <Fragment key={r.symbol}>
+                                <tr
+                                  onClick={() =>
+                                    setExpandedSymbol((prev) => (prev === r.symbol ? null : r.symbol))
+                                  }
+                                  className={`border-t border-zinc-800/40 hover:bg-zinc-900/70 cursor-pointer ${
+                                    expanded ? 'bg-zinc-900/60' : ''
+                                  }`}
+                                  title="点击展开这只票的每一笔买卖 (时间 / 金额); 点代码看 K 线"
+                                >
+                                  <Td>
+                                    <span className="inline-flex items-center gap-1.5">
+                                      <ChevronRight
+                                        className={`h-3 w-3 shrink-0 text-zinc-600 transition-transform ${
+                                          expanded ? 'rotate-90' : ''
+                                        }`}
+                                      />
+                                      <SymbolCell
+                                        symbol={r.symbol}
+                                        name={nameOf(r.symbol)}
+                                        onOpen={() => setDetailSymbol(r.symbol)}
+                                      />
+                                    </span>
+                                  </Td>
+                                  <Td right mono>
+                                    <span className="text-red-400">{r.buys}</span>
+                                    <span className="text-zinc-600"> / </span>
+                                    <span className="text-green-400">{r.sells}</span>
+                                  </Td>
+                                  <Td right mono>{r.buyAmount > 0 ? fmtMoney(r.buyAmount) : '—'}</Td>
+                                  <Td right mono>{r.sellAmount > 0 ? fmtMoney(r.sellAmount) : '—'}</Td>
+                                  <Td right mono className={upDown(r.realized_pnl)}>
+                                    {r.realized_pnl >= 0 ? '+' : ''}
+                                    {fmtMoney(r.realized_pnl)}
+                                  </Td>
+                                  <Td right mono>
+                                    {r.shares > 0 ? r.shares.toLocaleString() : '—'}
+                                  </Td>
+                                  <Td mono>{r.firstBuy ?? '—'}</Td>
+                                  <Td mono>{r.lastTrade ?? '—'}</Td>
+                                  <Td right mono>
+                                    {r.win_rate > 0 ? `${r.win_rate.toFixed(0)}%` : '—'}
+                                  </Td>
+                                  <Td right mono className={upDown(r.buy_hold_percent)}>
+                                    {fmtPct(r.buy_hold_percent)}
+                                  </Td>
+                                </tr>
+
+                                {expanded && (
+                                  <tr className="bg-zinc-950/50">
+                                    <td colSpan={10} className="px-3 py-2">
+                                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-1.5 text-[12px] text-zinc-600 font-mono">
+                                        <span className="text-zinc-400 font-sans font-semibold">
+                                          买卖明细
+                                        </span>
+                                        <span>{r.tradeList.length} 笔</span>
+                                        <span>
+                                          买入 {r.buys} 笔 ·{' '}
+                                          <span className="text-red-400/90">
+                                            ¥{fmtMoney(r.buyAmount)}
+                                          </span>
+                                        </span>
+                                        <span>
+                                          卖出 {r.sells} 笔 ·{' '}
+                                          <span className="text-green-400/90">
+                                            ¥{fmtMoney(r.sellAmount)}
+                                          </span>
+                                        </span>
+                                        {r.shares > 0 && (
+                                          <span className="text-amber-500/80">
+                                            期末仍持有 {r.shares.toLocaleString()} 股
+                                          </span>
+                                        )}
+                                      </div>
+                                      <table className="w-full max-w-[720px] text-[12px]">
+                                        <thead className="text-zinc-600">
+                                          <tr>
+                                            <th className="text-left font-medium px-2 py-1">日期</th>
+                                            <th className="text-left font-medium px-2 py-1">方向</th>
+                                            <th className="text-right font-medium px-2 py-1">价格</th>
+                                            <th className="text-right font-medium px-2 py-1">股数</th>
+                                            <th className="text-right font-medium px-2 py-1">金额</th>
+                                            <th className="text-right font-medium px-2 py-1">费用</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {r.tradeList.map((t, i) => (
+                                            <tr key={`${t.date}-${i}`} className="border-t border-zinc-800/40">
+                                              <td className="px-2 py-1 font-mono text-zinc-400">{t.date}</td>
+                                              <td
+                                                className={`px-2 py-1 font-semibold ${
+                                                  t.action === 'BUY' ? 'text-red-400' : 'text-green-400'
+                                                }`}
+                                              >
+                                                {t.action === 'BUY' ? '买入' : '卖出'}
+                                              </td>
+                                              <td className="px-2 py-1 text-right font-mono text-zinc-300">
+                                                {t.price.toFixed(2)}
+                                              </td>
+                                              <td className="px-2 py-1 text-right font-mono text-zinc-300">
+                                                {t.shares.toLocaleString()}
+                                              </td>
+                                              <td className="px-2 py-1 text-right font-mono text-zinc-300">
+                                                ¥{fmtMoney(t.value)}
+                                              </td>
+                                              <td className="px-2 py-1 text-right font-mono text-zinc-500">
+                                                {t.fee.toFixed(2)}
+                                              </td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </td>
+                                  </tr>
+                                )}
+                              </Fragment>
+                            );
+                          })}
                         </tbody>
                       </table>
                     )}
@@ -1435,11 +1644,14 @@ function TransportBtn({
   );
 }
 
-function Mini({ label, value, tone }: { label: string; value: string; tone?: string }) {
+/** 当日概览里的等宽统计格 (标签在上, 数值在下, 统一高度) */
+function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
-    <div className="rounded-md bg-zinc-950/60 border border-zinc-800/60 px-2 py-1">
-      <div className="text-[12px] text-zinc-600 uppercase tracking-wider">{label}</div>
-      <div className={`text-[14px] font-mono font-bold ${tone ?? 'text-zinc-300'}`}>{value}</div>
+    <div className="rounded-md bg-zinc-950/50 border border-zinc-800/60 px-2.5 py-1.5 min-w-0">
+      <div className="text-[11px] text-zinc-600 truncate">{label}</div>
+      <div className={`text-[14px] font-mono font-semibold mt-0.5 truncate ${tone ?? 'text-zinc-300'}`}>
+        {value}
+      </div>
     </div>
   );
 }

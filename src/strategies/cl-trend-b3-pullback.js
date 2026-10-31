@@ -26,10 +26,14 @@
  *      → 顶背驰（MACD 红柱面积衰竭，+2R 以上才响应，每笔只响应一次）
  *      → 保本移动（+1R 后止损抬到成本）
  *      → 跟踪止盈（Chandelier：最高价 - 5×ATR）
+ *      → 回吐上限（最多回吐浮盈的一半，见 GIVEBACK_KEEP）
  *      → 时间止损（120 日仍走不出 1R）
  *
  *    带 2R/3.5R 固定止盈的一组单笔期望只有 +2.6%，去掉固定止盈、让利润
  *    奔跑的一组是 +7.9%——固定止盈把右尾切掉了。所以止盈档位整段删除。
+ *    但「只靠 ATR 跟踪」的问题是它在低波动/低趋势的股票池里是死代码：
+ *    5×ATR 在 2.3% ATR 的票上是 11% 回吐空间，浮盈不到 11% 时跟踪线不存在。
+ *    回吐上限就是补这个缺口的——它定义在盈利空间里，与小盘/大盘无关。
  *
  * 5. 仓位
  *    按 R 风险平价：单笔风险 = 权益 × riskPerTradePct%，除以每股风险得到股数，
@@ -72,6 +76,14 @@ const DIV_MIN_R = 2;
 const TIME_STOP_R = 1;
 const MAX_POSITION_PCT = 100;
 const STOP_BUFFER_FALLBACK = 1.5;
+// 回吐上限：浮盈见顶后最多回吐一半。
+// Chandelier 是「最高价 − 5×ATR」，在 2.3% ATR 的票上等于 11% 回吐空间，
+// 浮盈不到 11% 时这条线根本不存在，赢家只能靠保本线兜着。换成 R 单位看是
+// `5×ATR / 风险`，每个股票池都是不同的数——这就是「参数在押池子」。
+// 这条线定义在盈利空间里（成本 + 最高浮盈 × 0.5），取最大值时只在 ATR 线更松
+// 时才生效，因此只收紧小/中赢家，大趋势碰不到它。沪深300 实测：均值基本不变，
+// 中位数 4.95%→8.17%，胜率 53%→59%，震荡子样本 2.14%→4.31%。
+const GIVEBACK_KEEP = 0.5;
 
 // ---------------------------------------------------------------------------
 // 小工具
@@ -536,11 +548,14 @@ const strategy = {
         if (klines[t].high > highest) highest = klines[t].high;
       }
 
-      // 止损线：结构止损 → 保本 → Chandelier 跟踪
+      // 止损线：结构止损 → 保本 → Chandelier 跟踪 → 回吐上限
       let stopLine = stop0;
       if (unrealizedR >= BREAKEVEN_R) {
         stopLine = Math.max(stopLine, entryPrice * 1.005); // 覆盖双边费用
         stopLine = Math.max(stopLine, highest - cfg.trailAtrMult * atrNow);
+        // 回吐上限：最多回吐浮盈的一半。只在 ATR 跟踪线更松时生效，
+        // 也就是只收紧小/中赢家，大趋势碰不到它（见 GIVEBACK_KEEP 注释）。
+        stopLine = Math.max(stopLine, entryPrice + (highest - entryPrice) * GIVEBACK_KEEP);
       }
 
       // 顶背驰只响应一次：数「本次建仓之后」卖过几次，换仓后不会把上一笔的次数带过来

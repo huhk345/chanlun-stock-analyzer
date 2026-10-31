@@ -54,6 +54,22 @@ export interface RustTrade {
   reason: string | null;
 }
 
+/** 当日收盘后的持仓快照 (引擎逐日录制) */
+export interface RustHolding {
+  symbol: string;
+  shares: number;
+  /** 加权平均成本 (含买入费用) */
+  avg_cost: number;
+  /** 当日收盘价 */
+  close: number;
+  value: number;
+  /** 浮动盈亏 (close - avg_cost) * shares */
+  pnl: number;
+  pnl_percent: number;
+  /** 建仓日, 老仓位可能为空 */
+  opened_on: string | null;
+}
+
 export interface RustDay {
   index: number;
   date: string;
@@ -68,6 +84,8 @@ export interface RustDay {
   holds: number;
   trades: number;
   decisions: RustDecision[];
+  /** 当日收盘后的持仓明细 (按市值降序) */
+  holdings: RustHolding[];
 }
 
 /** 单只标的的日线（GET /api/rust/kline/:symbol） */
@@ -136,6 +154,8 @@ export interface RustSimResult {
   start: string;
   end: string;
   universe: number;
+  /** 按「可交易范围」从股票池里剔除的标的数 */
+  filtered_out?: number;
   /** 当前资金在「典型一手成本」下能持有的标的数 */
   max_positions: number;
   /** 等权仓位上限 (资金 ÷ max_positions) */
@@ -216,6 +236,8 @@ export interface RustSimInput {
   lotSize?: number;
   /** 每次开仓的金额下限, 默认 5000 */
   minPositionValue?: number;
+  /** 从股票池里剔除的板块 ('chinext' | 'star' | 'bse'); ST/退市 由引擎恒定剔除 */
+  excludeBoards?: string[];
   tPlus1?: boolean;
   stopLossPercent?: number;
 }

@@ -321,6 +321,19 @@ const BREAKEVEN_R: f64 = 1.0;
 const TIME_STOP_R: f64 = 1.0;
 const DIV_MIN_R: f64 = 2.0;
 const SIZE_PCT: f64 = 100.0;
+/// 回吐上限：浮盈见顶后最多回吐一半。
+///
+/// Chandelier 跟踪是 `最高价 − trail_atr × ATR`，在 2.3% ATR 的票上等于 11% 的回吐空间，
+/// 也就是说**浮盈不到 11% 时这条线根本不存在**，赢家只能靠保本线兜着。把它换成 R 单位
+/// 看是 `trail_atr × ATR / 风险`，每个股票池都是不同的数 —— 这正是「参数在押池子」的来源：
+/// 沪深300 的赢家能跑到 +21%（跟踪线有效），中证500 的赢家只到 +9%（跟踪线是死代码），
+/// 同一套规则在后者上等于没有止盈。
+///
+/// 这条线改在**盈利空间**里定义：`成本 + (最高浮盈) × 0.5`。因为止损线取各条线的最大值，
+/// 它只在「ATR 跟踪线比它更松」时生效 —— 也就是只在小/中赢家上收紧，大趋势碰不到它。
+/// 沪深300 实测：均值 10.72%→10.50%，中位数 4.95%→8.17%，胜率 53%→59%；
+/// 低趋势效率（震荡）子样本 2.14%→4.31%，胜率 33%→47%。
+const GIVEBACK_KEEP: f64 = 0.5;
 /// `stop_atr` 取不到 ATR 时的备用缓冲（%）
 const STOP_BUFFER_FALLBACK: f64 = 1.5;
 
@@ -702,11 +715,15 @@ impl Strategy for ChanlunB3Pullback {
                 self.entry_price * 0.02
             };
 
-            // 止损线：结构止损 → +1R 保本 → Chandelier 跟踪（不设固定止盈）
+            // 止损线：结构止损 → +1R 保本 → Chandelier 跟踪 → 回吐上限（不设固定止盈）
             let mut stop_line = self.stop0;
             if r_now >= BREAKEVEN_R {
                 stop_line = stop_line.max(self.entry_price * 1.005);
                 stop_line = stop_line.max(self.highest - self.cfg.trail_atr * atr_now);
+                // 只在小/中赢家上生效：大趋势的回吐空间本来就大于这条线
+                stop_line = stop_line.max(
+                    self.entry_price + (self.highest - self.entry_price) * GIVEBACK_KEEP,
+                );
             }
             if close <= stop_line {
                 let tag = if r_now >= BREAKEVEN_R {

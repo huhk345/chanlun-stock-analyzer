@@ -6,6 +6,9 @@ import {
 import { WatchItem, loadWatchlist, upsertWatchlist, removeFromWatchlist } from '../utils/watchlistStorage';
 import { IndexScanEngine } from '../utils/indexScan';
 import { parseSymbol, symbolKey, kindLabel, type ParsedSymbol } from '../utils/indexAnalysisApi';
+import { passesTradeFilter } from '../utils/tradeFilter';
+import useTradeFilter from '../hooks/useTradeFilter';
+import TradeFilterBar from './TradeFilterBar';
 import {
   ALL_BS_TYPES, INDEX_META, SIGNAL_WINDOW_DAYS,
   type IndexId, type ScanCacheInfo, type ScanProgress,
@@ -97,6 +100,10 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
   const [query, setQuery] = useState('');
   const [sortBy, setSortBy] = useState<'dateDesc' | 'dateAsc' | 'code'>('dateDesc');
   const [hideNoName, setHideNoName] = useState(false);
+
+  // 「可交易范围」: 创业板/科创板/北交所 按账户权限过滤 (与回测页共用同一设置);
+  // ST/退市 由该模块恒定剔除, 界面上不出现对应选项
+  const [tradeFilter] = useTradeFilter();
 
   // 自选股: 从信号行加入 (可填理由), 在市场总览页跟踪加入以来涨跌
   const [watchlist, setWatchlist] = useState<WatchItem[]>(() => loadWatchlist());
@@ -286,17 +293,37 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
   // 过滤 / 排序 / 统计
   // -------------------------------------------------------------------------
 
+  /**
+   * 先按「可交易范围」过一遍 (板块 + 恒定剔除的 ST/退市), 再做类型筛选与合并。
+   * 这一步只影响展示: 扫描与缓存仍然覆盖全部成分股, 所以切换 chip 是瞬时的,
+   * 不需要重扫。
+   */
+  const tradeRows = useMemo(
+    () => rows.filter((r) => passesTradeFilter(r.symbolKey, r.name, tradeFilter)),
+    [rows, tradeFilter],
+  );
+
+  /** 被「可交易范围」挡掉的标的数 (按标的去重, 不是信号条数) */
+  const hiddenSymbols = useMemo(() => {
+    if (tradeRows.length === rows.length) return 0;
+    const hidden = new Set<string>();
+    for (const r of rows) {
+      if (!passesTradeFilter(r.symbolKey, r.name, tradeFilter)) hidden.add(r.symbolKey);
+    }
+    return hidden.size;
+  }, [rows, tradeRows.length, tradeFilter]);
+
   const typeCounts = useMemo(() => {
     const counts: Record<BSPointType, number> = { B1: 0, B2: 0, B3: 0, S1: 0, S2: 0, S3: 0 };
-    for (const r of rows) counts[r.type]++;
+    for (const r of tradeRows) counts[r.type]++;
     return counts;
-  }, [rows]);
+  }, [tradeRows]);
 
   /** 按标的合并: 同一股票的多个买卖点合并为一行, 行内信号按日期倒序 */
   const visibleGroups = useMemo(() => {
     const q = query.trim().toLowerCase();
     const bySymbol = new Map<string, ScanSignalRow[]>();
-    for (const r of rows) {
+    for (const r of tradeRows) {
       if (!typeFilter.has(r.type)) continue;
       if (hideNoName && !r.name) continue;
       if (q && !(r.code.includes(q) || (r.name || '').toLowerCase().includes(q))) continue;
@@ -309,7 +336,7 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
     else if (sortBy === 'dateAsc') groups.sort((a, b) => a[a.length - 1].date.localeCompare(b[b.length - 1].date));
     else groups.sort((a, b) => a[0].symbolKey.localeCompare(b[0].symbolKey));
     return groups;
-  }, [rows, typeFilter, hideNoName, query, sortBy]);
+  }, [tradeRows, typeFilter, hideNoName, query, sortBy]);
 
   const totalSignals = useMemo(() => visibleGroups.reduce((n, g) => n + g.length, 0), [visibleGroups]);
   const buyCount = useMemo(() => visibleGroups.reduce((n, g) => n + g.filter(r => r.type.startsWith('B')).length, 0), [visibleGroups]);
@@ -535,6 +562,9 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
             })}
           </div>
 
+          {/* 可交易范围: 按账户权限排除创业板/科创板/北交所 */}
+          <TradeFilterBar hiddenCount={hiddenSymbols} hiddenUnit="只" />
+
           {/* Search */}
           <div className="flex items-center gap-1.5 h-7 px-2 rounded-md bg-zinc-900/70 border border-zinc-800/60 focus-within:border-blue-500/60 transition-colors">
             <Search className="h-3 w-3 text-zinc-500" />
@@ -575,9 +605,20 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
             {running || progress.total > 0 ? (
               <>
                 <Radar className="h-6 w-6 text-zinc-700" />
-                <p className="text-xs text-zinc-500">
-                  {running ? '正在扫描, 结果将实时出现在表格中...' : `最近 ${SIGNAL_WINDOW_DAYS} 天内无符合条件的买卖点`}
-                </p>
+                {running ? (
+                  <p className="text-xs text-zinc-500">正在扫描, 结果将实时出现在表格中...</p>
+                ) : hiddenSymbols > 0 && rows.length > 0 ? (
+                  <>
+                    <p className="text-xs text-zinc-500">
+                      有 <span className="text-amber-400/90">{hiddenSymbols}</span> 只标的被「可交易范围」隐藏
+                    </p>
+                    <p className="text-[11px] text-zinc-600">
+                      扫描结果里确实有信号, 但都属于你没开通的板块; 点上方暗掉的 chip 可以放宽
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-xs text-zinc-500">最近 {SIGNAL_WINDOW_DAYS} 天内无符合条件的买卖点</p>
+                )}
               </>
             ) : !hydrated ? (
               <>
@@ -767,6 +808,7 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
         数据来源: 腾讯行情 {scanTimeframe === 'weekly' ? '周线 (前复权, 近300周)' : '日线 (前复权, 近400根)'}, 由浏览器直连获取并在本地计算 ·
         请求节流为 2 路并发 + 500ms 间隔 (约 3 次/秒), 沪深300 全量约 2 分钟, 中证500 约 3 分钟 ·
         日线/周线结果分开缓存于浏览器 localStorage, 再次扫描只重新拉取数据未到最新交易日的标的, 「强制重扫」可丢弃缓存全量刷新 ·
+        「可交易」按账户权限隐藏创业板/科创板/北交所, 只影响显示与回测选股, 不改动已缓存的扫描结果 ·
         信号为缠论三类买卖点机械识别结果, 仅供研究参考, 不构成投资建议。
       </p>
 
