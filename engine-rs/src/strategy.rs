@@ -21,6 +21,7 @@
 //! is a prefix ending at `ctx.date`.
 
 use crate::data::Bar;
+use crate::data::RegimePoint;
 use chrono::NaiveDate;
 use std::collections::BTreeMap;
 
@@ -170,6 +171,9 @@ pub struct DayContext<'a> {
     pub account: AccountView,
     pub position: PositionView,
     pub params: &'a Params,
+    /// 池子级市场状态（截至 `date`）。单票策略看不到别人的 K 线，这个字段
+    /// 是唯一能判断「大盘 / 池子整体在不在跌」的入口。
+    pub regime: RegimePoint,
 }
 
 impl<'a> DayContext<'a> {

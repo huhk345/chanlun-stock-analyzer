@@ -50,6 +50,28 @@ pub struct Market {
     pub series: BTreeMap<String, SymbolSeries>,
     /// symbol -> first bar index per calendar day (populated by `align`)
     pub missing: Vec<String>,
+    /// 池子层面的市场状态，逐日与 `dates` 对齐。
+    /// 策略只能看到「今天及以前」的行情，这个序列也一样：第 i 个点只由
+    /// 截至 dates[i] 的收盘价算出，不含未来信息。
+    pub regime: Vec<RegimePoint>,
+}
+
+/// 池子级市场状态（等权口径，不依赖外部指数）。
+///
+/// 单票策略只能看到自己的 K 线，无法判断「整个市场是不是在跌」。用池内
+/// 成分股聚合出一个不做任何加权的市场代理：站上自身 MA60 的比例（breadth）
+/// 与等权净值的趋势（index_*）。这两个量都是纯价格的、无参数的粗指标，
+/// 适合做「什么时候不该逆势开仓」的闸门，而不是精确择时。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RegimePoint {
+    /// 池内收盘价站上自身 MA60 的标的比例 (0~1)
+    pub breadth_ma60: f64,
+    /// 等权净值相对自身 MA60 的偏离 (%)
+    pub index_ma60_dist: f64,
+    /// 等权净值 20 日涨跌幅 (%)
+    pub index_slope20: f64,
+    /// 样本足够长时为 true；前 80 个交易日不参与判断
+    pub valid: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -277,9 +299,97 @@ pub fn load_market(req: &LoadRequest) -> Result<Market, DataError> {
     date_set.sort_unstable();
     date_set.dedup();
 
+    let regime = build_regime(&date_set, &series_map);
+
     Ok(Market {
         dates: date_set,
         series: series_map,
         missing,
+        regime,
     })
+}
+
+/// 逐日聚合池子级市场状态。复杂度 O(总 K 线数)，只在加载时算一次。
+fn build_regime(dates: &[NaiveDate], series: &BTreeMap<String, SymbolSeries>) -> Vec<RegimePoint> {
+    let n = dates.len();
+    let date_index: HashMap<NaiveDate, usize> = dates
+        .iter()
+        .enumerate()
+        .map(|(i, d)| (*d, i))
+        .collect();
+
+    let mut above = vec![0usize; n];
+    let mut counted = vec![0usize; n];
+    let mut level_sum = vec![0.0f64; n];
+    let mut level_cnt = vec![0usize; n];
+
+    for s in series.values() {
+        let Some(first) = s.bars.first().map(|b| b.close) else {
+            continue;
+        };
+        if !(first > 0.0) {
+            continue;
+        }
+        let mut sum = 0.0f64;
+        for (k, b) in s.bars.iter().enumerate() {
+            sum += b.close;
+            if k >= 60 {
+                sum -= s.bars[k - 60].close;
+            }
+            let Some(&di) = date_index.get(&b.date) else {
+                continue;
+            };
+            level_sum[di] += b.close / first;
+            level_cnt[di] += 1;
+            if k >= 59 {
+                counted[di] += 1;
+                if b.close > sum / 60.0 {
+                    above[di] += 1;
+                }
+            }
+        }
+    }
+
+    // 等权净值：当日有行情的成分股 close/first_close 的均值，缺失日沿用前值。
+    let mut index: Vec<f64> = Vec::with_capacity(n);
+    let mut last = f64::NAN;
+    for i in 0..n {
+        if level_cnt[i] > 0 {
+            last = level_sum[i] / level_cnt[i] as f64;
+        }
+        index.push(last);
+    }
+
+    // 净值自身的 MA60 与 20 日斜率
+    let mut out = Vec::with_capacity(n);
+    let mut win = 0.0f64;
+    for i in 0..n {
+        win += index[i];
+        if i >= 60 {
+            win -= index[i - 60];
+        }
+        let ma60 = if i >= 59 { win / 60.0 } else { f64::NAN };
+        let slope20 = if i >= 20 && index[i - 20] > 0.0 {
+            (index[i] / index[i - 20] - 1.0) * 100.0
+        } else {
+            0.0
+        };
+        let breadth = if counted[i] > 0 {
+            above[i] as f64 / counted[i] as f64
+        } else {
+            0.0
+        };
+        let dist = if ma60.is_finite() && ma60 > 0.0 {
+            (index[i] / ma60 - 1.0) * 100.0
+        } else {
+            0.0
+        };
+        out.push(RegimePoint {
+            breadth_ma60: breadth,
+            index_ma60_dist: dist,
+            index_slope20: slope20,
+            valid: i >= 80 && ma60.is_finite(),
+        });
+    }
+    out
 }

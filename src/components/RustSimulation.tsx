@@ -36,6 +36,8 @@ import {
   runRustSim,
 } from '../utils/rustSimApi';
 import SymbolDetailDrawer from './SymbolDetailDrawer';
+import Select from './ui/Select';
+import DateField from './ui/DateField';
 import type {
   RustDay,
   RustPool,
@@ -165,7 +167,7 @@ export default function RustSimulation() {
         if (cancelled) return;
         setOnline(false);
         setError(
-          'Rust 模拟服务未启动。请在仓库根目录运行: ./engine-rs/target/release/chanlun-engine-rs --port 8901',
+          '回测引擎未启动。请在仓库根目录运行: ./engine-rs/target/release/chanlun-engine-rs --port 8901',
         );
       }
     })();
@@ -263,7 +265,7 @@ export default function RustSimulation() {
       setResult(res);
       setCursor(0);
     } catch (err: any) {
-      setError(err?.message || '模拟失败');
+      setError(err?.message || '回测失败');
     } finally {
       setRunning(false);
     }
@@ -389,16 +391,16 @@ export default function RustSimulation() {
           <CartesianGrid stroke="#27272a" strokeDasharray="3 3" vertical={false} />
           <XAxis
             dataKey="date"
-            tick={{ fill: '#71717a', fontSize: 10 }}
+            tick={{ fill: '#71717a', fontSize: 12 }}
             tickLine={false}
             axisLine={{ stroke: '#27272a' }}
             minTickGap={60}
           />
           <YAxis
-            tick={{ fill: '#71717a', fontSize: 10 }}
+            tick={{ fill: '#71717a', fontSize: 12 }}
             tickLine={false}
             axisLine={false}
-            width={56}
+            width={62}
             tickFormatter={(v: number) => fmtCompact(v)}
             domain={['auto', 'auto']}
           />
@@ -407,7 +409,7 @@ export default function RustSimulation() {
               background: '#18181b',
               border: '1px solid #3f3f46',
               borderRadius: 8,
-              fontSize: 11,
+              fontSize: 13,
             }}
             labelStyle={{ color: '#a1a1aa' }}
             formatter={(value: number, name: string) => [
@@ -501,15 +503,15 @@ export default function RustSimulation() {
             <Cpu className="h-4 w-4 text-orange-400" />
           </div>
           <div>
-            <h2 className="text-base font-bold text-zinc-100 leading-none">Rust 逐日模拟</h2>
-            <p className="text-[12px] text-zinc-500 mt-1 font-mono">
+            <h2 className="text-lg font-bold text-zinc-100 leading-none">策略回测</h2>
+            <p className="text-[13px] text-zinc-500 mt-1.5 font-mono">
               {framework} · 选股池 → 策略 → 信号 → A 股撮合
             </p>
           </div>
         </div>
         <div className="ml-auto flex items-center gap-2">
           {result && (
-            <span className="hidden lg:inline text-[12px] text-zinc-500 font-mono">
+            <span className="hidden lg:inline text-[13px] text-zinc-500 font-mono">
               录制 {result.elapsed_ms} ms · {result.universe} 只 · {result.days.length} 个交易日
             </span>
           )}
@@ -537,8 +539,8 @@ export default function RustSimulation() {
         </div>
       )}
 
-      {/* left / right split：两栏各自滚动，左侧「运行模拟」钉在栏底 */}
-      <div className="grid grid-cols-1 xl:grid-cols-[360px_minmax(0,1fr)] gap-4 items-stretch xl:flex-1 xl:min-h-0">
+      {/* left / right split：两栏各自滚动，左侧「开始回测」钉在栏底 */}
+      <div className="grid grid-cols-1 xl:grid-cols-[384px_minmax(0,1fr)] gap-4 items-stretch xl:flex-1 xl:min-h-0">
         {/* ---------------- LEFT: configuration ---------------- */}
         <aside className="flex flex-col gap-3 xl:min-h-0">
           <div
@@ -564,7 +566,7 @@ export default function RustSimulation() {
                           : [...prev, p.id],
                       )
                     }
-                    className={`rounded-lg border px-2.5 py-2 text-left transition-all cursor-pointer ${
+                    className={`rounded-lg border px-3 py-2.5 text-left transition-all cursor-pointer ${
                       active
                         ? 'border-blue-500/60 bg-blue-500/10'
                         : 'border-zinc-800 bg-zinc-950/60 hover:border-zinc-700'
@@ -572,15 +574,15 @@ export default function RustSimulation() {
                   >
                     <div className="flex items-center justify-between">
                       <span
-                        className={`text-[13px] font-semibold ${
+                        className={`text-[14px] font-semibold ${
                           active ? 'text-blue-300' : 'text-zinc-300'
                         }`}
                       >
                         {p.label}
                       </span>
-                      <span className="text-[11px] font-mono text-zinc-500">{p.size}</span>
+                      <span className="text-[12px] font-mono text-zinc-500">{p.size}</span>
                     </div>
-                    <div className="text-[11px] font-mono text-zinc-600 mt-1">
+                    <div className="text-[12px] font-mono text-zinc-600 mt-1">
                       {cov ? `已缓存 ${cov.cached}` : '—'}
                     </div>
                   </button>
@@ -588,7 +590,7 @@ export default function RustSimulation() {
               })}
             </div>
 
-            <div className="mt-2 flex items-center justify-between text-[11px] font-mono text-zinc-500">
+            <div className="mt-2.5 flex items-center justify-between text-[12px] font-mono text-zinc-500">
               <span>
                 {range.first || '—'} ~ {range.last || '—'}
               </span>
@@ -599,36 +601,34 @@ export default function RustSimulation() {
               )}
             </div>
             <p className="mt-1.5 text-[13px] text-zinc-600 leading-relaxed">
-              运行模拟时会自动补齐缺失的交易日; 若某只标的除权 (前复权基准整体变化), 该标的会自动全量重拉,
+              回测时会自动补齐缺失的交易日; 若某只标的除权 (前复权基准整体变化), 该标的会自动全量重拉,
               不会把两套价格尺度拼在一起。
             </p>
           </Card>
 
           {/* range */}
-          <Card title="模拟区间" icon={<CalendarRange className="h-3.5 w-3.5 text-violet-400" />}>
+          <Card title="回测区间" icon={<CalendarRange className="h-4 w-4 text-violet-400" />}>
             <div className="grid grid-cols-2 gap-2">
               <Field label="开始">
-                <input
-                  type="date"
+                <DateField
                   value={startDate}
+                  onChange={setStartDate}
                   min={range.first || undefined}
                   max={endDate || range.last || undefined}
-                  onChange={(e) => setStartDate(e.target.value)}
-                  className="w-full h-7 px-1.5 rounded bg-zinc-950 border border-zinc-800 text-[12px] text-zinc-200 font-mono focus:outline-none focus:border-violet-500/60"
+                  ariaLabel="回测开始日期"
                 />
               </Field>
               <Field label="结束">
-                <input
-                  type="date"
+                <DateField
                   value={endDate}
+                  onChange={setEndDate}
                   min={startDate || range.first || undefined}
                   max={range.last || undefined}
-                  onChange={(e) => setEndDate(e.target.value)}
-                  className="w-full h-7 px-1.5 rounded bg-zinc-950 border border-zinc-800 text-[12px] text-zinc-200 font-mono focus:outline-none focus:border-violet-500/60"
+                  ariaLabel="回测结束日期"
                 />
               </Field>
             </div>
-            <div className="mt-1.5 flex flex-wrap gap-1">
+            <div className="mt-2 flex flex-wrap gap-1.5">
               {[
                 { label: '近 1 年', days: -365 },
                 { label: '近 2 年', days: -730 },
@@ -644,7 +644,7 @@ export default function RustSimulation() {
                     const next = preset.days === 0 ? floor : shiftDays(base, preset.days);
                     setStartDate(next < floor ? floor : next);
                   }}
-                  className="px-1.5 h-5 rounded border border-zinc-800 text-[11px] text-zinc-400 hover:border-violet-500/50 hover:text-violet-300 transition-colors cursor-pointer"
+                  className="px-2 h-7 rounded-md border border-zinc-800 text-[12px] text-zinc-400 hover:border-violet-500/50 hover:text-violet-300 hover:bg-violet-500/5 transition-colors cursor-pointer"
                 >
                   {preset.label}
                 </button>
@@ -653,25 +653,20 @@ export default function RustSimulation() {
           </Card>
 
           {/* strategy */}
-          <Card title="策略" icon={<Sliders className="h-3.5 w-3.5 text-blue-400" />}>
-            <select
+          <Card title="策略" icon={<Sliders className="h-4 w-4 text-blue-400" />}>
+            <Select
               value={strategyId}
-              onChange={(e) => setStrategyId(e.target.value)}
-              className="w-full h-7 px-1.5 rounded bg-zinc-950 border border-zinc-800 text-[13px] text-zinc-200 focus:outline-none focus:border-blue-500/60"
-            >
-              {strategies.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
+              onChange={setStrategyId}
+              ariaLabel="选择回测策略"
+              options={strategies.map((s) => ({ value: s.id, label: s.name }))}
+            />
             {activeStrategy?.description && (
-              <p className="mt-1.5 text-[11px] text-zinc-500 leading-relaxed">
+              <p className="mt-2 text-[12px] text-zinc-500 leading-relaxed">
                 {activeStrategy.description}
               </p>
             )}
             {activeStrategy && activeStrategy.params.length > 0 && (
-              <div className="mt-2 grid grid-cols-2 gap-1.5">
+              <div className="mt-2.5 grid grid-cols-2 gap-2">
                 {activeStrategy.params.map((p) => (
                   <Field key={p.key} label={p.label}>
                     <input
@@ -683,7 +678,7 @@ export default function RustSimulation() {
                       onChange={(e) =>
                         setParams((prev) => ({ ...prev, [p.key]: Number(e.target.value) }))
                       }
-                      className="w-full h-7 px-1.5 rounded bg-zinc-950 border border-zinc-800 text-[12px] text-zinc-200 font-mono focus:outline-none focus:border-blue-500/60"
+                      className="w-full h-9 px-2.5 rounded-lg bg-zinc-950 border border-zinc-800 text-[14px] text-zinc-100 font-mono focus:outline-none focus:border-blue-500/60 focus:ring-2 focus:ring-blue-500/15 transition-colors"
                     />
                   </Field>
                 ))}
@@ -700,7 +695,7 @@ export default function RustSimulation() {
                   value={initialCash}
                   step={10000}
                   onChange={(e) => setInitialCash(Number(e.target.value))}
-                  className="w-full h-7 px-1.5 rounded bg-zinc-950 border border-zinc-800 text-[12px] text-zinc-200 font-mono focus:outline-none focus:border-emerald-500/60"
+                  className="w-full h-9 px-2.5 rounded-lg bg-zinc-950 border border-zinc-800 text-[14px] text-zinc-100 font-mono focus:outline-none focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/15 transition-colors"
                 />
               </Field>
               <Field label="最小开仓 ¥">
@@ -710,7 +705,7 @@ export default function RustSimulation() {
                   min={0}
                   step={1000}
                   onChange={(e) => setMinPosition(Number(e.target.value))}
-                  className="w-full h-7 px-1.5 rounded bg-zinc-950 border border-zinc-800 text-[12px] text-zinc-200 font-mono focus:outline-none focus:border-emerald-500/60"
+                  className="w-full h-9 px-2.5 rounded-lg bg-zinc-950 border border-zinc-800 text-[14px] text-zinc-100 font-mono focus:outline-none focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/15 transition-colors"
                 />
               </Field>
               <Field label="固定止损 %">
@@ -720,7 +715,7 @@ export default function RustSimulation() {
                   min={0}
                   step={1}
                   onChange={(e) => setStopLoss(Number(e.target.value))}
-                  className="w-full h-7 px-1.5 rounded bg-zinc-950 border border-zinc-800 text-[12px] text-zinc-200 font-mono focus:outline-none focus:border-emerald-500/60"
+                  className="w-full h-9 px-2.5 rounded-lg bg-zinc-950 border border-zinc-800 text-[14px] text-zinc-100 font-mono focus:outline-none focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/15 transition-colors"
                 />
               </Field>
             </div>
@@ -747,13 +742,13 @@ export default function RustSimulation() {
                       : '不限'}
                   </span>
                 </div>
-                <p className="text-[11px] text-zinc-600 leading-relaxed">
+                <p className="text-[12px] text-zinc-600 leading-relaxed">
                   按「一手成本中位数」反推资金能同时持有几只, 再等权分配。开仓金额低于下限的会被直接跳过,
                   不会开小仓; 一手都超过上限的高价股同样跳过。
                 </p>
               </div>
             ) : (
-              <p className="mt-1.5 text-[11px] text-zinc-600 leading-relaxed">
+              <p className="mt-2 text-[12px] text-zinc-600 leading-relaxed">
                 每只标的按等权仓位上限建仓, 上限由资金能同时持有几只决定; 组合共用同一现金账户。
               </p>
             )}
@@ -766,7 +761,7 @@ export default function RustSimulation() {
             <button
               onClick={handleRun}
               disabled={running || !online || !cacheReady}
-              className="w-full h-9 rounded-lg bg-blue-500 hover:bg-blue-400 active:bg-blue-600 disabled:opacity-40 text-white text-[13px] font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm shadow-blue-500/20"
+              className="w-full h-10 rounded-lg bg-blue-500 hover:bg-blue-400 active:bg-blue-600 disabled:opacity-40 text-white text-[14px] font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm shadow-blue-500/20"
             >
               {running ? (
                 <>
@@ -776,12 +771,12 @@ export default function RustSimulation() {
               ) : (
                 <>
                   <Zap className="h-4 w-4" />
-                  运行模拟
+                  开始回测
                 </>
               )}
             </button>
             {!cacheReady && (
-              <p className="text-[11px] text-amber-500/90 text-center mt-1.5">
+              <p className="text-[12px] text-amber-500/90 text-center mt-1.5">
                 该池还没有缓存数据, 先点「增量更新」拉取
               </p>
             )}
@@ -795,11 +790,11 @@ export default function RustSimulation() {
             <div className="flex items-center gap-3 rounded-xl border border-blue-500/30 bg-blue-500/5 px-4 py-3">
               <div className="h-4 w-4 shrink-0 rounded-full border-2 border-blue-400 border-t-transparent animate-spin" />
               <div className="min-w-0">
-                <p className="text-[13px] font-semibold text-blue-300">
-                  正在运行模拟…
-                  <span className="ml-2 font-mono text-[12px] text-blue-400/80">{elapsed}s</span>
+                <p className="text-[14px] font-semibold text-blue-300">
+                  正在回测…
+                  <span className="ml-2 font-mono text-[13px] text-blue-400/80">{elapsed}s</span>
                 </p>
-                <p className="text-[11px] text-zinc-500 mt-0.5">
+                <p className="text-[12px] text-zinc-500 mt-0.5">
                   自动补齐缺失数据 → 逐日录制 {result ? '· 下方为上一次结果' : ''}
                 </p>
               </div>
@@ -821,7 +816,7 @@ export default function RustSimulation() {
           {!result && !running && (
             <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900/20 py-20 flex flex-col items-center justify-center text-center">
               <Layers className="h-8 w-8 text-zinc-700 mb-3" />
-              <p className="text-xs text-zinc-400 font-medium">还没有模拟记录</p>
+              <p className="text-[13px] text-zinc-400 font-medium">还没有回测记录</p>
               <p className="text-[12px] text-zinc-600 mt-1 max-w-sm leading-relaxed">
                 Rust 引擎会用缓存的日线把整段历史<b>一次录完</b> —— 每个交易日一份快照
                 (决策 / 成交 / 现金持仓 / 盯市权益), 之后拖动进度条只是索引查找。
@@ -875,27 +870,27 @@ export default function RustSimulation() {
                 {kpis.map((k) => (
                   <div
                     key={k.label}
-                    className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-2.5 py-2"
+                    className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2.5"
                   >
-                    <div className="text-[11px] text-zinc-500 uppercase tracking-wider font-semibold truncate">
+                    <div className="text-[12px] text-zinc-500 uppercase tracking-wider font-semibold truncate">
                       {k.label}
                     </div>
-                    <div className={`text-[16px] font-bold font-mono mt-0.5 ${k.tone}`}>
+                    <div className={`text-[18px] font-bold font-mono mt-0.5 ${k.tone}`}>
                       {k.value}
                     </div>
-                    <div className="text-[11px] text-zinc-600 font-mono mt-0.5 truncate">{k.sub}</div>
+                    <div className="text-[12px] text-zinc-600 font-mono mt-0.5 truncate">{k.sub}</div>
                   </div>
                 ))}
               </div>
 
               <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 overflow-hidden">
-                <div className="flex items-center gap-3 px-3 py-2 border-b border-zinc-800/80">
-                  <Gauge className="h-3.5 w-3.5 text-blue-400" />
-                  <span className="text-[13px] font-semibold text-zinc-300">组合权益</span>
-                  <span className="text-[12px] text-zinc-600 font-mono">
+                <div className="flex items-center gap-3 px-3 py-2.5 border-b border-zinc-800/80">
+                  <Gauge className="h-4 w-4 text-blue-400" />
+                  <span className="text-[14px] font-semibold text-zinc-300">组合权益</span>
+                  <span className="text-[13px] text-zinc-600 font-mono">
                     {result.start} → {result.end} · {result.days.length} 日
                   </span>
-                  <div className="ml-auto flex items-center gap-3 text-[11px] font-mono">
+                  <div className="ml-auto flex items-center gap-3 text-[12px] font-mono">
                     <span className="flex items-center gap-1 text-blue-400">
                       <span className="h-0.5 w-4 bg-blue-500 rounded" />
                       策略
@@ -968,17 +963,18 @@ export default function RustSimulation() {
                     className="flex-1 accent-blue-500 cursor-pointer"
                   />
 
-                  <select
-                    value={speed}
-                    onChange={(e) => setSpeed(Number(e.target.value))}
-                    className="h-7 px-1.5 rounded bg-zinc-950 border border-zinc-800 text-[12px] text-zinc-300 font-mono focus:outline-none"
-                  >
-                    {[2, 5, 10, 20, 40].map((s) => (
-                      <option key={s} value={s}>
-                        {s} 日/秒
-                      </option>
-                    ))}
-                  </select>
+                  <div className="w-[108px] shrink-0">
+                    <Select
+                      size="sm"
+                      value={String(speed)}
+                      onChange={(v) => setSpeed(Number(v))}
+                      ariaLabel="播放速度"
+                      options={[2, 5, 10, 20, 40].map((s) => ({
+                        value: String(s),
+                        label: `${s} 日/秒`,
+                      }))}
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -987,29 +983,29 @@ export default function RustSimulation() {
                   {/* 当日概览压成一条横带：宽度全留给下面的成交表，不再被 240px 侧栏吃掉 */}
                   <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 px-3 py-2 border-b border-zinc-800/80">
                     <div className="flex items-baseline gap-2 shrink-0">
-                      <span className="text-[11px] text-zinc-500 uppercase tracking-wider font-semibold">
+                      <span className="text-[12px] text-zinc-500 uppercase tracking-wider font-semibold">
                         第 {day.index + 1} / {total} 日
                       </span>
-                      <span className="text-[15px] font-bold text-zinc-100 font-mono">
+                      <span className="text-[16px] font-bold text-zinc-100 font-mono">
                         {day.date}
                       </span>
                     </div>
                     <div className="h-4 w-px bg-zinc-800 shrink-0" />
                     <div className="flex items-baseline gap-1.5 whitespace-nowrap">
-                      <span className="text-[11px] text-zinc-600">盯市权益</span>
-                      <span className="text-[13px] font-mono font-semibold text-zinc-100">
+                      <span className="text-[12px] text-zinc-600">盯市权益</span>
+                      <span className="text-[14px] font-mono font-semibold text-zinc-100">
                         {fmtMoney(day.equity)}
                       </span>
                     </div>
                     <div className="flex items-baseline gap-1.5 whitespace-nowrap">
-                      <span className="text-[11px] text-zinc-600">现金</span>
-                      <span className="text-[13px] font-mono text-zinc-300">
+                      <span className="text-[12px] text-zinc-600">现金</span>
+                      <span className="text-[14px] font-mono text-zinc-300">
                         {fmtMoney(day.cash)}
                       </span>
                     </div>
                     <div className="flex items-baseline gap-1.5 whitespace-nowrap">
-                      <span className="text-[11px] text-zinc-600">持仓市值</span>
-                      <span className="text-[13px] font-mono text-zinc-300">
+                      <span className="text-[12px] text-zinc-600">持仓市值</span>
+                      <span className="text-[14px] font-mono text-zinc-300">
                         {fmtMoney(day.position_value)}
                       </span>
                     </div>
@@ -1034,7 +1030,7 @@ export default function RustSimulation() {
                       <button
                         key={key}
                         onClick={() => setTab(key)}
-                        className={`px-2.5 h-6 rounded text-[12px] font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                        className={`px-3 h-7 rounded-md text-[13px] font-medium transition-colors cursor-pointer whitespace-nowrap ${
                           tab === key
                             ? 'bg-blue-500/15 text-blue-300'
                             : 'text-zinc-500 hover:text-zinc-300'
@@ -1043,7 +1039,7 @@ export default function RustSimulation() {
                         {label}
                       </button>
                     ))}
-                    <span className="ml-auto text-[11px] text-zinc-600 font-mono pr-1 hidden md:inline">
+                    <span className="ml-auto text-[12px] text-zinc-600 font-mono pr-1 hidden md:inline">
                       {tab === 'all' ? '按日期分组 · 点日期跳转' : '信号含策略理由'}
                     </span>
                     </div>
@@ -1053,7 +1049,7 @@ export default function RustSimulation() {
                         (day.decisions.length === 0 ? (
                           <Empty text="这一天没有产生买卖信号" />
                         ) : (
-                          <table className="w-full text-[12px]">
+                          <table className="w-full text-[13px]">
                             <thead className="sticky top-0 bg-zinc-900/95 backdrop-blur text-zinc-500">
                               <tr>
                                 <Th>标的</Th>
@@ -1076,7 +1072,7 @@ export default function RustSimulation() {
                                   </Td>
                                   <Td>
                                     <span
-                                      className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[11px] font-bold ${
+                                      className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded text-[12px] font-bold ${
                                         d.action === 'BUY'
                                           ? 'bg-red-500/15 text-red-400'
                                           : 'bg-green-500/15 text-green-400'
@@ -1124,7 +1120,7 @@ export default function RustSimulation() {
                         (dayTrades.length === 0 ? (
                           <Empty text="这一天没有成交" />
                         ) : (
-                          <table className="w-full text-[12px]">
+                          <table className="w-full text-[13px]">
                             <thead className="sticky top-0 bg-zinc-900/95 backdrop-blur text-zinc-500">
                               <tr>
                                 <Th>标的</Th>
@@ -1174,7 +1170,7 @@ export default function RustSimulation() {
 
                       {tab === 'all' && (
                         <>
-                          <table className="w-full text-[12px]">
+                          <table className="w-full text-[13px]">
                             <thead className="sticky top-0 bg-zinc-900/95 backdrop-blur text-zinc-500">
                               <tr>
                                 <Th>标的</Th>
@@ -1200,16 +1196,16 @@ export default function RustSimulation() {
                                   >
                                     <td
                                       colSpan={6}
-                                      className="px-2 py-1.5 border-t border-zinc-800/70"
+                                      className="px-3 py-2 border-t border-zinc-800/70"
                                     >
-                                      <span className="font-mono text-[12px] font-semibold text-zinc-300">
+                                      <span className="font-mono text-[13px] font-semibold text-zinc-300">
                                         {row.date}
                                       </span>
-                                      <span className="ml-2 text-[11px] text-zinc-600">
+                                      <span className="ml-2 text-[12px] text-zinc-600">
                                         {row.count} 笔 · ¥{fmtMoney(row.value)}
                                       </span>
                                       {row.date === day?.date && (
-                                        <span className="ml-2 text-[11px] text-blue-400">
+                                        <span className="ml-2 text-[12px] text-blue-400">
                                           当前
                                         </span>
                                       )}
@@ -1261,7 +1257,7 @@ export default function RustSimulation() {
                             <div className="p-2 border-t border-zinc-800/60">
                               <button
                                 onClick={() => setLedgerLimit((n) => n + 400)}
-                                className="w-full h-8 rounded-md border border-zinc-800 text-[12px] text-zinc-400 hover:border-blue-500/50 hover:text-blue-300 transition-colors cursor-pointer"
+                                className="w-full h-9 rounded-md border border-zinc-800 text-[13px] text-zinc-400 hover:border-blue-500/50 hover:text-blue-300 transition-colors cursor-pointer"
                               >
                                 加载更多 ({ledgerLimit} / {ledgerRows.length})
                               </button>
@@ -1276,14 +1272,14 @@ export default function RustSimulation() {
               {/* 个股总体情况：撑满剩余高度，和左侧设置栏底部对齐 */}
               {result && (
                 <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 overflow-hidden flex flex-col flex-1 min-h-[200px] max-h-[340px]">
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 border-b border-zinc-800/80">
-                    <Layers className="h-3.5 w-3.5 text-blue-400" />
-                    <span className="text-[13px] font-semibold text-zinc-300">个股总体情况</span>
-                    <span className="text-[11px] text-zinc-600">全区间</span>
-                    <span className="text-[11px] text-zinc-600 font-mono">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2.5 border-b border-zinc-800/80">
+                    <Layers className="h-4 w-4 text-blue-400" />
+                    <span className="text-[14px] font-semibold text-zinc-300">个股总体情况</span>
+                    <span className="text-[12px] text-zinc-600">全区间</span>
+                    <span className="text-[12px] text-zinc-600 font-mono">
                       {symbolRows.length} / {result.universe} 只有交易
                     </span>
-                    <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-mono">
+                    <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] font-mono">
                       <span className="text-zinc-600">
                         已实现{' '}
                         <span className={upDown(symbolTotals.pnl)}>
@@ -1305,7 +1301,7 @@ export default function RustSimulation() {
                     {symbolRows.length === 0 ? (
                       <Empty text="这段区间没有任何标的成交" />
                     ) : (
-                      <table className="w-full text-[12px]">
+                      <table className="w-full text-[13px]">
                         <thead className="sticky top-0 bg-zinc-900/95 backdrop-blur text-zinc-500">
                           <tr>
                             <Th>标的</Th>
@@ -1362,7 +1358,7 @@ export default function RustSimulation() {
                 </div>
               )}
 
-              <p className="text-[11px] text-zinc-600 leading-relaxed px-1">
+              <p className="text-[12px] text-zinc-600 leading-relaxed px-1">
                 成交口径: 信号当根收盘价 · 100 股整手 · T+1 · 涨跌停拦截 (主板 10% / 创业板·科创板
                 20% / 北交所 30%) · 佣金万 2.5 (最低 5 元) + 卖出印花税千 0.5 + 过户费万 0.1。
               </p>
@@ -1399,10 +1395,10 @@ function Card({
   children: ReactNode;
 }) {
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-2.5">
-      <div className="flex items-center gap-1.5 mb-2">
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
+      <div className="flex items-center gap-1.5 mb-2.5">
         {icon}
-        <span className="text-[12px] font-semibold text-zinc-300 uppercase tracking-wider">
+        <span className="text-[13px] font-semibold text-zinc-300 uppercase tracking-wider">
           {title}
         </span>
       </div>
@@ -1413,8 +1409,8 @@ function Card({
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <label className="flex flex-col gap-0.5">
-      <span className="text-[11px] text-zinc-500 truncate">{label}</span>
+    <label className="flex flex-col gap-1">
+      <span className="text-[12px] text-zinc-500 truncate">{label}</span>
       {children}
     </label>
   );
@@ -1433,7 +1429,7 @@ function TransportBtn({
     <button
       title={title}
       onClick={onClick}
-      className="h-7 w-7 rounded-md border border-zinc-800 text-zinc-400 hover:text-zinc-100 hover:border-zinc-700 flex items-center justify-center cursor-pointer"
+      className="h-8 w-8 rounded-md border border-zinc-800 text-zinc-400 hover:text-zinc-100 hover:border-zinc-700 flex items-center justify-center cursor-pointer"
     >
       {children}
     </button>
@@ -1442,9 +1438,9 @@ function TransportBtn({
 
 function Mini({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
-    <div className="rounded-md bg-zinc-950/60 border border-zinc-800/60 px-1.5 py-1">
-      <div className="text-[10px] text-zinc-600 uppercase tracking-wider">{label}</div>
-      <div className={`text-[13px] font-mono font-bold ${tone ?? 'text-zinc-300'}`}>{value}</div>
+    <div className="rounded-md bg-zinc-950/60 border border-zinc-800/60 px-2 py-1">
+      <div className="text-[12px] text-zinc-600 uppercase tracking-wider">{label}</div>
+      <div className={`text-[14px] font-mono font-bold ${tone ?? 'text-zinc-300'}`}>{value}</div>
     </div>
   );
 }
@@ -1459,13 +1455,13 @@ function TinyStat({ label, value, tone }: { label: string; value: number; tone: 
 }
 
 function Empty({ text }: { text: string }) {
-  return <div className="py-10 text-center text-[12px] text-zinc-600">{text}</div>;
+  return <div className="py-10 text-center text-[13px] text-zinc-600">{text}</div>;
 }
 
 function Th({ children, right }: { children: ReactNode; right?: boolean }) {
   return (
     <th
-      className={`font-semibold uppercase tracking-wider text-[11px] px-2 py-1.5 whitespace-nowrap ${
+      className={`font-semibold uppercase tracking-wider text-[12px] px-3 py-2 whitespace-nowrap ${
         right ? 'text-right' : 'text-left'
       }`}
     >
@@ -1487,7 +1483,7 @@ function Td({
 }) {
   return (
     <td
-      className={`px-2 py-1.5 whitespace-nowrap ${right ? 'text-right' : 'text-left'} ${
+      className={`px-3 py-2 whitespace-nowrap ${right ? 'text-right' : 'text-left'} ${
         mono ? 'font-mono' : ''
       } text-zinc-300 ${className}`}
     >
@@ -1522,7 +1518,7 @@ function SymbolCell({
       >
         {symbol}
       </button>
-      {name ? <span className="text-[11px] text-zinc-500">{name}</span> : null}
+      {name ? <span className="text-[12px] text-zinc-500">{name}</span> : null}
     </span>
   );
 }

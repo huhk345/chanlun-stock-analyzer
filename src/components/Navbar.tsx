@@ -380,10 +380,10 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
                   ? 'bg-orange-500/15 text-orange-400 shadow-[inset_0_0_0_1px_rgba(249,115,22,0.3)]'
                   : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60'
               }`}
-              title="Rust 逐日模拟 (barter-rs)"
+              title="策略回测 (barter-rs 逐日撮合)"
             >
               <Cpu className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Rust 模拟</span>
+              <span className="hidden sm:inline">策略回测</span>
             </a>
             <a
               href={routeFor('analyzer')}

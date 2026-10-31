@@ -319,6 +319,10 @@ struct B3Config {
     max_chase: f64,
     stop_buffer: f64,
     max_risk: f64,
+    /// 结构止损缓冲用 ATR 的倍数（0 = 用固定的 stop_buffer %）。
+    /// 固定 1.5% 在 ATR 3% 的票上只有半个 ATR，正常回踩就会打掉止损；
+    /// 换成波动率单位后，止损距离与标的自身的噪声匹配。
+    stop_atr: f64,
     /// 单票仓位（占引擎分配的槽位 %）。池子引擎按等权槽位分配资金，
     /// 风险平价在这里体现为「止损越宽 → 被 max_risk 过滤掉」，而不是缩小仓位，
     /// 否则 1% 风险预算会让 90% 的资金闲置。
@@ -333,6 +337,93 @@ struct B3Config {
     max_hold: usize,
     enable_b2: bool,
     div_ratio: f64,
+    /// 0 = 原版「中枢后第一根向上笔 + 突破以来最低点」
+    /// 1 = 「最近一段向上笔 + 最近一根向下笔的低点」（趋势中的连续回踩）
+    b3_mode: u8,
+    /// v2 模式下，向上笔起点距今天数上限（太老的突破腿不算）
+    leg_lookback: usize,
+    /// 波动率带（ATR/收盘 %），0 表示不启用下限/上限
+    atr_min_pct: f64,
+    atr_max_pct: f64,
+    /// 收盘距 EMA60 的最大正偏离（%），0 表示不启用
+    ema60_max_dist: f64,
+    /// 顶背驰只在浮盈达到该 R 倍数后才允许触发
+    div_min_r: f64,
+    /// 二买是否要求最近中枢上移
+    b2_require_hub_up: bool,
+    /// 0 = 所有买点共用一套离场参数（旧行为）
+    /// 1 = 按买点类型分治：二买做均值回归（紧止盈/短持有），三买做趋势（宽跟踪/不止盈）
+    exit_mode: u8,
+    exit_shared: ExitPolicy,
+    exit_b2: ExitPolicy,
+    exit_b3: ExitPolicy,
+    /// 0 = 不做市场状态过滤
+    /// 1 = 只过滤二买（均值回归在弱市里最容易被套）
+    /// 2 = 只过滤三买
+    /// 3 = 两类买点都过滤
+    regime_mode: u8,
+    regime_breadth_min: f64,
+    regime_index_ma60_min: f64,
+}
+
+/// 一套离场规则。二买与三买的赔率结构完全不同，必须分开调：
+/// 二买是背驰后的反弹，期望值靠「快速兑现」，拿久了利润回吐；
+/// 三买是趋势起点，期望值靠「让利润奔跑」，固定止盈会把最肥的尾部切掉。
+#[derive(Clone, Copy)]
+struct ExitPolicy {
+    breakeven_r: f64,
+    tp1_r: f64,
+    tp1_frac: f64,
+    tp2_r: f64,
+    tp2_frac: f64,
+    trail_atr: f64,
+    /// 跟踪止盈的最大回吐幅度（占最高价 %），0 = 不限制。
+    /// ATR 倍数在高低波动标的上代表的回吐完全不同：4 ATR 在 3% ATR 的股票是
+    /// 12%，在 5% ATR 的股票是 20%。用绝对百分比封顶可以避免小盘高波动池
+    /// 把利润全部还回去。
+    trail_max_pct: f64,
+    max_hold: usize,
+    div_min_r: f64,
+    /// 超过 max_hold 时，浮盈低于该 R 倍数就离场（防止僵尸仓位）
+    time_stop_r: f64,
+}
+
+impl ExitPolicy {
+    fn from_params(p: &Params, prefix: &str, d: ExitDefaults) -> Self {
+        let key = |k: &str| {
+            if prefix.is_empty() {
+                k.to_string()
+            } else {
+                format!("{prefix}_{k}")
+            }
+        };
+        let usize_of = |k: &str, dv: f64| p.f64(&key(k), dv).max(1.0) as usize;
+        Self {
+            breakeven_r: p.f64(&key("breakeven_r"), d.breakeven_r),
+            tp1_r: p.f64(&key("tp1_r"), d.tp1_r),
+            tp1_frac: p.f64(&key("tp1_frac"), d.tp1_frac).clamp(1.0, 100.0),
+            tp2_r: p.f64(&key("tp2_r"), d.tp2_r),
+            tp2_frac: p.f64(&key("tp2_frac"), d.tp2_frac).clamp(1.0, 100.0),
+            trail_atr: p.f64(&key("trail_atr"), d.trail_atr).max(0.0),
+            trail_max_pct: p.f64(&key("trail_max_pct"), d.trail_max_pct).max(0.0),
+            max_hold: usize_of("max_hold", d.max_hold as f64),
+            div_min_r: p.f64(&key("div_min_r"), d.div_min_r).max(0.0),
+            time_stop_r: p.f64(&key("time_stop_r"), d.time_stop_r),
+        }
+    }
+}
+
+struct ExitDefaults {
+    breakeven_r: f64,
+    tp1_r: f64,
+    tp1_frac: f64,
+    tp2_r: f64,
+    tp2_frac: f64,
+    trail_atr: f64,
+    trail_max_pct: f64,
+    max_hold: usize,
+    div_min_r: f64,
+    time_stop_r: f64,
 }
 
 impl B3Config {
@@ -347,13 +438,14 @@ impl B3Config {
             max_hub_amp: 30.0,
             breakout_min: p.f64("breakout_min", 3.0),
             hub_reentry: 0.5,
-            pullback_min: p.f64("pullback_min", 0.2),
-            pullback_max: p.f64("pullback_max", 0.85),
+            pullback_min: p.f64("pullback_min", 0.3),
+            pullback_max: p.f64("pullback_max", 0.7),
             vol_shrink: p.f64("vol_shrink", 1.0),
             confirm_window: usize_of("confirm_window", 5.0),
             max_chase: p.f64("max_chase", 6.0),
             stop_buffer: p.f64("stop_buffer", 1.5),
             max_risk: p.f64("max_risk", 7.0),
+            stop_atr: p.f64("stop_atr", 0.0).max(0.0),
             size_pct: p.f64("size_pct", 100.0).clamp(1.0, 100.0),
             breakeven_r: 1.0,
             tp1_r: p.f64("tp1_r", 2.0),
@@ -365,6 +457,71 @@ impl B3Config {
             max_hold: usize_of("max_hold", 60.0),
             enable_b2: p.f64("enable_b2", 1.0) >= 0.5,
             div_ratio: 0.85,
+            b3_mode: p.f64("b3_mode", 0.0).round().clamp(0.0, 1.0) as u8,
+            leg_lookback: usize_of("leg_lookback", 60.0),
+            atr_min_pct: p.f64("atr_min_pct", 0.0).max(0.0),
+            atr_max_pct: {
+                let v = p.f64("atr_max_pct", 100.0);
+                if v <= 0.0 { 100.0 } else { v }
+            },
+            ema60_max_dist: {
+                let v = p.f64("ema60_max_dist", 0.0);
+                if v <= 0.0 { 1e9 } else { v }
+            },
+            div_min_r: p.f64("div_min_r", 0.5).max(0.0),
+            b2_require_hub_up: p.f64("b2_require_hub_up", 1.0) >= 0.5,
+            exit_mode: p.f64("exit_mode", 1.0).round().clamp(0.0, 1.0) as u8,
+            exit_shared: ExitPolicy::from_params(
+                p,
+                "",
+                ExitDefaults {
+                    breakeven_r: 1.0,
+                    tp1_r: p.f64("tp1_r", 2.0),
+                    tp1_frac: p.f64("tp1_frac", 33.0),
+                    tp2_r: p.f64("tp2_r", 3.5),
+                    tp2_frac: p.f64("tp2_frac", 50.0),
+                    trail_atr: 2.5,
+                    trail_max_pct: 0.0,
+                    max_hold: 60,
+                    div_min_r: p.f64("div_min_r", 0.5).max(0.0),
+                    time_stop_r: 1.0,
+                },
+            ),
+            exit_b2: ExitPolicy::from_params(
+                p,
+                "b2",
+                ExitDefaults {
+                    breakeven_r: 0.7,
+                    tp1_r: 1.5,
+                    tp1_frac: 50.0,
+                    tp2_r: 2.5,
+                    tp2_frac: 100.0,
+                    trail_atr: 2.0,
+                    trail_max_pct: 0.0,
+                    max_hold: 20,
+                    div_min_r: 0.5,
+                    time_stop_r: 0.5,
+                },
+            ),
+            exit_b3: ExitPolicy::from_params(
+                p,
+                "b3",
+                ExitDefaults {
+                    breakeven_r: 1.0,
+                    tp1_r: 99.0,
+                    tp1_frac: 100.0,
+                    tp2_r: 99.0,
+                    tp2_frac: 100.0,
+                    trail_atr: 5.0,
+                    trail_max_pct: 0.0,
+                    max_hold: 120,
+                    div_min_r: 2.0,
+                    time_stop_r: 1.0,
+                },
+            ),
+            regime_mode: p.f64("regime_mode", 0.0).round().clamp(0.0, 3.0) as u8,
+            regime_breadth_min: p.f64("regime_breadth_min", 0.40).clamp(0.0, 1.0),
+            regime_index_ma60_min: p.f64("regime_index_ma60_min", -2.0),
         }
     }
 }
@@ -412,8 +569,20 @@ fn last_bottom_before(points: &[Fraction], idx: usize) -> Option<Fraction> {
         .copied()
 }
 
+/// 结构止损位：回踩低点下方留缓冲，且不低于中枢上沿的回踩容忍线。
+/// `stop_atr > 0` 时缓冲按 ATR 计价，否则用固定百分比。
+fn structural_stop(pull_low: f64, hub_zg: f64, cfg: &B3Config, atr_now: f64) -> f64 {
+    let buffer_pct = if cfg.stop_atr > 0.0 && atr_now.is_finite() && pull_low > 0.0 {
+        (cfg.stop_atr * atr_now / pull_low * 100.0).min(15.0)
+    } else {
+        cfg.stop_buffer
+    };
+    (pull_low * (1.0 - buffer_pct / 100.0))
+        .max(hub_zg * (1.0 - cfg.hub_reentry / 100.0))
+}
+
 /// 三买 = 突破中枢上沿后回踩不回中枢。
-fn detect_b3(bars: &[Bar], j: usize, st: &Structures, cfg: &B3Config) -> Option<Setup> {
+fn detect_b3(bars: &[Bar], j: usize, st: &Structures, cfg: &B3Config, atr_now: f64) -> Option<Setup> {
     let hub: &Hub = st
         .hubs
         .iter()
@@ -492,14 +661,119 @@ fn detect_b3(bars: &[Bar], j: usize, st: &Structures, cfg: &B3Config) -> Option<
         return None;
     }
 
-    let stop0 = (pull_low * (1.0 - cfg.stop_buffer / 100.0))
-        .max(hub.zg * (1.0 - cfg.hub_reentry / 100.0));
+    let stop0 = structural_stop(pull_low, hub.zg, cfg, atr_now);
 
     Some(Setup {
         label: "三买·突破回踩",
         stop0,
         reason: format!(
             "三买·突破回踩：中枢 ZG {:.2} 突破至 {:.2} (+{:.1}%)，回踩 {:.2} 未回中枢（深度 {:.0}%，量比 {:.2}）",
+            hub.zg,
+            brk_high,
+            brk_pct,
+            pull_low,
+            depth * 100.0,
+            vol_ratio
+        ),
+        quality: (0.45 + (brk_pct / 10.0).clamp(0.0, 0.25) + (1.0 - vol_ratio).clamp(0.0, 0.2) * 0.3)
+            .clamp(0.0, 1.0),
+    })
+}
+
+/// 三买 v2 = 最近一段向上笔之后的回踩。
+///
+/// 与 v1 的差别：v1 永远锚定「中枢之后第一根向上笔」和「突破以来最低点」，
+/// 一旦第一次回踩没有在 5 日内给出反包，后面更高的回踩就永远抓不到；趋势走了
+/// 两个月后，突破以来最低点更是远在下方，`since_low` 直接超窗。v2 改为：
+///   突破腿 = 中枢之后、最近一根已完成的向上笔（高点仍须越过 ZG）
+///   回踩   = 突破腿之后、最近一根已完成的向下笔的低点
+///   深度   = 回踩幅度 / 该向上笔自身的长度
+/// 这样同一轮趋势里的第二、第三次「回踩不破前低」也能入场，同时仍然要求
+/// 回踩低点在中枢上沿之上（没有跌回中枢）。
+fn detect_b3_v2(bars: &[Bar], j: usize, st: &Structures, cfg: &B3Config, atr_now: f64) -> Option<Setup> {
+    let hub: &Hub = st
+        .hubs
+        .iter()
+        .filter(|h| h.zg > h.zd && h.end_index + 1 < j)
+        .next_back()?;
+    if j - hub.end_index > cfg.hub_lookback {
+        return None;
+    }
+    let amp = (hub.gg - hub.dd) / hub.dd * 100.0;
+    if !(amp > 0.0) || amp > cfg.max_hub_amp {
+        return None;
+    }
+
+    // 最近一根已完成、且高点越过中枢上沿的向上笔
+    let brk = st
+        .strokes
+        .iter()
+        .rev()
+        .find(|s| {
+            s.up
+                && s.start.original_index >= hub.end_index
+                && s.end.original_index < j
+                && s.high() > hub.zg * (1.0 + cfg.breakout_min / 100.0)
+                && j.saturating_sub(s.start.original_index) <= cfg.leg_lookback
+        })?;
+    let brk_high = brk.high();
+    let brk_end = brk.end.original_index;
+    let leg_range = brk_high - brk.start.price;
+    if leg_range <= 0.0 {
+        return None;
+    }
+
+    // 突破腿之后最近一根已完成的向下笔 = 本次回踩
+    let pull = st
+        .strokes
+        .iter()
+        .rev()
+        .find(|s| !s.up && s.start.original_index >= brk_end && s.end.original_index < j)?;
+    let pull_low = pull.end.price;
+    let pull_idx = pull.end.original_index;
+    if pull_low < hub.zg * (1.0 - cfg.hub_reentry / 100.0) {
+        return None; // 回踩进了中枢，不是三买
+    }
+    if pull_low <= brk.start.price {
+        return None; // 回踩跌破向上笔起点，趋势结构已坏
+    }
+
+    let depth = (brk_high - pull_low) / leg_range;
+    if depth < cfg.pullback_min || depth > cfg.pullback_max {
+        return None;
+    }
+    let since_low = j - pull_idx;
+    if since_low < 1 || since_low > cfg.confirm_window {
+        return None;
+    }
+
+    let brk_vol = avg_vol(bars, brk.start.original_index, brk_end);
+    let pull_vol = avg_vol(bars, pull.start.original_index, pull_idx);
+    let vol_ratio = if brk_vol > 0.0 { pull_vol / brk_vol } else { 1.0 };
+    if brk_vol > 0.0 && pull_vol > brk_vol * cfg.vol_shrink {
+        return None;
+    }
+
+    let c = bars[j].close;
+    if c <= hub.zg || c <= bars[j - 1].high || c <= bars[j].open {
+        return None;
+    }
+    if c <= pull_low * 1.005 {
+        return None;
+    }
+    let chase = (c - pull_low) / pull_low * 100.0;
+    if chase > cfg.max_chase {
+        return None;
+    }
+
+    let brk_pct = (brk_high / hub.zg - 1.0) * 100.0;
+    let stop0 = structural_stop(pull_low, hub.zg, cfg, atr_now);
+
+    Some(Setup {
+        label: "三买·突破回踩",
+        stop0,
+        reason: format!(
+            "三买·突破回踩：中枢 ZG {:.2} 突破至 {:.2} (+{:.1}%)，最近向上笔回踩 {:.2} 未回中枢（深度 {:.0}%，量比 {:.2}）",
             hub.zg,
             brk_high,
             brk_pct,
@@ -597,6 +871,9 @@ pub struct ChanlunB3Pullback {
     cfg: B3Config,
     /// 持仓跟踪状态（引擎按标的各建一个实例，所以可以直接持有）
     tracked: bool,
+    /// 当前持仓来自哪个买点：1=三买（趋势），2=二买（反弹）。
+    /// 离场规则按这个分流，而不是让两类赔率完全不同的交易共用一套止损。
+    setup_kind: u8,
     entry_price: f64,
     entry_bar: usize,
     highest: f64,
@@ -613,6 +890,7 @@ impl ChanlunB3Pullback {
         Self {
             cfg: B3Config::from_params(params),
             tracked: false,
+            setup_kind: 0,
             entry_price: 0.0,
             entry_bar: 0,
             highest: 0.0,
@@ -646,13 +924,14 @@ impl Strategy for ChanlunB3Pullback {
             ParamSpec::number("ma_mid", "中线 EMA", 20.0).with_range(10.0, 60.0, 1.0),
             ParamSpec::number("ma_slow", "慢线 EMA", 60.0).with_range(30.0, 120.0, 5.0),
             ParamSpec::number("breakout_min", "最小突破 %", 3.0).with_range(0.5, 15.0, 0.5),
-            ParamSpec::number("pullback_min", "回踩深度下限", 0.2).with_range(0.05, 0.6, 0.05),
-            ParamSpec::number("pullback_max", "回踩深度上限", 0.85).with_range(0.4, 1.0, 0.05),
+            ParamSpec::number("pullback_min", "回踩深度下限", 0.3).with_range(0.05, 0.6, 0.05),
+            ParamSpec::number("pullback_max", "回踩深度上限", 0.7).with_range(0.4, 1.0, 0.05),
             ParamSpec::number("vol_shrink", "回踩量/突破量上限", 1.0).with_range(0.3, 2.0, 0.1),
             ParamSpec::number("confirm_window", "回踩确认窗口 日", 5.0).with_range(1.0, 15.0, 1.0),
             ParamSpec::number("max_chase", "追高上限 %", 6.0).with_range(1.0, 20.0, 1.0),
             ParamSpec::number("stop_buffer", "结构止损缓冲 %", 1.5).with_range(0.0, 5.0, 0.5),
             ParamSpec::number("max_risk", "单笔最大风险 %", 7.0).with_range(2.0, 20.0, 1.0),
+            ParamSpec::number("stop_atr", "结构止损 ATR 缓冲 (0=用%)", 0.0).with_range(0.0, 3.0, 0.1),
             ParamSpec::number("size_pct", "单票仓位 占槽位%", 100.0).with_range(10.0, 100.0, 5.0),
             ParamSpec::number("tp1_r", "第一批止盈 R", 2.0).with_range(1.0, 6.0, 0.5),
             ParamSpec::number("tp1_frac", "第一批比例 %", 33.0).with_range(10.0, 50.0, 1.0),
@@ -661,6 +940,34 @@ impl Strategy for ChanlunB3Pullback {
             ParamSpec::number("trail_atr", "ATR 跟踪倍数", 2.5).with_range(1.0, 6.0, 0.5),
             ParamSpec::number("max_hold", "最长持仓 日", 60.0).with_range(10.0, 200.0, 5.0),
             ParamSpec::number("enable_b2", "启用二买 1=开", 1.0).with_range(0.0, 1.0, 1.0),
+            ParamSpec::number("b3_mode", "三买锚点 0=首笔 1=最近笔", 0.0).with_range(0.0, 1.0, 1.0),
+            ParamSpec::number("leg_lookback", "向上笔有效期 日", 60.0).with_range(20.0, 250.0, 10.0),
+            ParamSpec::number("atr_min_pct", "ATR% 下限", 0.0).with_range(0.0, 10.0, 0.25),
+            ParamSpec::number("atr_max_pct", "ATR% 上限", 100.0).with_range(1.0, 20.0, 0.5),
+            ParamSpec::number("ema60_max_dist", "距 EMA60 上限 %", 0.0).with_range(0.0, 50.0, 1.0),
+            ParamSpec::number("div_min_r", "顶背驰最低浮盈 R", 0.5).with_range(0.0, 6.0, 0.5),
+            ParamSpec::number("b2_require_hub_up", "二买要求中枢上移", 1.0).with_range(0.0, 1.0, 1.0),
+            ParamSpec::number("exit_mode", "离场分治 1=按买点类型", 1.0).with_range(0.0, 1.0, 1.0),
+            ParamSpec::number("b2_breakeven_r", "二买保本 R", 0.7).with_range(0.0, 5.0, 0.1),
+            ParamSpec::number("b2_tp1_r", "二买止盈1 R", 1.5).with_range(0.5, 6.0, 0.5),
+            ParamSpec::number("b2_tp1_frac", "二买止盈1 比例%", 50.0).with_range(10.0, 100.0, 10.0),
+            ParamSpec::number("b2_tp2_r", "二买止盈2 R", 2.5).with_range(1.0, 10.0, 0.5),
+            ParamSpec::number("b2_trail_atr", "二买 ATR 跟踪", 2.0).with_range(1.0, 6.0, 0.5),
+            ParamSpec::number("b2_max_hold", "二买最长持仓 日", 20.0).with_range(5.0, 120.0, 5.0),
+            ParamSpec::number("b2_time_stop_r", "二买时间止损阈值 R", 0.5).with_range(0.0, 3.0, 0.25),
+            ParamSpec::number("b3_breakeven_r", "三买保本 R", 1.0).with_range(0.0, 5.0, 0.1),
+            ParamSpec::number("b3_tp1_r", "三买止盈1 R", 99.0).with_range(1.0, 99.0, 1.0),
+            ParamSpec::number("b3_tp2_r", "三买止盈2 R", 99.0).with_range(1.0, 99.0, 1.0),
+            ParamSpec::number("b3_trail_atr", "三买 ATR 跟踪", 5.0).with_range(1.0, 8.0, 0.5),
+            ParamSpec::number("b3_trail_max_pct", "三买最大回吐 % (0=关)", 0.0).with_range(0.0, 30.0, 1.0),
+            ParamSpec::number("b3_max_hold", "三买最长持仓 日", 120.0).with_range(20.0, 250.0, 5.0),
+            ParamSpec::number("b3_div_min_r", "三买背驰最低浮盈 R", 2.0).with_range(0.0, 6.0, 0.5),
+            ParamSpec::number("b3_time_stop_r", "三买时间止损阈值 R", 1.0).with_range(0.0, 3.0, 0.25),
+            ParamSpec::number("regime_mode", "市场状态过滤 0关/1二买/2三买/3全部", 0.0)
+                .with_range(0.0, 3.0, 1.0),
+            ParamSpec::number("regime_breadth_min", "MA60 上方占比下限", 0.40).with_range(0.0, 1.0, 0.05),
+            ParamSpec::number("regime_index_ma60_min", "等权净值距 MA60 下限 %", -2.0)
+                .with_range(-15.0, 5.0, 1.0),
         ]
     }
 
@@ -727,6 +1034,28 @@ impl Strategy for ChanlunB3Pullback {
             + if hub_up { 0.15 } else { 0.0 })
         .clamp(0.0, 1.0);
 
+        // 结构质量门槛：波动率过低/过高、离 EMA60 太远的突破都不做。
+        // 这两条在 HS300 与 ZZ500 的信号级样本上方向一致：ATR% 2.4~3.0 最好，
+        // 收盘偏离 EMA60 超过 10% 后胜率与 40 日收益明显下滑。
+        let atr_pct = if atr[j] > 0.0 { atr[j] / close * 100.0 } else { 0.0 };
+        let ema60_dist = (close / es[j] - 1.0) * 100.0;
+        let quality_ok = atr_pct >= self.cfg.atr_min_pct
+            && atr_pct <= self.cfg.atr_max_pct
+            && ema60_dist <= self.cfg.ema60_max_dist;
+
+        // 池子级市场状态：breadth 低 = 多数成分股在自己的 MA60 下方，
+        // 此时「顺势突破」大多是下跌中继的假突破。二买是逆势抄底型信号，
+        // 对市场环境更敏感，所以允许只闸二买、保留三买在弱市里的反弹机会。
+        let regime_ok = if self.cfg.regime_mode == 0 {
+            true
+        } else {
+            ctx.regime.valid
+                && ctx.regime.breadth_ma60 >= self.cfg.regime_breadth_min
+                && ctx.regime.index_ma60_dist >= self.cfg.regime_index_ma60_min
+        };
+        let gate_b2 = matches!(self.cfg.regime_mode, 1 | 3);
+        let gate_b3 = matches!(self.cfg.regime_mode, 2 | 3);
+
         // ---- 持仓分支 ----
         if ctx.position.shares > 0.0 {
             if !self.tracked {
@@ -744,6 +1073,13 @@ impl Strategy for ChanlunB3Pullback {
             }
             self.highest = self.highest.max(ctx.today().high);
 
+            // 按买点类型选离场规则。旧行为（exit_mode=0）三类共用一套。
+            let ex = match (self.cfg.exit_mode, self.setup_kind) {
+                (1, 2) => self.cfg.exit_b2,
+                (1, 1) => self.cfg.exit_b3,
+                _ => self.cfg.exit_shared,
+            };
+
             let r_now = (close - self.entry_price) / self.risk.max(f64::EPSILON);
             let atr_now = if atr[j].is_finite() && atr[j] > 0.0 {
                 atr[j]
@@ -752,12 +1088,17 @@ impl Strategy for ChanlunB3Pullback {
             };
 
             let mut stop_line = self.stop0;
-            if r_now >= self.cfg.breakeven_r {
+            if r_now >= ex.breakeven_r {
                 stop_line = stop_line.max(self.entry_price * 1.005);
-                stop_line = stop_line.max(self.highest - self.cfg.trail_atr * atr_now);
+                let mut trail = self.highest - ex.trail_atr * atr_now;
+                if ex.trail_max_pct > 0.0 {
+                    // 绝对百分比封顶：高波动标的不允许回吐超过这个幅度
+                    trail = trail.max(self.highest * (1.0 - ex.trail_max_pct / 100.0));
+                }
+                stop_line = stop_line.max(trail);
             }
             if close <= stop_line {
-                let tag = if r_now >= self.cfg.breakeven_r {
+                let tag = if r_now >= ex.breakeven_r {
                     "跟踪止盈"
                 } else {
                     "结构止损"
@@ -773,11 +1114,11 @@ impl Strategy for ChanlunB3Pullback {
             }
 
             // 顶背驰：每笔仓位只响应一次，否则顶分型在确认窗口内天天成立
-            if !self.div_done && r_now >= 0.5 {
+            if !self.div_done && r_now >= ex.div_min_r {
                 if let Some((top, ratio)) = top_divergence(&st, &hist, j, &self.cfg) {
                     if close < top {
                         self.div_done = true;
-                        let keep = strong && r_now < self.cfg.tp2_r && self.tp_done == 0;
+                        let keep = strong && r_now < ex.tp2_r && self.tp_done == 0;
                         let frac = tradable_frac(
                             ctx.position.shares,
                             if keep { 50.0 } else { 100.0 },
@@ -799,28 +1140,31 @@ impl Strategy for ChanlunB3Pullback {
                 }
             }
 
-            if r_now >= self.cfg.tp2_r && self.tp_done == 1 {
+            if r_now >= ex.tp2_r && self.tp_done == 1 {
                 self.pending_tp = true;
                 return Signal::sell_percent(
-                    tradable_frac(ctx.position.shares, self.cfg.tp2_frac),
-                    format!("分批止盈2：{r_now:.1}R ≥ {:.1}R", self.cfg.tp2_r),
+                    tradable_frac(ctx.position.shares, ex.tp2_frac),
+                    format!("分批止盈2：{r_now:.1}R ≥ {:.1}R", ex.tp2_r),
                 )
                 .with_score(trend_score);
             }
-            if r_now >= self.cfg.tp1_r && self.tp_done == 0 {
+            if r_now >= ex.tp1_r && self.tp_done == 0 {
                 self.pending_tp = true;
                 return Signal::sell_percent(
-                    tradable_frac(ctx.position.shares, self.cfg.tp1_frac),
-                    format!("分批止盈1：{r_now:.1}R ≥ {:.1}R", self.cfg.tp1_r),
+                    tradable_frac(ctx.position.shares, ex.tp1_frac),
+                    format!("分批止盈1：{r_now:.1}R ≥ {:.1}R", ex.tp1_r),
                 )
                 .with_score(trend_score);
             }
 
             let held = n - 1 - self.entry_bar;
-            if held >= self.cfg.max_hold && r_now < 1.0 {
+            if held >= ex.max_hold && r_now < ex.time_stop_r {
                 return Signal::sell_percent(
                     100.0,
-                    format!("时间止损：持仓 {held} 日仍未走出 1R"),
+                    format!(
+                        "时间止损：持仓 {held} 日仍未走出 {:.1}R",
+                        ex.time_stop_r
+                    ),
                 )
                 .with_score(trend_score);
             }
@@ -835,13 +1179,27 @@ impl Strategy for ChanlunB3Pullback {
             return Signal::hold().with_score(trend_score);
         }
 
-        let mut setup = if strong {
-            detect_b3(win, j, &st, &self.cfg)
+        let mut setup = if strong && (!gate_b3 || regime_ok) {
+            let raw = if self.cfg.b3_mode == 1 {
+                detect_b3_v2(win, j, &st, &self.cfg, atr[j])
+            } else {
+                detect_b3(win, j, &st, &self.cfg, atr[j])
+            };
+            if quality_ok { raw } else { None }
         } else {
             None
         };
-        if setup.is_none() && self.cfg.enable_b2 && mild {
-            setup = detect_b2(win, j, &st, &hist, &self.cfg);
+        let mut kind = 1u8;
+        if setup.is_none()
+            && self.cfg.enable_b2
+            && mild
+            && (!self.cfg.b2_require_hub_up || hub_up)
+            && (!gate_b2 || regime_ok)
+        {
+            if let Some(s) = detect_b2(win, j, &st, &hist, &self.cfg) {
+                setup = Some(s);
+                kind = 2;
+            }
         }
         let Some(s) = setup else {
             return Signal::hold().with_score(trend_score);
@@ -856,6 +1214,7 @@ impl Strategy for ChanlunB3Pullback {
         let pct = self.cfg.size_pct;
 
         self.tracked = true;
+        self.setup_kind = kind;
         self.entry_price = close;
         self.entry_bar = n - 1;
         self.stop0 = s.stop0;

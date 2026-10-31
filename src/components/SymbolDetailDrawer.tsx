@@ -103,20 +103,20 @@ export default function SymbolDetailDrawer({
         {row && (
           <>
             <span className="h-4 w-px bg-zinc-700/70" />
-            <span className="text-[11px] text-zinc-500 font-mono whitespace-nowrap">
+            <span className="text-[12px] text-zinc-500 font-mono whitespace-nowrap">
               买 {buys} / 卖 {sells}
             </span>
-            <span className="text-[11px] text-zinc-500 font-mono whitespace-nowrap">
+            <span className="text-[12px] text-zinc-500 font-mono whitespace-nowrap">
               已实现{' '}
               <span className={upDown(row.realized_pnl)}>
                 {row.realized_pnl >= 0 ? '+' : ''}
                 {fmtMoney(row.realized_pnl)}
               </span>
             </span>
-            <span className="text-[11px] text-zinc-500 font-mono whitespace-nowrap">
+            <span className="text-[12px] text-zinc-500 font-mono whitespace-nowrap">
               胜率 {row.win_rate > 0 ? `${row.win_rate.toFixed(0)}%` : '—'}
             </span>
-            <span className="text-[11px] text-zinc-500 font-mono whitespace-nowrap">
+            <span className="text-[12px] text-zinc-500 font-mono whitespace-nowrap">
               同期涨跌{' '}
               <span className={upDown(row.buy_hold_percent)}>
                 {row.buy_hold_percent >= 0 ? '+' : ''}

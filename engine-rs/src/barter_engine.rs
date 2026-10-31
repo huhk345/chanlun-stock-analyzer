@@ -11,7 +11,7 @@
 //! [`AShareBroker`], and the fills are reported back as `AccountEvent`s —
 //! exactly how a live venue reports them.
 
-use crate::data::{Bar, Market};
+use crate::data::{Bar, Market, RegimePoint};
 use crate::metrics::{build_metrics, Metrics};
 use crate::strategy::{
     AccountView, Action, AmountUnit, DayContext, Params, PositionView, Signal, Strategy,
@@ -425,6 +425,9 @@ pub struct PoolStrategy {
     /// Runtime parameters, handed to every `DayContext` so a strategy can read
     /// `ctx.params` instead of baking them in at construction.
     params: Params,
+    /// 池子级市场状态，按交易日对齐；run 循环每天把游标推到当天。
+    regime: Vec<RegimePoint>,
+    current_day: Mutex<usize>,
 }
 
 impl PoolStrategy {
@@ -476,6 +479,8 @@ impl PoolStrategy {
                 slot_cash,
                 max_positions,
                 params: params.clone(),
+                regime: market.regime.clone(),
+                current_day: Mutex::new(0),
             },
             decisions,
         )
@@ -483,6 +488,10 @@ impl PoolStrategy {
 
     fn set_current(&self, index: Option<usize>) {
         *self.current.lock().unwrap() = index;
+    }
+
+    fn set_day(&self, index: usize) {
+        *self.current_day.lock().unwrap() = index;
     }
 }
 
@@ -523,10 +532,12 @@ impl AlgoStrategy for PoolStrategy {
                 .copied()
                 .unwrap_or(today.close);
 
+        let day = *self.current_day.lock().unwrap();
+        let regime = self.regime.get(day).copied().unwrap_or_default();
         let ctx = DayContext {
             date: today.date,
-            day_index: 0,
-            total_days: 0,
+            day_index: day,
+            total_days: self.regime.len(),
             symbol,
             bars: &istate.data.bars,
             account: AccountView {
@@ -556,6 +567,7 @@ impl AlgoStrategy for PoolStrategy {
                 holding_days: 0,
             },
             params: &self.params,
+            regime,
         };
 
         let mut strategies = self.strategies.lock().unwrap();
@@ -996,6 +1008,7 @@ pub fn run(req: RunRequest<'_>) -> Result<SimOutput, String> {
     let mut decision_cursor = 0usize;
 
     for (day_index, date) in market.dates.iter().copied().enumerate() {
+        engine.strategy.set_day(day_index);
         broker.bought_today.clear();
         let mut evaluated = 0usize;
         let mut day_trades = 0usize;
