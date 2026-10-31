@@ -25,6 +25,7 @@ export default function useEngineStatus(): boolean | null {
     let cancelled = false;
     let inFlight = false;
     let retryTimer: number | null = null;
+    let lastReported: boolean | null = null;
 
     const clearRetry = () => {
       if (retryTimer !== null) {
@@ -51,6 +52,20 @@ export default function useEngineStatus(): boolean | null {
 
       if (cancelled) return;
       setOnline(ok);
+      // 入口是被「静默隐藏」的，出问题时控制台得留一条线索：
+      // 代理挂了（5xx）和引擎没起（连不上）在页面上长得一模一样。
+      if (lastReported !== ok) {
+        lastReported = ok;
+        if (ok) {
+          console.info('[engine] /api/rust 已连通，策略回测入口已开放');
+        } else {
+          console.warn(
+            '[engine] /api/rust/health 不可用，策略回测入口已隐藏。' +
+              '引擎若已在运行，请确认当前页面所在 dev server 的 /api/rust 代理指向它' +
+              '（vite 只在启动时读一次 vite.config.ts，改过代理要重启 dev server）。',
+          );
+        }
+      }
       if (!ok) retryTimer = window.setTimeout(probe, RETRY_MS);
     };
 
