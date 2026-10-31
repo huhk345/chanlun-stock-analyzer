@@ -141,8 +141,12 @@ const chanlunLib = await loadChanlun();
 const strategy = loadStrategy();
 const merged = { ...strategy.params.reduce((acc, p) => (acc[p.key] = p.defaultValue, acc), {}), ...params };
 
-console.log(`strategy ${strategy.id} · params ${Object.keys(params).length} override(s)`);
-console.log(`maxEntryBar=${merged.maxEntryBar} stopAtr=${merged.stopAtr} enableB2=${merged.enableB2} tp1R=${merged.tp1R} trail=${merged.trailAtrMult}`);
+console.log(`strategy ${strategy.id} · ${strategy.params.length} 项参数 · ${Object.keys(params).length} 项覆盖`);
+console.log(
+  strategy.params
+    .map((p) => `${p.key}=${merged[p.key]}`)
+    .join('  '),
+);
 
 for (const sym of symbols) {
   const klines = loadKlines(sym);

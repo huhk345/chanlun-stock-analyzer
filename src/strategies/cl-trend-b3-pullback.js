@@ -6,53 +6,72 @@
  * 设计取舍（对齐 chanlun-pro 的三买定义 + 本仓库的 UserStrategyDefinition）
  *
  * 1. 买点只认缠论买点
- *    主信号 = 三买：向上离开中枢、回抽不回中枢（chanlun-pro 文档原义，
- *             strategy_zs_tupo / strategy_last_zs_3mmd 的实现口径）。
- *    辅信号 = 二买：一买（底背驰）之后回调不创新低。
- *    一买逆势，与「顺势」冲突，本策略不做。
+ *    三买：向上离开中枢、回抽不回中枢（chanlun-pro 文档原义，
+ *          strategy_zs_tupo / strategy_last_zs_3mmd 的实现口径）。
+ *    二买曾经做过（一买底背驰后回调不创新低），信号级实测单笔期望
+ *    +1.7%（沪深300）/ +0.7%（中证500），远低于三买的 +7.9% / +1.2%，
+ *    却要占掉一半以上的信号量，已整段删除。
  *
  * 2. 顺势
- *    EMA 多头排列 + 中期均线上行 + 中枢上移/线段向上 作为环境过滤。
- *    环境不对时，再标准的三买也不做（这是本策略与裸三买最大的区别）。
+ *    EMA 10/20/60 多头排列 + EMA20 上行 + 中枢上移。这三个周期是「顺势」的
+ *    定义，不做成参数——扫过，改了要么更差要么没差别。
  *
  * 3. 突破回踩
  *    三买本身就是「突破—回踩—不回中枢」的几何结构。这里把它量化成
  *    五个可调约束：突破幅度、回踩深度、回踩时长、回踩缩量、追高上限。
  *    另外要求「反包确认」（收盘站上前一根高点），避免在下跌途中接刀。
  *
- * 4. 卖点动态化（不设固定止盈百分比）
- *    结构止损（跌破回踩低点 − N×ATR / 跌回中枢）
- *      → 顶背驰（MACD 红柱面积衰竭）
+ * 4. 卖点（不设固定止盈）
+ *    结构止损（回踩低点 − N×ATR / 跌回中枢）
+ *      → 顶背驰（MACD 红柱面积衰竭，+2R 以上才响应，每笔只响应一次）
  *      → 保本移动（+1R 后止损抬到成本）
- *      → 跟踪止盈（Chandelier：最高价 - N×ATR）
- *      → 分批止盈（+2R 卖 1/3，+3.5R 再卖一半，默认关闭）
- *      → 时间止损（久盘不涨）
+ *      → 跟踪止盈（Chandelier：最高价 - 5×ATR）
+ *      → 时间止损（120 日仍走不出 1R）
  *
- *    三买默认**不设固定止盈**（tp1R / tp2R 调到 99 等于关闭），跟踪倍数放到 5×ATR，
- *    最长持有 120 日。理由：同一批入场做反事实回放，带 2R/3.5R 固定止盈的一组
- *    单笔期望只有 +2.6%，去掉固定止盈、让利润奔跑的一组是 +7.9%——固定止盈把右尾切掉了。
- *    二买（均值回归）保留紧止盈，但默认不开（见 5）。
+ *    带 2R/3.5R 固定止盈的一组单笔期望只有 +2.6%，去掉固定止盈、让利润
+ *    奔跑的一组是 +7.9%——固定止盈把右尾切掉了。所以止盈档位整段删除。
  *
  * 5. 仓位
  *    按 R 风险平价：单笔风险 = 权益 × riskPerTradePct%，除以每股风险得到股数，
  *    再折算成 percent 交给撮合层（100 股整手由引擎处理）。
  *    每股风险超过 maxRiskPct 直接放弃这笔交易——止损太远说明买点结构不干净。
- *
- *    二买默认关闭：信号级实测二买单笔期望 +1.7%（沪深300）/ +0.7%（中证500），
- *    远低于三买的 +7.9% / +1.2%，却要占掉一半以上的信号量。要开把 enableB2 打开。
+ *    （这是回测面板的单标的引擎；Rust 池子引擎用等权槽位，没有这个参数。）
  *
  * 6. 止损距离与确认阳线（2026-10-31 归因结论）
- *    结构止损的缓冲默认按 ATR 计价（stopAtr = 2，即回踩低点下方 2 个 ATR）。
+ *    结构止损的缓冲按 ATR 计价（stopAtr = 2，即回踩低点下方 2 个 ATR）。
  *    固定 1.5% 在 A 股日线上只有 0.5~0.7 个 ATR，正常回踩就会被打掉：
  *    把止损距离按倍数放大后，两个股票池的三买信号收益同向单调改善。
  *    另外确认阳线本身要限幅（maxEntryBar）：入场日涨 2~4% 的一组比涨 0~2% 的
  *    一组差 3~4 个百分点，大阳线是「一日游」的典型形态，而追高上限（maxChasePct）
  *    衡量的是「离回踩低点多远」，管不住这件事。
  *
+ * 7. 参数只留 11 个（+ 面板专有的仓位预算）
+ *    46 个参数 / 80 笔来回，自由度比样本还大，多留一个旋钮就是多一次过拟合的机会。
+ *    审计结果：46 个里 28 个拨动后输出完全不变（死旋钮），剩下的也只有
+ *    突破/回踩/止损/跟踪四个方向是真活的。其余全部下沉成常量。
+ *
  * 约束：不引入任何模块、不访问网络与 DOM、不使用异步语法；纯函数、只读输入。
  *      （注释里也不能出现沙箱的禁用词，否则保存时会被正则误判。）
  * ───────────────────────────────────────────────────────────────────────────
  */
+
+// ---------------------------------------------------------------------------
+// 设计常量（不是旋钮）
+// ---------------------------------------------------------------------------
+const MA_FAST = 10;
+const MA_MID = 20;
+const MA_SLOW = 60;
+const SLOPE_LEN = 10;
+const HUB_LOOKBACK_BARS = 120;
+const MAX_HUB_AMP_PCT = 30;
+const HUB_REENTRY_TOL = 0.5;
+const ATR_PERIOD = 14;
+const DIV_RATIO = 0.85;
+const BREAKEVEN_R = 1;
+const DIV_MIN_R = 2;
+const TIME_STOP_R = 1;
+const MAX_POSITION_PCT = 100;
+const STOP_BUFFER_FALLBACK = 1.5;
 
 // ---------------------------------------------------------------------------
 // 小工具
@@ -68,10 +87,6 @@ function numParam(params, key, def) {
   return typeof v === 'number' && isFinite(v) ? v : def;
 }
 
-function boolParam(params, key, def) {
-  const v = params ? params[key] : undefined;
-  return typeof v === 'boolean' ? v : def;
-}
 
 /** EMA，用首值做种子；配合 300 根左右的窗口，EMA60 的预热偏差可忽略 */
 function emaSeries(values, period) {
@@ -190,7 +205,7 @@ function structBufferPct(cfg, atrNow, price) {
   if (cfg.stopAtr > 0 && isFinite(atrNow) && atrNow > 0 && price > 0) {
     return Math.min(((cfg.stopAtr * atrNow) / price) * 100, 15);
   }
-  return cfg.stopBufferPct;
+  return STOP_BUFFER_FALLBACK;
 }
 
 /** 确认阳线限幅：单日涨幅与振幅都不能超过 maxEntryBar（0 = 关闭） */
@@ -218,11 +233,11 @@ function detectBreakoutPullback(ctx) {
   }
   if (validHubs.length === 0) return null;
   const hub = validHubs[validHubs.length - 1];
-  if (i - hub.endIndex > cfg.hubLookbackBars) return null;
+  if (i - hub.endIndex > HUB_LOOKBACK_BARS) return null;
 
   // 中枢振幅过大的不参与（chanlun-pro: zf() <= 30 的经验值）
   const amp = ((hub.gg - hub.dd) / hub.dd) * 100;
-  if (!(amp > 0) || amp > cfg.maxHubAmpPct) return null;
+  if (!(amp > 0) || amp > MAX_HUB_AMP_PCT) return null;
 
   // 2) 突破笔 = 中枢之后的第一根向上笔
   let brk = null;
@@ -259,7 +274,7 @@ function detectBreakoutPullback(ctx) {
   if (depth < cfg.pullbackMinRatio || depth > cfg.pullbackMaxRatio) return null;
 
   // 回踩不能跌回中枢——这是三买的定义本身
-  if (pullLow < hub.zg * (1 - cfg.hubReentryTol / 100)) return null;
+  if (pullLow < hub.zg * (1 - HUB_REENTRY_TOL / 100)) return null;
 
   const barsSinceLow = i - pullIdx;
   if (barsSinceLow < 1) return null; // 今天就是最低点，还没确认
@@ -274,7 +289,7 @@ function detectBreakoutPullback(ctx) {
   const c = klines[i].close;
   if (c <= hub.zg) return null;
   if (!(c > klines[i - 1].high)) return null; // 收盘站上前一根高点
-  if (cfg.requireYang && !(c > klines[i].open)) return null; // 阳线
+  if (!(c > klines[i].open)) return null; // 阳线
   if (c <= pullLow * 1.005) return null; // 离低点太近，没有确认力度
 
   const chase = ((c - pullLow) / pullLow) * 100;
@@ -285,7 +300,7 @@ function detectBreakoutPullback(ctx) {
   const buf = structBufferPct(cfg, ctx.atrNow, pullLow);
   const stop0 = Math.max(
     pullLow * (1 - buf / 100),
-    hub.zg * (1 - cfg.hubReentryTol / 100),
+    hub.zg * (1 - HUB_REENTRY_TOL / 100),
   );
 
   return {
@@ -302,49 +317,6 @@ function detectBreakoutPullback(ctx) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// 买点二：二买（一买底背驰之后，回调不创新低）
-// ---------------------------------------------------------------------------
-
-function detectSecondBuy(ctx) {
-  const { fractions, hist, base, i, klines, cfg } = ctx;
-  const bottoms = [];
-  for (let f = 0; f < fractions.length; f++) {
-    const fr = fractions[f];
-    if (fr.type === 'BOTTOM' && fr.originalIndex <= i) bottoms.push(fr);
-  }
-  if (bottoms.length < 3) return null;
-
-  const b3 = bottoms[bottoms.length - 1]; // 二买（本次回调低点）
-  const b2 = bottoms[bottoms.length - 2]; // 一买（背驰低点）
-  const b1 = bottoms[bottoms.length - 3];
-
-  if (!(b3.price > b2.price)) return null; // 二买必须不创新低
-  if (!(b2.price < b1.price)) return null; // 一买必须创新低
-
-  const t2 = lastTopBefore(fractions, b2.originalIndex);
-  const t1 = lastTopBefore(fractions, b1.originalIndex);
-  if (!t2 || !t1) return null;
-
-  // 一买处必须底背驰：价格新低，但绿柱面积衰竭
-  const a2 = macdArea(hist, t2.originalIndex, b2.originalIndex, base, false);
-  const a1 = macdArea(hist, t1.originalIndex, b1.originalIndex, base, false);
-  if (!(a1 > 0) || a2 >= a1 * cfg.divRatio) return null;
-
-  const barsSinceLow = i - b3.originalIndex;
-  if (barsSinceLow < 1 || barsSinceLow > cfg.confirmWindow) return null;
-
-  const c = klines[i].close;
-  if (!(c > klines[i - 1].high)) return null;
-  if (!(c > b3.price * 1.005)) return null;
-
-  return {
-    type: 'B2',
-    oneBuyLow: b2.price,
-    low: b3.price,
-    stop0: b3.price * (1 - cfg.stopBufferPct / 100),
-  };
-}
 
 // ---------------------------------------------------------------------------
 // 卖点：顶背驰
@@ -377,7 +349,7 @@ function detectTopDivergence(ctx) {
 
   const a2 = macdArea(hist, b2.originalIndex, t2.originalIndex, base, true);
   const a1 = macdArea(hist, b1.originalIndex, t1.originalIndex, base, true);
-  if (!(a1 > 0) || a2 >= a1 * cfg.divRatio) return null;
+  if (!(a1 > 0) || a2 >= a1 * DIV_RATIO) return null;
 
   return { topPrice: t2.price, areaRatio: a2 / a1 };
 }
@@ -397,48 +369,22 @@ const strategy = {
   requiresChanLun: true,
 
   params: [
-    // ---- 趋势环境 ----
-    { key: 'maFast', label: '快线 EMA', type: 'number', defaultValue: 10, min: 3, max: 30, step: 1 },
-    { key: 'maMid', label: '中线 EMA', type: 'number', defaultValue: 20, min: 10, max: 60, step: 1 },
-    { key: 'maSlow', label: '慢线 EMA', type: 'number', defaultValue: 60, min: 30, max: 120, step: 5 },
-    { key: 'slopeLen', label: '均线斜率回看(日)', type: 'number', defaultValue: 10, min: 3, max: 30, step: 1 },
-
-    // ---- 中枢 / 突破 ----
-    { key: 'hubLookbackBars', label: '中枢有效期(日)', type: 'number', defaultValue: 120, min: 30, max: 250, step: 10 },
-    { key: 'maxHubAmpPct', label: '中枢最大振幅(%)', type: 'number', defaultValue: 30, min: 10, max: 80, step: 5 },
+    // 11 个真正影响信号的参数，与 Rust 侧同名同默认值。
+    // 均线周期 / 中枢参数 / 背驰阈值 / 保本与顶背驰门槛都下沉成常量了：
+    // 46 个参数 / 80 笔来回，多留一个旋钮就是多一次过拟合的机会。
     { key: 'breakoutMinPct', label: '最小突破幅度(%)', type: 'number', defaultValue: 3, min: 0.5, max: 15, step: 0.5 },
-    { key: 'hubReentryTol', label: '回踩入中枢容忍(%)', type: 'number', defaultValue: 0.5, min: 0, max: 3, step: 0.5 },
-
-    // ---- 回踩 ----
-    { key: 'pullbackMinRatio', label: '回踩深度下限', type: 'number', defaultValue: 0.2, min: 0.05, max: 0.6, step: 0.05 },
-    { key: 'pullbackMaxRatio', label: '回踩深度上限', type: 'number', defaultValue: 0.85, min: 0.4, max: 1.0, step: 0.05 },
+    { key: 'pullbackMinRatio', label: '回踩深度下限', type: 'number', defaultValue: 0.3, min: 0.05, max: 0.6, step: 0.05 },
+    { key: 'pullbackMaxRatio', label: '回踩深度上限', type: 'number', defaultValue: 0.7, min: 0.4, max: 1.0, step: 0.05 },
     { key: 'volShrinkRatio', label: '回踩量/突破量上限', type: 'number', defaultValue: 1.0, min: 0.3, max: 2.0, step: 0.1 },
     { key: 'confirmWindow', label: '回踩确认窗口(日)', type: 'number', defaultValue: 5, min: 1, max: 15, step: 1 },
     { key: 'maxChasePct', label: '追高上限(%)', type: 'number', defaultValue: 6, min: 1, max: 20, step: 1 },
-    { key: 'requireYang', label: '要求阳线确认', type: 'boolean', defaultValue: true },
-
-    // ---- 风险与仓位 ----
-    { key: 'stopAtr', label: '结构止损 ATR 缓冲(0=用%)', type: 'number', defaultValue: 2, min: 0, max: 4, step: 0.5 },
-    { key: 'stopBufferPct', label: '结构止损缓冲(%·备用)', type: 'number', defaultValue: 1.5, min: 0, max: 5, step: 0.5 },
-    { key: 'maxRiskPct', label: '单笔最大风险(%)', type: 'number', defaultValue: 12, min: 2, max: 20, step: 1 },
-    { key: 'riskPerTradePct', label: '单笔风险预算(权益%)', type: 'number', defaultValue: 1, min: 0.2, max: 5, step: 0.1 },
-    { key: 'maxPositionPct', label: '单票仓位上限(%)', type: 'number', defaultValue: 100, min: 10, max: 100, step: 5 },
-
-    // ---- 动态止盈 ----
-    { key: 'breakevenR', label: '保本触发(R)', type: 'number', defaultValue: 1, min: 0.5, max: 3, step: 0.5 },
-    { key: 'tp1R', label: '第一批止盈(R, 99=关)', type: 'number', defaultValue: 99, min: 1, max: 99, step: 1 },
-    { key: 'tp1Frac', label: '第一批比例(%)', type: 'number', defaultValue: 33, min: 10, max: 50, step: 1 },
-    { key: 'tp2R', label: '第二批止盈(R, 99=关)', type: 'number', defaultValue: 99, min: 1, max: 99, step: 1 },
-    { key: 'tp2Frac', label: '第二批比例(%)', type: 'number', defaultValue: 50, min: 10, max: 60, step: 5 },
-    { key: 'trailAtrMult', label: 'ATR 跟踪倍数', type: 'number', defaultValue: 5, min: 1, max: 8, step: 0.5 },
-    { key: 'atrPeriod', label: 'ATR 周期', type: 'number', defaultValue: 14, min: 5, max: 40, step: 1 },
-    { key: 'maxHoldBars', label: '最长持仓(日)', type: 'number', defaultValue: 120, min: 10, max: 250, step: 5 },
-    { key: 'divMinR', label: '顶背驰最低浮盈(R)', type: 'number', defaultValue: 2, min: 0, max: 6, step: 0.5 },
-
-    // ---- 辅助买点 ----
-    { key: 'enableB2', label: '启用二买(背驰回调)', type: 'boolean', defaultValue: false },
-    { key: 'divRatio', label: '背驰衰竭阈值', type: 'number', defaultValue: 0.85, min: 0.5, max: 1.0, step: 0.05 },
     { key: 'maxEntryBar', label: '确认阳线最大涨幅%(0=关)', type: 'number', defaultValue: 4, min: 0, max: 10, step: 0.5 },
+    { key: 'stopAtr', label: '结构止损 ATR 倍数', type: 'number', defaultValue: 2, min: 0, max: 4, step: 0.5 },
+    { key: 'maxRiskPct', label: '单笔最大风险(%)', type: 'number', defaultValue: 12, min: 2, max: 20, step: 1 },
+    { key: 'trailAtrMult', label: 'ATR 跟踪倍数', type: 'number', defaultValue: 5, min: 1, max: 8, step: 0.5 },
+    { key: 'maxHoldBars', label: '最长持仓(日)', type: 'number', defaultValue: 120, min: 20, max: 250, step: 5 },
+    // 面板专有：单标的引擎按 R 风险平价定仓位（Rust 池子引擎用等权槽位）
+    { key: 'riskPerTradePct', label: '单笔风险预算(权益%)', type: 'number', defaultValue: 1, min: 0.2, max: 5, step: 0.1 },
   ],
 
   availableIndicators: [],
@@ -464,37 +410,18 @@ const strategy = {
 
     // ---- 参数 ----
     const cfg = {
-      maFast: numParam(params, 'maFast', 10),
-      maMid: numParam(params, 'maMid', 20),
-      maSlow: numParam(params, 'maSlow', 60),
-      slopeLen: numParam(params, 'slopeLen', 10),
-      hubLookbackBars: numParam(params, 'hubLookbackBars', 120),
-      maxHubAmpPct: numParam(params, 'maxHubAmpPct', 30),
       breakoutMinPct: numParam(params, 'breakoutMinPct', 3),
-      hubReentryTol: numParam(params, 'hubReentryTol', 0.5),
-      pullbackMinRatio: numParam(params, 'pullbackMinRatio', 0.2),
-      pullbackMaxRatio: numParam(params, 'pullbackMaxRatio', 0.85),
+      pullbackMinRatio: numParam(params, 'pullbackMinRatio', 0.3),
+      pullbackMaxRatio: numParam(params, 'pullbackMaxRatio', 0.7),
       volShrinkRatio: numParam(params, 'volShrinkRatio', 1.0),
       confirmWindow: Math.round(numParam(params, 'confirmWindow', 5)),
       maxChasePct: numParam(params, 'maxChasePct', 6),
-      requireYang: boolParam(params, 'requireYang', true),
-      stopAtr: numParam(params, 'stopAtr', 2),
-      stopBufferPct: numParam(params, 'stopBufferPct', 1.5),
-      maxRiskPct: numParam(params, 'maxRiskPct', 12),
       maxEntryBar: numParam(params, 'maxEntryBar', 4),
-      riskPerTradePct: numParam(params, 'riskPerTradePct', 1),
-      maxPositionPct: numParam(params, 'maxPositionPct', 100),
-      breakevenR: numParam(params, 'breakevenR', 1),
-      tp1R: numParam(params, 'tp1R', 99),
-      tp1Frac: numParam(params, 'tp1Frac', 33),
-      tp2R: numParam(params, 'tp2R', 99),
-      tp2Frac: numParam(params, 'tp2Frac', 50),
+      stopAtr: numParam(params, 'stopAtr', 2),
+      maxRiskPct: numParam(params, 'maxRiskPct', 12),
       trailAtrMult: numParam(params, 'trailAtrMult', 5),
-      atrPeriod: Math.round(numParam(params, 'atrPeriod', 14)),
       maxHoldBars: Math.round(numParam(params, 'maxHoldBars', 120)),
-      divMinR: numParam(params, 'divMinR', 2),
-      enableB2: boolParam(params, 'enableB2', false),
-      divRatio: numParam(params, 'divRatio', 0.85),
+      riskPerTradePct: numParam(params, 'riskPerTradePct', 1),
     };
 
     // ---- 指标窗口（只算尾部，保证逐日调用不至于 O(n²) 爆炸）----
@@ -513,11 +440,11 @@ const strategy = {
       vols[t] = k.volume || 0;
     }
 
-    const ef = emaSeries(closes, cfg.maFast);
-    const em = emaSeries(closes, cfg.maMid);
-    const es = emaSeries(closes, cfg.maSlow);
+    const ef = emaSeries(closes, MA_FAST);
+    const em = emaSeries(closes, MA_MID);
+    const es = emaSeries(closes, MA_SLOW);
     const macd = macdSeries(closes, 12, 26, 9);
-    const atr = atrSeries(highs, lows, closes, cfg.atrPeriod);
+    const atr = atrSeries(highs, lows, closes, ATR_PERIOD);
 
     const j = i - base;
     const c = currentKline.close;
@@ -525,7 +452,7 @@ const strategy = {
 
     // ---- 趋势环境 ----
     const alignOk = ef[j] > em[j] && em[j] > es[j];
-    const slopeOk = j - cfg.slopeLen >= 0 && em[j] > em[j - cfg.slopeLen];
+    const slopeOk = j - SLOPE_LEN >= 0 && em[j] > em[j - SLOPE_LEN];
     const strongTrend = alignOk && slopeOk;
 
     const segments = chanlun.segments || [];
@@ -542,7 +469,6 @@ const strategy = {
     const hubUp = !!(prevHub && lastHub && lastHub.zg > prevHub.zg);
 
     // 二买用更宽松的环境门槛：一买刚出现时均线还没排列好，要求「价格站上中线 + 中线不再下行」
-    const mildTrend = c > em[j] && (j - cfg.slopeLen < 0 || em[j] >= em[j - cfg.slopeLen] * 0.999);
 
     // 背驰比较要用「严格交替」的分型序列（原始分型不保证交替）
     const swingPoints = connectFractions(connectFractions(chanlun.fractions || [], 4), 4);
@@ -612,23 +538,20 @@ const strategy = {
 
       // 止损线：结构止损 → 保本 → Chandelier 跟踪
       let stopLine = stop0;
-      if (unrealizedR >= cfg.breakevenR) {
+      if (unrealizedR >= BREAKEVEN_R) {
         stopLine = Math.max(stopLine, entryPrice * 1.005); // 覆盖双边费用
         stopLine = Math.max(stopLine, highest - cfg.trailAtrMult * atrNow);
       }
 
-      // 分批止盈：只数「本次建仓之后」执行过几次，否则换仓后会把上一笔的止盈次数带过来
-      let tpDone = 0;
+      // 顶背驰只响应一次：数「本次建仓之后」卖过几次，换仓后不会把上一笔的次数带过来
       let divDone = 0;
       for (let t = lastBuyPos + 1; t < trades.length; t++) {
         const tr = trades[t];
-        if (tr.action !== 'SELL' || !tr.reason) continue;
-        if (tr.reason.indexOf('分批止盈') === 0) tpDone++;
-        if (tr.reason.indexOf('顶背驰') === 0) divDone++;
+        if (tr.action === 'SELL' && tr.reason && tr.reason.indexOf('顶背驰') === 0) divDone++;
       }
 
       if (c <= stopLine) {
-        const tag = unrealizedR >= cfg.breakevenR ? '跟踪止盈' : '结构止损';
+        const tag = unrealizedR >= BREAKEVEN_R ? '跟踪止盈' : '结构止损';
         return {
           action: 'SELL',
           amount: { unit: 'percent', value: 100 },
@@ -658,8 +581,8 @@ const strategy = {
         i,
         cfg,
       });
-      if (div && divDone === 0 && unrealizedR >= cfg.divMinR && c < div.topPrice) {
-        const keepRunner = strongTrend && unrealizedR < cfg.tp2R && tpDone === 0;
+      if (div && divDone === 0 && unrealizedR >= DIV_MIN_R && c < div.topPrice) {
+        const keepRunner = strongTrend;
         return {
           action: 'SELL',
           amount: { unit: 'percent', value: keepRunner ? 50 : 100 },
@@ -673,27 +596,6 @@ const strategy = {
             'R' +
             (keepRunner ? '，趋势仍强减半留仓' : '，清仓'),
           confidence: 0.85,
-          score: trendScore,
-        };
-      }
-
-      if (unrealizedR >= cfg.tp2R && tpDone === 1) {
-        return {
-          action: 'SELL',
-          amount: { unit: 'percent', value: cfg.tp2Frac },
-          reason:
-            '分批止盈2：' + unrealizedR.toFixed(1) + 'R ≥ ' + cfg.tp2R + 'R，减 ' + cfg.tp2Frac + '%',
-          confidence: 0.8,
-          score: trendScore,
-        };
-      }
-      if (unrealizedR >= cfg.tp1R && tpDone === 0) {
-        return {
-          action: 'SELL',
-          amount: { unit: 'percent', value: cfg.tp1Frac },
-          reason:
-            '分批止盈1：' + unrealizedR.toFixed(1) + 'R ≥ ' + cfg.tp1R + 'R，减 ' + cfg.tp1Frac + '%',
-          confidence: 0.75,
           score: trendScore,
         };
       }
@@ -731,7 +633,6 @@ const strategy = {
 
     let setup = null;
     if (strongTrend) setup = detectBreakoutPullback(ctx);
-    if (!setup && cfg.enableB2 && mildTrend) setup = detectSecondBuy(ctx);
     if (!setup) return { action: 'HOLD', score: trendScore };
 
     // ---- R 风险平价仓位 ----
@@ -746,7 +647,7 @@ const strategy = {
     const riskCash = equity * (cfg.riskPerTradePct / 100);
     let pct = (riskCash / (perShareRisk * entry)) * 100;
     // 99.5 而非 100：给佣金/过户费留出余量，否则「按可用资金 100% 买入」会被费用顶穿
-    pct = clamp(pct, 0, Math.min(cfg.maxPositionPct, 99.5));
+    pct = clamp(pct, 0, Math.min(MAX_POSITION_PCT, 99.5));
     if (pct < 5) return { action: 'HOLD', score: trendScore }; // 仓位太小，不值得开
 
     const quality = clamp(
