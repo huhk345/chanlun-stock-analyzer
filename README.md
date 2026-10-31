@@ -83,7 +83,7 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
 
 5. Open [http://localhost:8888](http://localhost:8888) in your browser.
 
-6. **Node analysis backend** — the ChanLun 买卖点扫描 (BS-point scan) run server-side instead of in-browser:
+6. **Node analysis backend** — strategies and backtests run server-side:
    ```bash
    pnpm server   # tsx server/index.ts, listens on :8899
    ```
@@ -101,17 +101,21 @@ ChanLun Stock Analyzer is a professional A-share technical analysis platform bui
 
    前端只保留 UI 与请求层 (`src/utils/backtestApi.ts`、`src/utils/strategyApi.ts`); 单步回测是有状态的服务端会话 (K 线与引擎状态留在内存, 30 分钟无访问回收)。用户自定义指标仍在浏览器侧维护 (图表要用), 回测时把选中的指标代码随请求上传, 由服务端沙箱编译。
 
-   **缠论买卖点扫描走 WebSocket `/ws`** — the browser only sends a scan request; the server fetches the K-lines, computes the ChanLun structures / BS-points, builds the signal rows and streams them back over the socket:
+   **缠论买卖点扫描 (`/indexes`) 完全在浏览器内完成, 不需要任何后端** — the browser fetches the K-lines, computes the ChanLun structures / BS-points and builds the signal rows itself (`src/utils/indexScan.ts`):
    ```text
-   browser --{type:'scan', timeframe, indexes, custom, force}--> server
-   browser <--{scan-start | progress | rows | flows | done}------- server
+   public/index-members.{hs300,zz500}.json  ->  universe
+   fqkline 前复权 (日线 400 根 / 周线 300 根, 多源轮转)  ->  Kline[]
+   utils/chanlun.ts computeStrokesAndBSPoints        ->  B1/B2/B3/S1/S2/S3
+   最近 90 天窗口                                     ->  ScanSignalRow[]
    ```
-   Server-side: K-lines are cached under `.cache/klines/`, scan results under `.cache/scan/{daily,weekly}.json` (an incremental scan only re-fetches symbols whose last bar is behind the expected latest trading day; a symbol whose data was already verified after that day's close — e.g. a long-suspended stock — is not re-fetched again that day), so repeat scans are instant and the browser keeps no cache of its own. Multiple tabs share one running scan; closing a tab does not stop the scan.
-   The server-side K-line window is fixed to **2023-01-01 → latest** (daily and weekly), so scans, single-symbol backtests and pool backtests all analyze the same date range.
+   - 行情只用腾讯的两个域名, 按序轮转, 一个出现 501/403/断连就整轮剔除, 由另一个接手:
+     `proxy.finance.qq.com/ifzqgtimg` (网页端 CDN, 带成交额) → `web.ifzq.gtimg.cn` (老接口)。
+     两个都不可用时立即停止 (不再逐个标的空转), 回退本地缓存并在顶部提示。
+   - 请求节奏刻意放慢: 2 路并发 + 500ms 间隔 (约 3 次/秒), 沪深300 全量约 2 分钟, 中证500 约 3 分钟;
+     连续 15 次失败即熔断。
+   - 结果按周期缓存于 `localStorage` (`chanlun_scan_local_daily` / `_weekly`), 只存信号行 (~150KB / 300 只); 再次扫描只重新拉取数据日期落后于最新交易日的标的, 已最新的标的零请求复用。
 
-   Vite proxies both `/api` and `/ws` to the backend (`ws: true`). Override the backend address with `ANALYSIS_API_TARGET` (dev/preview proxy target), the HTTP base URL with `VITE_ANALYSIS_API_URL`, or the WebSocket URL with `VITE_ANALYSIS_WS_URL` (defaults to same-origin `/ws`).
-
-   The single-stock analysis endpoints (`/api/chanlun/*`) still fall back to in-browser computation when the backend is down; the 买卖点扫描 requires the backend and shows a reconnect banner when the socket drops.
+   Vite still proxies `/api` (and `/ws`) to the analysis backend for the single-stock analysis and backtest views; the 买卖点扫描 page no longer uses them. Override the backend address with `ANALYSIS_API_TARGET` (dev/preview proxy target) or the HTTP base URL with `VITE_ANALYSIS_API_URL`.
 
    > **The backend is no longer part of this repository.** `server-py/` has been removed; the frontend still talks to an analysis / backtest server on `:8899` over `/api` and `/ws`, so that server has to be started separately (the API contract below is unchanged).
 

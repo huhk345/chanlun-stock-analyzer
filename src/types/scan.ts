@@ -1,9 +1,8 @@
 /**
- * 缠论买卖点扫描 —— 前后端共享的类型与常量。
+ * 缠论买卖点扫描 —— 类型与常量。
  *
- * 扫描全部由后端完成: 前端只通过 WebSocket 下发「扫描请求」,
- * 后端负责拉取 K 线、计算缠论买卖点、生成信号行, 再经 WebSocket 增量推送。
- * 本文件是这条链路的唯一契约来源 (server/scan*.ts 与 src/components/IndexAnalysis.tsx 共用)。
+ * 扫描完全在浏览器内完成 (见 src/utils/indexScan.ts): 本地引擎负责拉 K 线、
+ * 计算缠论买卖点、生成信号行; 组件只做筛选/排序/展示。
  */
 import type { BSPointType } from './stock';
 
@@ -45,13 +44,7 @@ export interface ScanSignalRow {
   amount5?: number;       // 近5日日均成交额 (亿元)
 }
 
-/** 个股当日主力资金流向 (东方财富) */
-export interface StockFlow {
-  mainInflow: number;   // 今日主力净流入 (元) = 超大单 + 大单
-  mainPercent: number;  // 主力净占比 %
-}
-
-/** 后端扫描缓存概况 (对应前端原先的 localStorage 缓存信息) */
+/** 扫描缓存概况 (对应浏览器 localStorage 里的缓存信息) */
 export interface ScanCacheInfo {
   timeframe: ScanTimeframe;
   count: number;        // 缓存中的标的数量
@@ -64,38 +57,6 @@ export interface ScanProgress {
   done: number;
   ok: number;
   failed: number;
-  cached: number;   // 命中后端缓存, 跳过下载与计算
+  cached: number;   // 命中本地缓存, 跳过下载与计算
   signalCount: number;
 }
-
-// ---------------------------------------------------------------------------
-// WebSocket 协议
-// ---------------------------------------------------------------------------
-
-export type ScanClientMessage =
-  /** 拉取某周期的缓存快照 (不触发扫描), 用于页面挂载时秒开 */
-  | { type: 'cache'; timeframe: ScanTimeframe }
-  /** 发起扫描: 指数成分 + 自定义标的, 统一按该周期扫描 */
-  | {
-      type: 'scan';
-      timeframe: ScanTimeframe;
-      indexes: IndexId[];
-      custom: string[];
-      force?: boolean;
-    }
-  /** 中断当前扫描 (已完成部分保留进缓存) */
-  | { type: 'cancel' }
-  | { type: 'ping' };
-
-export type ScanServerMessage =
-  /** 缓存快照: 页面挂载时秒开上次结果, 不触发任何上游请求 */
-  | { type: 'cache'; timeframe: ScanTimeframe; rows: ScanSignalRow[]; info: ScanCacheInfo; flows: Record<string, StockFlow> }
-  /** 扫描开始 (中途接入也会收到, 附带当时的进度) */
-  | { type: 'scan-start'; scanId: string; timeframe: ScanTimeframe; force: boolean; progress: ScanProgress }
-  | { type: 'progress'; progress: ScanProgress }
-  /** 增量信号行, 边算边推 */
-  | { type: 'rows'; rows: ScanSignalRow[] }
-  | { type: 'flows'; flows: Record<string, StockFlow> }
-  | { type: 'done'; scanId: string; cancelled: boolean; info: ScanCacheInfo }
-  | { type: 'error'; code: string; message: string }
-  | { type: 'pong' };

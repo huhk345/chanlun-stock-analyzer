@@ -1,16 +1,15 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   Radar, Play, Square, Plus, X, Loader2, AlertTriangle, Search, ExternalLink,
-  ArrowUpRight, ArrowDownRight, RefreshCw, Database, Star,
+  ArrowUpRight, ArrowDownRight, RefreshCw, Database, Star, Cpu,
 } from 'lucide-react';
-import { formatSignedYi } from '../utils/marketApi';
 import { WatchItem, loadWatchlist, upsertWatchlist, removeFromWatchlist } from '../utils/watchlistStorage';
-import { ScanSocket, type AnalysisServerMessage, type ScanConnectionState } from '../utils/scanSocket';
+import { IndexScanEngine } from '../utils/indexScan';
 import { parseSymbol, symbolKey, kindLabel, type ParsedSymbol } from '../utils/indexAnalysisApi';
 import {
   ALL_BS_TYPES, INDEX_META, SIGNAL_WINDOW_DAYS,
-  type IndexId, type ScanCacheInfo, type ScanClientMessage, type ScanProgress,
-  type ScanSignalRow, type ScanTimeframe, type StockFlow,
+  type IndexId, type ScanCacheInfo, type ScanProgress,
+  type ScanSignalRow, type ScanTimeframe,
 } from '../types/scan';
 import type { BSPointType } from '../types/stock';
 
@@ -38,9 +37,9 @@ export const TYPE_STYLE: Record<BSPointType, string> = {
 // ---------------------------------------------------------------------------
 // 主组件
 //
-// 扫描全部由后端完成: 浏览器只通过 WebSocket 下发扫描请求, 服务端负责
-// 拉 K 线、算缠论买卖点、按 90 天窗口出信号行, 再把进度与结果增量推回来。
-// 这里只做: 组装扫描范围 -> 收发消息 -> 筛选/排序/自选/展示。
+// 扫描完全在浏览器内完成, 不依赖任何分析后端:
+//   成分股名单 (public) -> 腾讯行情前复权K线 (直连) -> 本地缠论计算 -> 信号行。
+// 这里只做: 组装扫描范围 -> 驱动本地引擎 -> 筛选/排序/自选/展示。
 // ---------------------------------------------------------------------------
 
 export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symbol: string, tf?: ScanTimeframe) => void }) {
@@ -77,12 +76,10 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
   const scanTimeframeRef = useRef<ScanTimeframe>(scanTimeframe);
   scanTimeframeRef.current = scanTimeframe;
 
-  // 与后端的扫描通道 (WebSocket)
-  const socketRef = useRef<ScanSocket | null>(null);
-  const [conn, setConn] = useState<ScanConnectionState>('connecting');
-  const [serverError, setServerError] = useState('');
+  // 本地扫描引擎 (K线拉取 + 缠论计算 + 结果缓存, 全部在浏览器内)
+  const [engine] = useState(() => new IndexScanEngine());
 
-  // 扫描状态与结果 (全部来自后端推送)
+  // 扫描状态与结果
   const [running, setRunning] = useState(false);
   const runningRef = useRef(false);
   const [progress, setProgress] = useState<ScanProgress>(EMPTY_PROGRESS);
@@ -90,13 +87,10 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
   const [cacheInfo, setCacheInfo] = useState<ScanCacheInfo>(() => ({
     timeframe: scanTimeframe, count: 0, latestDate: '', stale: false,
   }));
-  /** 首次进入: 后端缓存快照是否已加载完成 */
+  /** 本地缓存快照是否已读入 (同步读取 localStorage, 首帧即可用) */
   const [hydrated, setHydrated] = useState(false);
-  /** 最近一次扫描请求: 断线重连后据此挂回同一个后端任务 */
-  const lastScanRef = useRef<ScanClientMessage | null>(null);
-
-  // 个股当日主力资金流向 (后端随扫描结果一起推送)
-  const [flowMap, setFlowMap] = useState<Record<string, StockFlow>>({});
+  /** 扫描失败提示 */
+  const [errorText, setErrorText] = useState('');
 
   // 过滤与排序
   const [typeFilter, setTypeFilter] = useState<Set<BSPointType>>(new Set(ALL_TYPES));
@@ -114,145 +108,92 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
   // 扫描控制
   // -------------------------------------------------------------------------
 
-  /** 供消息处理器回调 (缓存过期时自动增量刷新), 避免 useCallback 相互依赖 */
+  /** 追加信号行 (按 id 去重: 增量扫描会重放缓存命中的行) */
+  const appendRows = useCallback((incoming: ScanSignalRow[]) => {
+    if (incoming.length === 0) return;
+    setRows(prev => {
+      const seen = new Set(prev.map(r => r.id));
+      const next = prev.slice();
+      for (const r of incoming) {
+        if (seen.has(r.id)) continue;
+        seen.add(r.id);
+        next.push(r);
+      }
+      return next.length === prev.length ? prev : next;
+    });
+  }, []);
+
+  /** 供挂载 effect 回调 (缓存过期时自动增量刷新), 避免 useCallback 相互依赖 */
   const startScanRef = useRef<(force?: boolean) => void>(() => {});
 
   const startScan = useCallback((force = false) => {
-    if (runningRef.current) return;
+    // engine.isRunning 兜底: 上一轮刚点停止、尚未收尾时不允许立刻重启,
+    // 否则清空表格后 engine.start 会直接返回, 页面会停在空白态
+    if (runningRef.current || engine.isRunning) return;
     const ids = (Object.keys(selectedIndexes) as IndexId[]).filter(id => selectedIndexes[id]);
-    const request: ScanClientMessage = {
-      type: 'scan',
-      timeframe: scanTimeframeRef.current,
-      indexes: ids,
-      custom: customSymbols,
-      force,
-    };
-    lastScanRef.current = request;
+    if (ids.length === 0 && customSymbols.length === 0) return;
+
     runningRef.current = true;
     setRunning(true);
-    setServerError('');
+    setErrorText('');
     setRows([]);
     setProgress(EMPTY_PROGRESS);
-    socketRef.current?.send(request);
-  }, [customSymbols, selectedIndexes]);
+
+    void engine
+      .start(
+        { timeframe: scanTimeframeRef.current, indexes: ids, custom: customSymbols, force },
+        {
+          onProgress: p => { if (runningRef.current) setProgress(p); },
+          onRows: incoming => { if (runningRef.current) appendRows(incoming); },
+          onDone: info => {
+            runningRef.current = false;
+            setRunning(false);
+            setCacheInfo(info);
+            setHydrated(true);
+          },
+          onError: message => {
+            runningRef.current = false;
+            setRunning(false);
+            setErrorText(message);
+            setHydrated(true);
+          },
+        },
+      )
+      .finally(() => {
+        runningRef.current = false;
+        setRunning(false);
+      });
+  }, [appendRows, customSymbols, engine, selectedIndexes]);
   startScanRef.current = startScan;
 
   const stopScan = useCallback(() => {
-    const socket = socketRef.current;
-    if (!socket || socket.state !== 'open') {
-      // 通道已断: 服务端收不到 cancel, 本地直接结束 (缓存已由服务端落盘)
-      runningRef.current = false;
-      setRunning(false);
-      return;
-    }
-    socket.send({ type: 'cancel' });
-  }, []);
+    // 只通知引擎中断; running 状态由 onDone/finally 收尾, 避免出现
+    // 「表格已清空但引擎还在跑」的空窗
+    engine.cancel();
+  }, [engine]);
 
-  /** 切换日线/周线: 换用对应周期的后端缓存并秒开 */
+  /** 切换日线/周线: 换用对应周期的本地缓存并秒开 */
   const handleScanTimeframeChange = useCallback((next: ScanTimeframe) => {
     if (next === scanTimeframeRef.current || runningRef.current) return;
     try { localStorage.setItem(SCAN_TF_KEY, next); } catch { /* ignore */ }
     setScanTimeframe(next);
     scanTimeframeRef.current = next;
-    lastScanRef.current = null;
-    setRows([]);
     setProgress(EMPTY_PROGRESS);
-    setFlowMap({});
-    setCacheInfo({ timeframe: next, count: 0, latestDate: '', stale: false });
-    setHydrated(false);
-    socketRef.current?.send({ type: 'cache', timeframe: next });
-  }, []);
+    const snap = engine.load(next);
+    setRows(snap.rows);
+    setCacheInfo(snap.info);
+    setHydrated(true);
+  }, [engine]);
 
-  // -------------------------------------------------------------------------
-  // 通道生命周期 + 消息分发
-  // -------------------------------------------------------------------------
-
-  const handleServerMessage = useCallback((msg: AnalysisServerMessage) => {
-    switch (msg.type) {
-      case 'cache':
-        // 扫描进行中忽略过期快照, 避免覆盖正在推送的结果
-        if (runningRef.current || msg.timeframe !== scanTimeframeRef.current) break;
-        setRows(msg.rows);
-        setCacheInfo(msg.info);
-        setFlowMap(prev => ({ ...prev, ...msg.flows }));
-        setServerError('');
-        setHydrated(true);
-        // 缓存整体落后于预期交易日: 自动增量刷新 (零请求复用已最新条目)
-        if (msg.info.count > 0 && msg.info.stale) startScanRef.current(false);
-        break;
-
-      case 'scan-start':
-        if (msg.timeframe !== scanTimeframeRef.current) break;
-        runningRef.current = true;
-        setRunning(true);
-        setServerError('');
-        setProgress(msg.progress);
-        // 新一轮扫描 (含断线重连重放): 以服务端进度为准, 重置已收到的结果
-        setRows([]);
-        break;
-
-      case 'progress':
-        if (!runningRef.current) break;
-        setProgress(msg.progress);
-        break;
-
-      case 'rows':
-        if (!runningRef.current) break;
-        setRows(prev => [...prev, ...msg.rows]);
-        break;
-
-      case 'flows':
-        setFlowMap(prev => ({ ...prev, ...msg.flows }));
-        break;
-
-      case 'done':
-        runningRef.current = false;
-        setRunning(false);
-        setCacheInfo(msg.info);
-        setHydrated(true);
-        break;
-
-      case 'error':
-        runningRef.current = false;
-        setRunning(false);
-        setServerError(msg.message);
-        setHydrated(true);
-        break;
-
-      case 'pong':
-        break;
-
-      default:
-        break; // 未知消息类型忽略
-    }
-  }, []);
-
+  // 挂载: 读本地缓存秒开; 缓存落后于预期交易日时自动跑一次增量扫描
+  // (数据已达最新交易日的标的直接复用, 不产生任何请求)
   useEffect(() => {
-    const socket = new ScanSocket(
-      msg => handleServerMessage(msg),
-      state => {
-        setConn(state);
-        if (state === 'closed') setHydrated(true); // 后端不可用时也要结束加载态
-      },
-    );
-    socketRef.current = socket;
-    socket.connect();
-    return () => {
-      socket.dispose();
-      socketRef.current = null;
-    };
-  }, [handleServerMessage]);
-
-  // 连上 (含断线重连) 后: 挂回正在跑的扫描, 否则拉一次缓存快照秒开
-  useEffect(() => {
-    if (conn !== 'open') return;
-    const socket = socketRef.current;
-    if (!socket) return;
-    // 重连只做「挂回」: 去掉 force, 让服务端把当前任务进度与已产出结果重放一遍
-    const last = lastScanRef.current;
-    const resume = runningRef.current && last?.type === 'scan' ? { ...last, force: false } : null;
-    socket.send(resume ?? { type: 'cache', timeframe: scanTimeframeRef.current });
-  }, [conn]);
+    const snap = engine.load(scanTimeframeRef.current);
+    setRows(snap.rows);
+    setCacheInfo(snap.info);
+    setHydrated(true);
+    if (snap.info.count > 0 && snap.info.stale) startScanRef.current(false);
+  }, [engine]);
 
   // -------------------------------------------------------------------------
   // 自选股操作
@@ -391,7 +332,7 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
         <div className="min-w-0">
           <h2 className="text-lg font-bold text-zinc-50 leading-tight">缠论买卖点扫描</h2>
           <p className="text-[11px] text-zinc-500 mt-0.5">
-            扫描经 WebSocket 交由后端执行 ({scanTimeframe === 'weekly' ? '周线 TickFlow 1w, 中长线趋势' : '近1年日线API数据'}), 列出最近 {SIGNAL_WINDOW_DAYS} 天内的三类买卖点
+            扫描在浏览器内完成 ({scanTimeframe === 'weekly' ? '周线 前复权, 中长线趋势' : '日线 前复权, 近 400 根'}), 列出最近 {SIGNAL_WINDOW_DAYS} 天内的三类买卖点
           </p>
         </div>
       </div>
@@ -431,7 +372,7 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
                   ? 'bg-blue-500/90 text-white shadow-sm shadow-blue-500/20'
                   : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
               }`}
-              title={tf === 'daily' ? '日线级别扫描 (近1年日K)' : '周线级别扫描 (TickFlow 1w, 所有指数/成分股通用)'}
+              title={tf === 'daily' ? '日线级别扫描 (前复权日K, 近 400 根)' : '周线级别扫描 (前复权周K, 近 300 根)'}
             >
               {tf === 'daily' ? '日线' : '周线'}
             </button>
@@ -463,16 +404,16 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
         {/* Start / Stop / Force refresh */}
         <div className="flex items-center gap-2 ml-auto">
           <span
-            className={`hidden md:flex items-center gap-1.5 text-[10px] font-mono ${conn === 'open' ? 'text-zinc-600' : 'text-amber-500/90'}`}
-            title="扫描实时通道: 浏览器只发请求, K 线拉取与缠论计算全部在服务端完成"
+            className="hidden md:flex items-center gap-1.5 text-[10px] font-mono text-zinc-600"
+            title="扫描在浏览器内完成: 直连腾讯行情拉 K 线, 缠论买卖点在本地计算, 不经过任何后端服务"
           >
-            <span className={`w-1.5 h-1.5 rounded-full ${conn === 'open' ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
-            {conn === 'open' ? 'WS 已连接' : conn === 'connecting' ? 'WS 连接中' : 'WS 断开'}
+            <Cpu className="h-3 w-3" />
+            本地计算
           </span>
           {cacheInfo.count > 0 && !running && (
             <span
               className={`hidden md:flex items-center gap-1.5 text-[10px] font-mono ${cacheInfo.stale ? 'text-amber-500/90' : 'text-zinc-600'}`}
-              title="后端扫描缓存 (.cache/scan); 增量扫描只复用数据已达最新交易日的标的, 过期标的自动重新拉取计算"
+              title="浏览器本地缓存 (localStorage); 增量扫描只复用数据已达最新交易日的标的, 过期标的自动重新拉取计算"
             >
               <Database className="h-3 w-3" />
               缓存 {cacheInfo.count} 只{cacheInfo.latestDate ? ` · 数据至 ${cacheInfo.latestDate}` : ''}
@@ -493,7 +434,7 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
                 <button
                   onClick={() => startScan(true)}
                   className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-zinc-900/70 border border-zinc-800/60 text-zinc-400 hover:text-blue-400 hover:border-blue-500/40 text-[11px] font-medium transition-all cursor-pointer"
-                  title="忽略缓存, 让后端重新拉取全部数据并计算"
+                  title="忽略缓存, 重新拉取全部 K 线并本地重算"
                 >
                   <RefreshCw className="h-3 w-3" />
                   强制重扫
@@ -501,7 +442,7 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
               )}
               <button
                 onClick={() => startScan(false)}
-                disabled={!anyUniverseSelected || conn !== 'open'}
+                disabled={!anyUniverseSelected}
                 className="flex items-center gap-1.5 h-8 px-3.5 rounded-lg bg-blue-500 hover:bg-blue-400 active:bg-blue-600 text-white text-[11px] font-bold transition-all cursor-pointer shadow-sm shadow-blue-500/20 disabled:opacity-40"
               >
                 <Play className="h-3 w-3 fill-current" />
@@ -538,17 +479,10 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
         </div>
       )}
 
-      {conn === 'closed' && (
-        <div className="px-3 py-2 rounded-lg bg-amber-950/20 border border-amber-900/30 text-amber-400 text-xs flex items-center gap-2">
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-          扫描后端连接已断开, 正在重连… 扫描功能需要分析服务在运行 (pnpm server)
-        </div>
-      )}
-
-      {serverError && (
+      {errorText && (
         <div className="px-3 py-2 rounded-lg bg-red-950/20 border border-red-900/30 text-red-300 text-xs flex items-center gap-2">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-          {serverError}
+          {errorText}
         </div>
       )}
 
@@ -557,8 +491,10 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
         <div className="space-y-1.5">
           <div className="flex items-center justify-between text-[11px] font-mono text-zinc-500">
             <span className="flex items-center gap-1.5">
-              <Loader2 className="h-3 w-3 animate-spin text-blue-400" />
-              扫描中 {progress.done}/{progress.total}
+              {running
+                ? <Loader2 className="h-3 w-3 animate-spin text-blue-400" />
+                : <Square className="h-3 w-3 text-amber-500" />}
+              {running ? `扫描中 ${progress.done}/${progress.total}` : `已提前结束 ${progress.done}/${progress.total}`}
             </span>
             <span>
               命中 <span className="text-zinc-300">{rows.length}</span> 条信号
@@ -646,15 +582,15 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
             ) : !hydrated ? (
               <>
                 <Loader2 className="h-5 w-5 animate-spin text-zinc-600" />
-                <p className="text-xs text-zinc-500">正在加载后端缓存结果...</p>
+                <p className="text-xs text-zinc-500">正在读取本地缓存结果...</p>
               </>
             ) : (
               <>
                 <Radar className="h-6 w-6 text-zinc-700" />
-                <p className="text-xs text-zinc-500">选择扫描范围与周期后点击「开始扫描」, 后端将逐只获取{scanTimeframe === 'weekly' ? '周线 (TickFlow 1w)' : '近1年日线'}并计算缠论三类买卖点</p>
+                <p className="text-xs text-zinc-500">选择扫描范围与周期后点击「开始扫描」, 浏览器将逐只获取{scanTimeframe === 'weekly' ? '周线 前复权 K 线' : '日线 前复权 K 线'}并在本地计算缠论三类买卖点</p>
                 <button
                   onClick={() => startScan(false)}
-                  disabled={!anyUniverseSelected || conn !== 'open'}
+                  disabled={!anyUniverseSelected}
                   className="mt-2 flex items-center gap-1.5 h-8 px-4 rounded-lg bg-blue-500 hover:bg-blue-400 text-white text-xs font-bold cursor-pointer shadow-sm shadow-blue-500/20 disabled:opacity-40"
                 >
                   <Play className="h-3 w-3 fill-current" />
@@ -677,7 +613,6 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
                   <th className="px-3 py-2.5">缠论买卖点 (近{SIGNAL_WINDOW_DAYS}天)</th>
                   <th className="px-3 py-2.5 text-right font-mono">现价</th>
                   <th className="px-3 py-2.5 text-right font-mono">量比</th>
-                  <th className="px-3 py-2.5 text-right font-mono">主力净流入</th>
                   <th className="px-3 py-2.5 text-right font-mono">操作</th>
                 </tr>
               </thead>
@@ -728,21 +663,6 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
                       >
                         {head.volRatio != null && head.volRatio > 0 ? `${head.volRatio.toFixed(2)}` : '—'}
                       </td>
-                      <td
-                        className={`px-3 py-2 text-[11px] font-mono font-semibold text-right tabular-nums whitespace-nowrap ${(() => {
-                          const f = flowMap[head.symbolKey];
-                          if (!f) return 'text-zinc-700';
-                          return f.mainInflow > 0 ? 'text-red-400' : f.mainInflow < 0 ? 'text-green-400' : 'text-zinc-400';
-                        })()}`}
-                        title="今日主力净流入 (超大单+大单, 东方财富)"
-                      >
-                        {flowMap[head.symbolKey]
-                          ? <span className="inline-flex items-baseline gap-1">
-                              {formatSignedYi(flowMap[head.symbolKey].mainInflow)}
-                              <span className="text-[10px] opacity-70">{flowMap[head.symbolKey].mainPercent.toFixed(1)}%</span>
-                            </span>
-                          : <span>—</span>}
-                      </td>
                       <td className="px-3 py-2 text-right">
                         <div className="flex items-center justify-end gap-2.5">
                           <button
@@ -777,7 +697,6 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
           <div className="md:hidden overflow-y-auto max-h-[calc(100vh-320px)] divide-y divide-zinc-900">
             {visibleGroups.map(g => {
               const head = g[0];
-              const f = flowMap[head.symbolKey];
               return (
                 <article
                   key={head.symbolKey}
@@ -797,11 +716,6 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
                     <span className="ml-auto shrink-0">
                       {head.volRatio != null && head.volRatio > 0 ? `量比 ${head.volRatio.toFixed(2)}` : ''}
                     </span>
-                    {f && (
-                      <span className={`font-semibold tabular-nums shrink-0 ${f.mainInflow > 0 ? 'text-red-400' : f.mainInflow < 0 ? 'text-green-400' : 'text-zinc-400'}`}>
-                        主力 {formatSignedYi(f.mainInflow)}
-                      </span>
-                    )}
                   </div>
                   <div className="mt-1.5 flex flex-wrap items-center gap-1">
                     {g.map(s => (
@@ -850,7 +764,9 @@ export default function IndexAnalysis({ onSelectStock }: { onSelectStock?: (symb
 
       {/* Footer note */}
       <p className="text-[10px] text-zinc-600 leading-relaxed">
-        数据来源: TickFlow {scanTimeframe === 'weekly' ? '周线 1w (前复权, 约400周)' : '近1年日线 (前复权)'} (由后端缓存并按增量拉取) · 日线/周线结果分开缓存于服务端 .cache/scan, 再次扫描秒级完成, 「强制重扫」可获取最新数据 ·
+        数据来源: 腾讯行情 {scanTimeframe === 'weekly' ? '周线 (前复权, 近300周)' : '日线 (前复权, 近400根)'}, 由浏览器直连获取并在本地计算 ·
+        请求节流为 2 路并发 + 500ms 间隔 (约 3 次/秒), 沪深300 全量约 2 分钟, 中证500 约 3 分钟 ·
+        日线/周线结果分开缓存于浏览器 localStorage, 再次扫描只重新拉取数据未到最新交易日的标的, 「强制重扫」可丢弃缓存全量刷新 ·
         信号为缠论三类买卖点机械识别结果, 仅供研究参考, 不构成投资建议。
       </p>
 
