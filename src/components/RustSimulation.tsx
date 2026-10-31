@@ -165,10 +165,9 @@ export default function RustSimulation() {
         }
       } catch {
         if (cancelled) return;
+        // 页面只在引擎在线时才挂载（见 App.tsx），走到这里说明探测之后引擎掉了。
         setOnline(false);
-        setError(
-          '回测引擎未启动。请在仓库根目录运行: ./engine-rs/target/release/chanlun-engine-rs --port 8901',
-        );
+        setError('回测引擎连接已断开，重启引擎后刷新页面即可恢复。');
       }
     })();
     return () => {

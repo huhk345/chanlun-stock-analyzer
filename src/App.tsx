@@ -11,6 +11,7 @@ import MarketDashboard from './components/MarketDashboard';
 import IndexAnalysis from './components/IndexAnalysis';
 import KeepAlive from './components/KeepAlive';
 import RustSimulation from './components/RustSimulation';
+import useEngineStatus from './hooks/useEngineStatus';
 import { SupabaseUser } from './utils/supabase';
 import { Kline, Stroke, Segment, Hub, Fraction, StockBasicInfo, BacktestTrade, BSPoint } from './types/stock';
 import { analyzeChanlunWithFallback } from './utils/analysisApi';
@@ -129,6 +130,10 @@ export default function App() {
   const initialRoute = parseAppUrl();
   const initialView: ViewMode = initialRoute.view;
   const [view, setView] = useState<ViewMode>(initialView);
+
+  // 回测引擎是否在线。引擎不在时「策略回测」整页连同导航入口都不出现 ——
+  // 与其渲染一张「未启动」报错面板，不如当作这个功能不存在。
+  const engineOnline = useEngineStatus();
 
   // Prevent double API calls in StrictMode
   const hasInitialized = useRef(false);
@@ -350,6 +355,15 @@ export default function App() {
     }
   };
 
+  // 引擎不可用时 /simulation 是个空页面（书签、旧链接、引擎中途挂掉都会落到这），
+  // 直接退回总览并改写 URL，不留下一个打不开的标签。
+  useEffect(() => {
+    if (view !== 'simulation' || engineOnline !== false) return;
+    setView('dashboard');
+    viewRef.current = 'dashboard';
+    syncAppUrl('dashboard', symbolRef.current, timeframeRef.current, 'replace');
+  }, [view, engineOnline]);
+
   // Run on mount: only the analyzer view needs the default chart immediately.
   // Canonicalize legacy query-param URLs into path routes, and default to 日线
   // by dropping any ?tf= from the URL so it matches the daily state.
@@ -459,6 +473,7 @@ export default function App() {
         isMobile={isMobile}
         view={view}
         onViewChange={handleViewChange}
+        engineOnline={engineOnline}
       />
 
       {/* Config View Modal */}
@@ -490,12 +505,16 @@ export default function App() {
 
       {/* Main Container - Rust day-by-day simulation (barter-rs engine).
           Fixed-height pane: the settings column and the results column scroll
-          independently, so the page itself never scrolls. */}
-      <KeepAlive active={view === 'simulation'}>
-        <main className="flex-1 w-full px-[10px] py-[10px] md:px-6 md:py-6 lg:px-8 xl:flex-none xl:h-[calc(100vh-56px)] xl:overflow-hidden">
-          <RustSimulation />
-        </main>
-      </KeepAlive>
+          independently, so the page itself never scrolls.
+          Only mounted while the engine answers: without it there is nothing to
+          show, so the whole pad stays out of the DOM. */}
+      {engineOnline && (
+        <KeepAlive active={view === 'simulation'}>
+          <main className="flex-1 w-full px-[10px] py-[10px] md:px-6 md:py-6 lg:px-8 xl:flex-none xl:h-[calc(100vh-56px)] xl:overflow-hidden">
+            <RustSimulation />
+          </main>
+        </KeepAlive>
+      )}
 
       {/* Main Container - Chart + Backtest scroll under the fixed right rail */}
       <KeepAlive active={view === 'analyzer'}>

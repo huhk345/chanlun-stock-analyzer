@@ -18,6 +18,8 @@ interface NavbarProps {
   isMobile?: boolean;
   view?: ViewMode;
   onViewChange?: (view: ViewMode) => void;
+  /** 回测引擎是否在线; null = 还在探测。离线时整个「策略回测」入口不渲染。 */
+  engineOnline?: boolean | null;
 }
 
 interface SearchHistoryItem {
@@ -36,7 +38,7 @@ const PRESET_STOCKS = [
 const MAX_HISTORY = 30;
 const SEARCH_HISTORY_KEY = 'chanlun_search_history';
 
-export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpenAbout, onSearch, isLoading, activeSymbol, klines, stockBasicInfo, isMobile, view = 'analyzer', onViewChange }: NavbarProps) {
+export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpenAbout, onSearch, isLoading, activeSymbol, klines, stockBasicInfo, isMobile, view = 'analyzer', onViewChange, engineOnline = null }: NavbarProps) {
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -369,22 +371,24 @@ export default function Navbar({ onUserChanged, currentUser, onOpenConfig, onOpe
               <ChartCandlestick className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">缠论买卖点</span>
             </a>
-            <a
-              href={routeFor('simulation')}
-              onClick={(e) => {
-                e.preventDefault();
-                onViewChange('simulation');
-              }}
-              className={`flex items-center gap-1.5 h-8 px-2 md:px-3 rounded-md text-xs font-medium transition-all cursor-pointer ${
-                view === 'simulation'
-                  ? 'bg-orange-500/15 text-orange-400 shadow-[inset_0_0_0_1px_rgba(249,115,22,0.3)]'
-                  : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60'
-              }`}
-              title="策略回测 (barter-rs 逐日撮合)"
-            >
-              <Cpu className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">策略回测</span>
-            </a>
+            {engineOnline && (
+              <a
+                href={routeFor('simulation')}
+                onClick={(e) => {
+                  e.preventDefault();
+                  onViewChange('simulation');
+                }}
+                className={`flex items-center gap-1.5 h-8 px-2 md:px-3 rounded-md text-xs font-medium transition-all cursor-pointer ${
+                  view === 'simulation'
+                    ? 'bg-orange-500/15 text-orange-400 shadow-[inset_0_0_0_1px_rgba(249,115,22,0.3)]'
+                    : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60'
+                }`}
+                title="策略回测 (barter-rs 逐日撮合)"
+              >
+                <Cpu className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">策略回测</span>
+              </a>
+            )}
             <a
               href={routeFor('analyzer')}
               onClick={(e) => {

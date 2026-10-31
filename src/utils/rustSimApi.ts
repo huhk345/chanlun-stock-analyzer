@@ -29,8 +29,11 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function fetchRustHealth(): Promise<{ ok: boolean; framework: string }> {
-  return jsonOrThrow(await fetch(`${BASE}/health`));
+/** `signal` lets the UI probe for the engine without waiting out a dead port. */
+export async function fetchRustHealth(
+  signal?: AbortSignal,
+): Promise<{ ok: boolean; framework: string }> {
+  return jsonOrThrow(await fetch(`${BASE}/health`, { signal }));
 }
 
 export async function fetchRustStrategies(): Promise<RustStrategy[]> {
