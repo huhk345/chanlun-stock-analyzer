@@ -349,6 +349,11 @@ struct B3Config {
     ema60_max_dist: f64,
     /// 顶背驰只在浮盈达到该 R 倍数后才允许触发
     div_min_r: f64,
+    /// 确认阳线的最大单日涨幅（%），0 = 不限制。
+    /// 「收盘 > 前一根最高价」这条反包确认在弱势股上只能靠一根大阳线满足，
+    /// 而大阳线恰恰是尾盘拉抬/一日游的典型形态：实测入场日涨幅 2~4% 的信号
+    /// 在沪深300 与中证500 上的 40 日收益都显著低于 0~2% 的信号。
+    max_entry_bar: f64,
     /// 二买是否要求最近中枢上移
     b2_require_hub_up: bool,
     /// 0 = 所有买点共用一套离场参数（旧行为）
@@ -444,8 +449,8 @@ impl B3Config {
             confirm_window: usize_of("confirm_window", 5.0),
             max_chase: p.f64("max_chase", 6.0),
             stop_buffer: p.f64("stop_buffer", 1.5),
-            max_risk: p.f64("max_risk", 7.0),
-            stop_atr: p.f64("stop_atr", 0.0).max(0.0),
+            max_risk: p.f64("max_risk", 12.0),
+            stop_atr: p.f64("stop_atr", 2.0).max(0.0),
             size_pct: p.f64("size_pct", 100.0).clamp(1.0, 100.0),
             breakeven_r: 1.0,
             tp1_r: p.f64("tp1_r", 2.0),
@@ -455,7 +460,7 @@ impl B3Config {
             trail_atr: p.f64("trail_atr", 2.5),
             atr_period: 14,
             max_hold: usize_of("max_hold", 60.0),
-            enable_b2: p.f64("enable_b2", 1.0) >= 0.5,
+            enable_b2: p.f64("enable_b2", 0.0) >= 0.5,
             div_ratio: 0.85,
             b3_mode: p.f64("b3_mode", 0.0).round().clamp(0.0, 1.0) as u8,
             leg_lookback: usize_of("leg_lookback", 60.0),
@@ -469,6 +474,7 @@ impl B3Config {
                 if v <= 0.0 { 1e9 } else { v }
             },
             div_min_r: p.f64("div_min_r", 0.5).max(0.0),
+            max_entry_bar: p.f64("max_entry_bar", 4.0).max(0.0),
             b2_require_hub_up: p.f64("b2_require_hub_up", 1.0) >= 0.5,
             exit_mode: p.f64("exit_mode", 1.0).round().clamp(0.0, 1.0) as u8,
             exit_shared: ExitPolicy::from_params(
@@ -569,6 +575,26 @@ fn last_bottom_before(points: &[Fraction], idx: usize) -> Option<Fraction> {
         .copied()
 }
 
+/// 确认阳线的形态门槛。
+///
+/// 「收盘 > 前一根最高价」这条反包确认，在弱势股上往往只能靠一根大阳线满足，
+/// 而大阳线本身是「一日游 / 尾盘拉抬」的典型形态。信号级实测（沪深300 92 个
+/// 三买信号、中证500 129 个）显示：入场日涨幅 2~4% 的一组 40 日收益比 0~2%
+/// 的一组低 3~4 个百分点，且两个股票池方向一致。所以把「确认日涨幅」和
+/// 「确认日振幅」都纳入门槛，而不是只限制「距回踩低点的追高幅度」。
+fn entry_bar_ok(bars: &[Bar], j: usize, cfg: &B3Config) -> bool {
+    if cfg.max_entry_bar <= 0.0 || j == 0 {
+        return true;
+    }
+    let prev = bars[j - 1].close;
+    if !(prev > 0.0) {
+        return true;
+    }
+    let bar_ret = (bars[j].close / prev - 1.0) * 100.0;
+    let bar_range = (bars[j].high - bars[j].low) / prev * 100.0;
+    bar_ret <= cfg.max_entry_bar && bar_range <= cfg.max_entry_bar * 1.5
+}
+
 /// 结构止损位：回踩低点下方留缓冲，且不低于中枢上沿的回踩容忍线。
 /// `stop_atr > 0` 时缓冲按 ATR 计价，否则用固定百分比。
 fn structural_stop(pull_low: f64, hub_zg: f64, cfg: &B3Config, atr_now: f64) -> f64 {
@@ -658,6 +684,9 @@ fn detect_b3(bars: &[Bar], j: usize, st: &Structures, cfg: &B3Config, atr_now: f
     }
     let chase = (c - pull_low) / pull_low * 100.0;
     if chase > cfg.max_chase {
+        return None;
+    }
+    if !entry_bar_ok(bars, j, cfg) {
         return None;
     }
 
@@ -763,6 +792,9 @@ fn detect_b3_v2(bars: &[Bar], j: usize, st: &Structures, cfg: &B3Config, atr_now
     }
     let chase = (c - pull_low) / pull_low * 100.0;
     if chase > cfg.max_chase {
+        return None;
+    }
+    if !entry_bar_ok(bars, j, cfg) {
         return None;
     }
 
@@ -930,8 +962,8 @@ impl Strategy for ChanlunB3Pullback {
             ParamSpec::number("confirm_window", "回踩确认窗口 日", 5.0).with_range(1.0, 15.0, 1.0),
             ParamSpec::number("max_chase", "追高上限 %", 6.0).with_range(1.0, 20.0, 1.0),
             ParamSpec::number("stop_buffer", "结构止损缓冲 %", 1.5).with_range(0.0, 5.0, 0.5),
-            ParamSpec::number("max_risk", "单笔最大风险 %", 7.0).with_range(2.0, 20.0, 1.0),
-            ParamSpec::number("stop_atr", "结构止损 ATR 缓冲 (0=用%)", 0.0).with_range(0.0, 3.0, 0.1),
+            ParamSpec::number("max_risk", "单笔最大风险 %", 12.0).with_range(2.0, 20.0, 1.0),
+            ParamSpec::number("stop_atr", "结构止损 ATR 缓冲 (0=用%)", 2.0).with_range(0.0, 4.0, 0.5),
             ParamSpec::number("size_pct", "单票仓位 占槽位%", 100.0).with_range(10.0, 100.0, 5.0),
             ParamSpec::number("tp1_r", "第一批止盈 R", 2.0).with_range(1.0, 6.0, 0.5),
             ParamSpec::number("tp1_frac", "第一批比例 %", 33.0).with_range(10.0, 50.0, 1.0),
@@ -939,13 +971,15 @@ impl Strategy for ChanlunB3Pullback {
             ParamSpec::number("tp2_frac", "第二批比例 %", 50.0).with_range(10.0, 60.0, 5.0),
             ParamSpec::number("trail_atr", "ATR 跟踪倍数", 2.5).with_range(1.0, 6.0, 0.5),
             ParamSpec::number("max_hold", "最长持仓 日", 60.0).with_range(10.0, 200.0, 5.0),
-            ParamSpec::number("enable_b2", "启用二买 1=开", 1.0).with_range(0.0, 1.0, 1.0),
+            ParamSpec::number("enable_b2", "启用二买 1=开", 0.0).with_range(0.0, 1.0, 1.0),
             ParamSpec::number("b3_mode", "三买锚点 0=首笔 1=最近笔", 0.0).with_range(0.0, 1.0, 1.0),
             ParamSpec::number("leg_lookback", "向上笔有效期 日", 60.0).with_range(20.0, 250.0, 10.0),
             ParamSpec::number("atr_min_pct", "ATR% 下限", 0.0).with_range(0.0, 10.0, 0.25),
             ParamSpec::number("atr_max_pct", "ATR% 上限", 100.0).with_range(1.0, 20.0, 0.5),
             ParamSpec::number("ema60_max_dist", "距 EMA60 上限 %", 0.0).with_range(0.0, 50.0, 1.0),
             ParamSpec::number("div_min_r", "顶背驰最低浮盈 R", 0.5).with_range(0.0, 6.0, 0.5),
+            ParamSpec::number("max_entry_bar", "确认阳线最大涨幅 % (0=关)", 4.0)
+                .with_range(0.0, 10.0, 0.5),
             ParamSpec::number("b2_require_hub_up", "二买要求中枢上移", 1.0).with_range(0.0, 1.0, 1.0),
             ParamSpec::number("exit_mode", "离场分治 1=按买点类型", 1.0).with_range(0.0, 1.0, 1.0),
             ParamSpec::number("b2_breakeven_r", "二买保本 R", 0.7).with_range(0.0, 5.0, 0.1),
