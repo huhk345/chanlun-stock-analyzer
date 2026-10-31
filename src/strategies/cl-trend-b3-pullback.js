@@ -21,17 +21,33 @@
  *    另外要求「反包确认」（收盘站上前一根高点），避免在下跌途中接刀。
  *
  * 4. 卖点动态化（不设固定止盈百分比）
- *    结构止损（跌破回踩低点/跌回中枢）
+ *    结构止损（跌破回踩低点 − N×ATR / 跌回中枢）
  *      → 顶背驰（MACD 红柱面积衰竭）
  *      → 保本移动（+1R 后止损抬到成本）
  *      → 跟踪止盈（Chandelier：最高价 - N×ATR）
- *      → 分批止盈（+2R 卖 1/3，+3.5R 再卖一半）
+ *      → 分批止盈（+2R 卖 1/3，+3.5R 再卖一半，默认关闭）
  *      → 时间止损（久盘不涨）
+ *
+ *    三买默认**不设固定止盈**（tp1R / tp2R 调到 99 等于关闭），跟踪倍数放到 5×ATR，
+ *    最长持有 120 日。理由：同一批入场做反事实回放，带 2R/3.5R 固定止盈的一组
+ *    单笔期望只有 +2.6%，去掉固定止盈、让利润奔跑的一组是 +7.9%——固定止盈把右尾切掉了。
+ *    二买（均值回归）保留紧止盈，但默认不开（见 5）。
  *
  * 5. 仓位
  *    按 R 风险平价：单笔风险 = 权益 × riskPerTradePct%，除以每股风险得到股数，
  *    再折算成 percent 交给撮合层（100 股整手由引擎处理）。
  *    每股风险超过 maxRiskPct 直接放弃这笔交易——止损太远说明买点结构不干净。
+ *
+ *    二买默认关闭：信号级实测二买单笔期望 +1.7%（沪深300）/ +0.7%（中证500），
+ *    远低于三买的 +7.9% / +1.2%，却要占掉一半以上的信号量。要开把 enableB2 打开。
+ *
+ * 6. 止损距离与确认阳线（2026-10-31 归因结论）
+ *    结构止损的缓冲默认按 ATR 计价（stopAtr = 2，即回踩低点下方 2 个 ATR）。
+ *    固定 1.5% 在 A 股日线上只有 0.5~0.7 个 ATR，正常回踩就会被打掉：
+ *    把止损距离按倍数放大后，两个股票池的三买信号收益同向单调改善。
+ *    另外确认阳线本身要限幅（maxEntryBar）：入场日涨 2~4% 的一组比涨 0~2% 的
+ *    一组差 3~4 个百分点，大阳线是「一日游」的典型形态，而追高上限（maxChasePct）
+ *    衡量的是「离回踩低点多远」，管不住这件事。
  *
  * 约束：不引入任何模块、不访问网络与 DOM、不使用异步语法；纯函数、只读输入。
  *      （注释里也不能出现沙箱的禁用词，否则保存时会被正则误判。）
@@ -169,6 +185,24 @@ function connectFractions(points, minDistance) {
 // 买点一：三买（突破中枢 → 回踩不回中枢）
 // ---------------------------------------------------------------------------
 
+/** 结构止损缓冲（%）：stopAtr > 0 时按 ATR 计价，否则回落到固定百分比 */
+function structBufferPct(cfg, atrNow, price) {
+  if (cfg.stopAtr > 0 && isFinite(atrNow) && atrNow > 0 && price > 0) {
+    return Math.min(((cfg.stopAtr * atrNow) / price) * 100, 15);
+  }
+  return cfg.stopBufferPct;
+}
+
+/** 确认阳线限幅：单日涨幅与振幅都不能超过 maxEntryBar（0 = 关闭） */
+function entryBarOk(klines, i, cfg) {
+  if (!(cfg.maxEntryBar > 0) || i < 1) return true;
+  const prev = klines[i - 1].close;
+  if (!(prev > 0)) return true;
+  const barRet = (klines[i].close / prev - 1) * 100;
+  const barRange = ((klines[i].high - klines[i].low) / prev) * 100;
+  return barRet <= cfg.maxEntryBar && barRange <= cfg.maxEntryBar * 1.5;
+}
+
 /**
  * 返回 null 表示当前不是「三买·突破回踩」的入场点，否则返回结构详情。
  * 所有判断都只用 klines[0..i] 与在该前缀上算出的笔/中枢，无未来数据。
@@ -245,10 +279,12 @@ function detectBreakoutPullback(ctx) {
 
   const chase = ((c - pullLow) / pullLow) * 100;
   if (chase > cfg.maxChasePct) return null; // 追高保护
+  if (!entryBarOk(klines, i, cfg)) return null; // 确认阳线本身太大
 
-  // 6) 结构止损：回踩低点下方，且不低于中枢上沿的容忍位
+  // 6) 结构止损：回踩低点下方留缓冲（ATR 或固定百分比），且不低于中枢上沿的容忍位
+  const buf = structBufferPct(cfg, ctx.atrNow, pullLow);
   const stop0 = Math.max(
-    pullLow * (1 - cfg.stopBufferPct / 100),
+    pullLow * (1 - buf / 100),
     hub.zg * (1 - cfg.hubReentryTol / 100),
   );
 
@@ -355,8 +391,8 @@ const strategy = {
   name: '缠论顺势三买·突破回踩',
   description:
     '只做缠论三买（突破中枢后回抽不回中枢），要求 EMA 多头排列的顺势环境；' +
-    '突破幅度/回踩深度/回踩缩量/回踩时长四重约束过滤假突破；' +
-    '卖点为结构止损 + 顶背驰 + 保本移动 + ATR 跟踪止盈 + R 倍数分批止盈。',
+    '突破幅度/回踩深度/回踩缩量/回踩时长/确认阳线幅度五重约束过滤假突破；' +
+    '卖点为结构止损（ATR 计价）+ 顶背驰 + 保本移动 + ATR 跟踪止盈，默认不设固定止盈。',
   defaultSelected: false,
   requiresChanLun: true,
 
@@ -382,24 +418,27 @@ const strategy = {
     { key: 'requireYang', label: '要求阳线确认', type: 'boolean', defaultValue: true },
 
     // ---- 风险与仓位 ----
-    { key: 'stopBufferPct', label: '结构止损缓冲(%)', type: 'number', defaultValue: 1.5, min: 0, max: 5, step: 0.5 },
-    { key: 'maxRiskPct', label: '单笔最大风险(%)', type: 'number', defaultValue: 7, min: 2, max: 20, step: 1 },
+    { key: 'stopAtr', label: '结构止损 ATR 缓冲(0=用%)', type: 'number', defaultValue: 2, min: 0, max: 4, step: 0.5 },
+    { key: 'stopBufferPct', label: '结构止损缓冲(%·备用)', type: 'number', defaultValue: 1.5, min: 0, max: 5, step: 0.5 },
+    { key: 'maxRiskPct', label: '单笔最大风险(%)', type: 'number', defaultValue: 12, min: 2, max: 20, step: 1 },
     { key: 'riskPerTradePct', label: '单笔风险预算(权益%)', type: 'number', defaultValue: 1, min: 0.2, max: 5, step: 0.1 },
     { key: 'maxPositionPct', label: '单票仓位上限(%)', type: 'number', defaultValue: 100, min: 10, max: 100, step: 5 },
 
     // ---- 动态止盈 ----
     { key: 'breakevenR', label: '保本触发(R)', type: 'number', defaultValue: 1, min: 0.5, max: 3, step: 0.5 },
-    { key: 'tp1R', label: '第一批止盈(R)', type: 'number', defaultValue: 2, min: 1, max: 6, step: 0.5 },
+    { key: 'tp1R', label: '第一批止盈(R, 99=关)', type: 'number', defaultValue: 99, min: 1, max: 99, step: 1 },
     { key: 'tp1Frac', label: '第一批比例(%)', type: 'number', defaultValue: 33, min: 10, max: 50, step: 1 },
-    { key: 'tp2R', label: '第二批止盈(R)', type: 'number', defaultValue: 3.5, min: 2, max: 10, step: 0.5 },
+    { key: 'tp2R', label: '第二批止盈(R, 99=关)', type: 'number', defaultValue: 99, min: 1, max: 99, step: 1 },
     { key: 'tp2Frac', label: '第二批比例(%)', type: 'number', defaultValue: 50, min: 10, max: 60, step: 5 },
-    { key: 'trailAtrMult', label: 'ATR 跟踪倍数', type: 'number', defaultValue: 2.5, min: 1, max: 6, step: 0.5 },
+    { key: 'trailAtrMult', label: 'ATR 跟踪倍数', type: 'number', defaultValue: 5, min: 1, max: 8, step: 0.5 },
     { key: 'atrPeriod', label: 'ATR 周期', type: 'number', defaultValue: 14, min: 5, max: 40, step: 1 },
-    { key: 'maxHoldBars', label: '最长持仓(日)', type: 'number', defaultValue: 60, min: 10, max: 200, step: 5 },
+    { key: 'maxHoldBars', label: '最长持仓(日)', type: 'number', defaultValue: 120, min: 10, max: 250, step: 5 },
+    { key: 'divMinR', label: '顶背驰最低浮盈(R)', type: 'number', defaultValue: 2, min: 0, max: 6, step: 0.5 },
 
     // ---- 辅助买点 ----
-    { key: 'enableB2', label: '启用二买(背驰回调)', type: 'boolean', defaultValue: true },
+    { key: 'enableB2', label: '启用二买(背驰回调)', type: 'boolean', defaultValue: false },
     { key: 'divRatio', label: '背驰衰竭阈值', type: 'number', defaultValue: 0.85, min: 0.5, max: 1.0, step: 0.05 },
+    { key: 'maxEntryBar', label: '确认阳线最大涨幅%(0=关)', type: 'number', defaultValue: 4, min: 0, max: 10, step: 0.5 },
   ],
 
   availableIndicators: [],
@@ -439,19 +478,22 @@ const strategy = {
       confirmWindow: Math.round(numParam(params, 'confirmWindow', 5)),
       maxChasePct: numParam(params, 'maxChasePct', 6),
       requireYang: boolParam(params, 'requireYang', true),
+      stopAtr: numParam(params, 'stopAtr', 2),
       stopBufferPct: numParam(params, 'stopBufferPct', 1.5),
-      maxRiskPct: numParam(params, 'maxRiskPct', 7),
+      maxRiskPct: numParam(params, 'maxRiskPct', 12),
+      maxEntryBar: numParam(params, 'maxEntryBar', 4),
       riskPerTradePct: numParam(params, 'riskPerTradePct', 1),
       maxPositionPct: numParam(params, 'maxPositionPct', 100),
       breakevenR: numParam(params, 'breakevenR', 1),
-      tp1R: numParam(params, 'tp1R', 2),
+      tp1R: numParam(params, 'tp1R', 99),
       tp1Frac: numParam(params, 'tp1Frac', 33),
-      tp2R: numParam(params, 'tp2R', 3.5),
+      tp2R: numParam(params, 'tp2R', 99),
       tp2Frac: numParam(params, 'tp2Frac', 50),
-      trailAtrMult: numParam(params, 'trailAtrMult', 2.5),
+      trailAtrMult: numParam(params, 'trailAtrMult', 5),
       atrPeriod: Math.round(numParam(params, 'atrPeriod', 14)),
-      maxHoldBars: Math.round(numParam(params, 'maxHoldBars', 60)),
-      enableB2: boolParam(params, 'enableB2', true),
+      maxHoldBars: Math.round(numParam(params, 'maxHoldBars', 120)),
+      divMinR: numParam(params, 'divMinR', 2),
+      enableB2: boolParam(params, 'enableB2', false),
       divRatio: numParam(params, 'divRatio', 0.85),
     };
 
@@ -555,7 +597,11 @@ const strategy = {
       }
       if (!isFinite(structLow)) structLow = entryPrice * (1 - cfg.maxRiskPct / 100);
 
-      const stop0 = Math.min(structLow * (1 - cfg.stopBufferPct / 100), entryPrice * 0.999);
+      // 止损距离同样按 ATR 还原，否则回测中途止损线会比建仓时更紧，
+      // 与「建仓那一刻算出来的 R」不是同一个东西。
+      const atrNow = isFinite(atr[j]) && atr[j] > 0 ? atr[j] : entryPrice * 0.02;
+      const bufPct = structBufferPct(cfg, atrNow, structLow);
+      const stop0 = Math.min(structLow * (1 - bufPct / 100), entryPrice * 0.999);
       const R = Math.max(entryPrice - stop0, entryPrice * 0.01);
       const unrealizedR = (c - entryPrice) / R;
 
@@ -563,7 +609,6 @@ const strategy = {
       for (let t = entryIdx; t <= i; t++) {
         if (klines[t].high > highest) highest = klines[t].high;
       }
-      const atrNow = isFinite(atr[j]) && atr[j] > 0 ? atr[j] : entryPrice * 0.02;
 
       // 止损线：结构止损 → 保本 → Chandelier 跟踪
       let stopLine = stop0;
@@ -613,7 +658,7 @@ const strategy = {
         i,
         cfg,
       });
-      if (div && divDone === 0 && unrealizedR >= 0.5 && c < div.topPrice) {
+      if (div && divDone === 0 && unrealizedR >= cfg.divMinR && c < div.topPrice) {
         const keepRunner = strongTrend && unrealizedR < cfg.tp2R && tpDone === 0;
         return {
           action: 'SELL',
@@ -680,6 +725,7 @@ const strategy = {
       hubs,
       fractions: swingPoints,
       hist: macd.hist,
+      atrNow: atr[j],
       cfg,
     };
 
