@@ -334,6 +334,20 @@ export interface StrategySummary {
   source: 'builtin' | 'user';
 }
 
+/**
+ * 策略源码 (GET /api/strategies/:id/source)
+ * 内置策略返回所在文件的完整源码, 自建策略返回保存的代码原文。
+ */
+export interface StrategySource {
+  id: string;
+  name: string;
+  /** 源码所在文件 (内置: server/strategies/xxx.ts; 自建: data/user-strategies/xxx.json) */
+  file: string;
+  /** 内置策略的导出名; 自建策略为 null */
+  exportName: string | null;
+  source: string;
+}
+
 // ---------------------------------------------------------------------------
 // Day-by-Day Backtest Stepping contracts
 // ---------------------------------------------------------------------------

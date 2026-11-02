@@ -32,6 +32,10 @@ pub struct Bar {
 pub struct SymbolSeries {
     pub symbol: String,
     pub bars: Vec<Bar>,
+    /// `bars[..warmup]` 是模拟区间开始之前的预热历史：策略看得见，日历看不见。
+    /// 单独从 `start` 起跑的回测才有意义 —— 否则 MA120/250 日高点/中枢这类
+    /// 长周期结构在第一天全部无解，样本外只剩零星的信号。
+    pub warmup: usize,
     /// date -> index in `bars`, for O(1) lookup while walking the calendar
     by_date: HashMap<NaiveDate, usize>,
 }
@@ -250,6 +254,9 @@ pub fn load_symbol_bars(root: &Path, symbol: &str) -> Result<Vec<Bar>, DataError
     Ok(bars)
 }
 
+/// 模拟起点之前保留多少根日线做预热：MA120/250 日高点/320 根缠论窗口都要够用。
+const WARMUP_BARS: usize = 400;
+
 pub struct LoadRequest {
     pub root: PathBuf,
     pub pools: Vec<PoolKind>,
@@ -337,7 +344,7 @@ pub fn load_market(req: &LoadRequest) -> Result<Market, DataError> {
         for raw in file.klines {
             let date = NaiveDate::parse_from_str(&raw.date, "%Y-%m-%d")
                 .map_err(|_| DataError::Date(raw.date.clone()))?;
-            if req.start.is_some_and(|s| date < s) || req.end.is_some_and(|e| date > e) {
+            if req.end.is_some_and(|e| date > e) {
                 continue;
             }
             if !(raw.close.is_finite() && raw.close > 0.0) {
@@ -353,6 +360,21 @@ pub fn load_market(req: &LoadRequest) -> Result<Market, DataError> {
                 amount: raw.amount,
             });
         }
+
+        // 模拟区间起点之前的 K 线保留一段做预热，只保留离起点最近的那些。
+        let first_sim = req
+            .start
+            .map(|s| bars.partition_point(|b| b.date < s))
+            .unwrap_or(0);
+        let keep_from = first_sim.saturating_sub(WARMUP_BARS);
+        let warmup = first_sim - keep_from;
+        if keep_from > 0 {
+            bars.drain(..keep_from);
+        }
+        if bars.len() <= warmup {
+            missing.push(symbol);
+            continue;
+        }
         if bars.len() < 2 {
             missing.push(symbol);
             continue;
@@ -367,6 +389,7 @@ pub fn load_market(req: &LoadRequest) -> Result<Market, DataError> {
             SymbolSeries {
                 symbol: file.symbol,
                 bars,
+                warmup,
                 by_date,
             },
         );
@@ -378,18 +401,29 @@ pub fn load_market(req: &LoadRequest) -> Result<Market, DataError> {
         ));
     }
 
-    // Calendar: union of every member's dates inside the window.
-    let mut date_set: Vec<NaiveDate> = series_map
+    // 全量日历（含预热段）：regime 必须在这里算，才能让 MA60/breadth 在
+    // 模拟第一天就已经热身完毕。随后再按 [start, end] 切出模拟日历。
+    let mut all_dates: Vec<NaiveDate> = series_map
         .values()
         .flat_map(|s| s.bars.iter().map(|b| b.date))
         .collect();
-    date_set.sort_unstable();
-    date_set.dedup();
+    all_dates.sort_unstable();
+    all_dates.dedup();
 
-    let regime = build_regime(&date_set, &series_map);
+    let regime_all = build_regime(&all_dates, &series_map);
+
+    let from = all_dates.partition_point(|d| req.start.is_some_and(|s| *d < s));
+    let to = all_dates.partition_point(|d| req.end.is_some_and(|e| *d <= e));
+    if to <= from {
+        return Err(DataError::Empty(
+            "no trading days in the requested window".into(),
+        ));
+    }
+    let dates: Vec<NaiveDate> = all_dates[from..to].to_vec();
+    let regime: Vec<RegimePoint> = regime_all[from..to].to_vec();
 
     Ok(Market {
-        dates: date_set,
+        dates,
         series: series_map,
         missing,
         filtered_out,

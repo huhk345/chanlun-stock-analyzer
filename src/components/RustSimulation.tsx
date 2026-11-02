@@ -6,6 +6,7 @@ import {
   CalendarRange,
   ChevronLeft,
   ChevronRight,
+  Code,
   Cpu,
   Gauge,
   Layers,
@@ -37,6 +38,7 @@ import {
   runRustSim,
 } from '../utils/rustSimApi';
 import SymbolDetailDrawer from './SymbolDetailDrawer';
+import CodeViewerModal from './CodeViewerModal';
 import Select from './ui/Select';
 import DateField from './ui/DateField';
 import TradeFilterBar from './TradeFilterBar';
@@ -50,6 +52,8 @@ import type {
   RustStrategy,
   RustTrade,
 } from '../types/rustSim';
+// 策略的真实实现就在引擎源码里, 构建时原样内联, 供「查看源码」展示
+import strategiesRustSource from '../../engine-rs/src/strategies.rs?raw';
 
 // ---------------------------------------------------------------------------
 // formatting helpers
@@ -115,6 +119,8 @@ export default function RustSimulation() {
   const [detailSymbol, setDetailSymbol] = useState<string | null>(null);
   // 个股总体情况里展开买卖明细的标的
   const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
+  // 策略源码弹窗
+  const [sourceOpen, setSourceOpen] = useState(false);
   // The full ledger can be 15k+ fills; render it in windows instead of all at once.
   const [ledgerLimit, setLedgerLimit] = useState(200);
 
@@ -706,6 +712,22 @@ export default function RustSimulation() {
               ariaLabel="选择回测策略"
               options={strategies.map((s) => ({ value: s.id, label: s.name }))}
             />
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <span className="text-[11px] text-zinc-600 font-mono truncate">
+                engine-rs/src/strategies.rs
+              </span>
+              <button
+                type="button"
+                onClick={() => setSourceOpen(true)}
+                disabled={!activeStrategy}
+                className="flex items-center gap-1 px-2 py-1 text-[12px] font-medium text-zinc-400 hover:text-cyan-400 disabled:text-zinc-600 disabled:cursor-not-allowed cursor-pointer transition-colors shrink-0"
+                id="btn-view-rust-strategy-source"
+                title="查看策略的实际代码 (Rust 引擎源码)"
+              >
+                <Code className="h-3.5 w-3.5" />
+                <span>查看源码</span>
+              </button>
+            </div>
             {activeStrategy?.description && (
               <p className="mt-2 text-[12px] text-zinc-500 leading-relaxed">
                 {activeStrategy.description}
@@ -1396,7 +1418,9 @@ export default function RustSimulation() {
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2.5 border-b border-zinc-800/80">
                     <Layers className="h-4 w-4 text-blue-400" />
                     <span className="text-[14px] font-semibold text-zinc-300">个股总体情况</span>
-                    <span className="text-[12px] text-zinc-600">全区间</span>
+                    <span className="text-[12px] text-zinc-600 font-mono whitespace-nowrap">
+                      全区间 · {result.start} → {result.end} · {result.days.length} 个交易日
+                    </span>
                     <span className="text-[12px] text-zinc-600 font-mono">
                       {symbolRows.length} / {result.universe} 只有交易
                     </span>
@@ -1585,6 +1609,15 @@ export default function RustSimulation() {
           onClose={() => setDetailSymbol(null)}
         />
       )}
+
+      <CodeViewerModal
+        open={sourceOpen}
+        title={`${activeStrategy?.name ?? '策略'} · Rust 源码`}
+        subtitle="engine-rs/src/strategies.rs · 引擎实际执行的策略实现"
+        code={strategiesRustSource}
+        language="rust"
+        onClose={() => setSourceOpen(false)}
+      />
     </div>
   );
 }

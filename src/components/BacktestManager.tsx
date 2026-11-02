@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Play, ShieldAlert, CheckCircle, Download, ChevronLeft, ChevronRight, SkipForward, RotateCcw, Wand2, ChevronDown } from 'lucide-react';
+import { Play, ShieldAlert, CheckCircle, Download, ChevronLeft, ChevronRight, SkipForward, RotateCcw, Wand2, ChevronDown, Code } from 'lucide-react';
 import { Kline, BacktestResult, BacktestTrade } from '../types/stock';
 import type { SupabaseUser } from '../utils/supabase';
 import type {
@@ -8,10 +8,15 @@ import type {
   IndicatorSelectionState,
   BacktestDiagnostic,
   StrategyParamValue,
+  StrategySource,
   StrategySummary,
 } from '../types/strategy';
 import type { BacktestEngine } from '../types/poolBacktest';
-import { ensureLocalStrategyMigration, fetchStrategySummaries } from '../utils/strategyApi';
+import {
+  ensureLocalStrategyMigration,
+  fetchStrategySource,
+  fetchStrategySummaries,
+} from '../utils/strategyApi';
 import { csvCell, downloadCsv } from '../utils/download';
 import { getAllStoredIndicators } from '../utils/indicatorStorage';
 import {
@@ -27,6 +32,7 @@ import {
   type StepperTimelineView,
 } from '../utils/backtestApi';
 import StrategyDialog from './StrategyDialog';
+import CodeViewerModal from './CodeViewerModal';
 
 interface BacktestManagerProps {
   klines: Kline[];
@@ -116,6 +122,26 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
 
   // Strategy dialog
   const [strategyDialogOpen, setStrategyDialogOpen] = useState(false);
+
+  // 策略源码查看
+  const [sourceOpen, setSourceOpen] = useState(false);
+  const [sourceData, setSourceData] = useState<StrategySource | null>(null);
+  const [sourceLoading, setSourceLoading] = useState(false);
+  const [sourceError, setSourceError] = useState('');
+
+  const handleViewSource = async (strategyId: string) => {
+    setSourceOpen(true);
+    setSourceData(null);
+    setSourceError('');
+    setSourceLoading(true);
+    try {
+      setSourceData(await fetchStrategySource(strategyId));
+    } catch (err) {
+      setSourceError(err instanceof Error ? err.message : '策略源码加载失败');
+    } finally {
+      setSourceLoading(false);
+    }
+  };
 
   // Jump-to index input
   const [jumpToIndex, setJumpToIndex] = useState<string>('');
@@ -511,7 +537,20 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
           <div className="p-3 md:p-5 space-y-5">
             {/* Strategy */}
             <div>
-              <label className="block text-xs font-semibold text-zinc-400 mb-2 font-sans">选择策略</label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-xs font-semibold text-zinc-400 font-sans">选择策略</label>
+                <button
+                  type="button"
+                  onClick={() => selectedStrategy && void handleViewSource(selectedStrategy.id)}
+                  disabled={!selectedStrategy}
+                  className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-zinc-400 hover:text-cyan-400 disabled:text-zinc-600 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                  id="btn-view-strategy-source"
+                  title="查看所选策略的实际代码"
+                >
+                  <Code className="h-3.5 w-3.5" />
+                  <span>查看源码</span>
+                </button>
+              </div>
               <div className="relative" ref={strategyDropdownRef}>
                 <button
                   ref={strategyButtonRef}
@@ -1248,6 +1287,22 @@ export default function BacktestManager({ klines, symbol, currentUser, onBacktes
           </div>
         )}
       </div>
+
+      {/* 策略源码弹窗: 展示服务端实际执行的代码 */}
+      <CodeViewerModal
+        open={sourceOpen}
+        title={sourceData?.name ?? selectedStrategy?.name ?? '策略源码'}
+        subtitle={
+          sourceData
+            ? `${sourceData.file}${sourceData.exportName ? ` · ${sourceData.exportName}` : ''}`
+            : selectedStrategy?.id
+        }
+        code={sourceData?.source ?? null}
+        language={sourceData?.file.endsWith('.ts') ? 'typescript' : 'javascript'}
+        loading={sourceLoading}
+        error={sourceError}
+        onClose={() => setSourceOpen(false)}
+      />
 
       {/* Strategy Dialog */}
       {strategyDialogOpen && (

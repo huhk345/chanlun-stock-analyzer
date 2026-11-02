@@ -10,7 +10,7 @@
  *   GET    /api/strategies/:id/source  查看源码
  *   DELETE /api/strategies/:id         删除自建策略
  */
-import type { StoredStrategy, StrategySummary } from '../types/strategy';
+import type { StoredStrategy, StrategySource, StrategySummary } from '../types/strategy';
 import { validateUserCode, type UserCodeContract } from './userCodeLoader';
 
 const STRATEGY_CONTRACT: UserCodeContract = {
@@ -39,6 +39,11 @@ export async function fetchStrategySummaries(): Promise<StrategySummary[]> {
 export async function fetchUserStrategies(): Promise<StoredStrategy[]> {
   const data = await request<{ strategies?: StoredStrategy[] }>('/api/strategies/user');
   return data.strategies ?? [];
+}
+
+/** 策略源码 (内置策略返回整份文件, 自建策略返回保存的代码) */
+export async function fetchStrategySource(id: string): Promise<StrategySource> {
+  return request<StrategySource>(`/api/strategies/${encodeURIComponent(id)}/source`);
 }
 
 /** 新建 / 覆盖自建策略; 服务端会做代码校验与沙箱编译 */

@@ -52,8 +52,8 @@ use barter_execution::{
     trade::{AssetFees, Trade, TradeId},
 };
 use barter_instrument::{
-    Side, Underlying,
-    asset::{Asset, QuoteAsset},
+    Keyed, Side, Underlying,
+    asset::{Asset, AssetIndex, QuoteAsset},
     exchange::{ExchangeId, ExchangeIndex},
     index::IndexedInstruments,
     instrument::{Instrument, InstrumentIndex},
@@ -985,10 +985,26 @@ pub fn run(req: RunRequest<'_>) -> Result<SimOutput, String> {
     let indexed = IndexedInstruments::new(instruments);
 
     // --- engine state -----------------------------------------------------
+    // 预热：把模拟起点之前的历史 K 线先塞进每个标的的 BarState，策略第一天
+    // 就能算 MA120 / 250 日高点 / 缠论中枢。这些 bar 不对应任何交易日事件，
+    // 所以不会产生信号，也不会进入日历或权益曲线。
     let state: EngineState<Ledger, BarState> = EngineStateBuilder::new(
         &indexed,
         Ledger::new(cfg.initial_cash),
-        |_| BarState::default(),
+        |index: &Keyed<
+            InstrumentIndex,
+            Instrument<Keyed<ExchangeIndex, ExchangeId>, AssetIndex>,
+        >| {
+            let series = symbols
+                .get(index.key.0)
+                .and_then(|s| market.series.get(s));
+            match series {
+                Some(s) if s.warmup > 0 => BarState {
+                    bars: s.bars[..s.warmup].to_vec(),
+                },
+                _ => BarState::default(),
+            }
+        },
     )
     .time_engine_start(close_ts(first_date))
     .trading_state(TradingState::Enabled)

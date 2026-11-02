@@ -190,8 +190,9 @@ const TIMEFRAME_LABEL: Record<KlineTimeframe, string> = {
 };
 
 /**
- * 将日 K 聚合成周 K (按自然周 周一~周日分组, 日期取周内最后一个交易日)。
- * 用于腾讯/新浪等无稳定周线接口的数据源回退。
+ * 将日 K 聚合成周 K (按自然周 周一~周日分组, 日期取该周周五)。
+ * 与 czsc `resample_bars(..., Freq.W, drop_unfinished=True)` 一致：
+ * 未走完的周（最后一根日 K 早于周五）会被丢弃，避免出现“未来日期”的周 K。
  */
 function aggregateDailyToWeekly(daily: Kline[]): Kline[] {
   if (daily.length === 0) return [];
@@ -202,20 +203,21 @@ function aggregateDailyToWeekly(daily: Kline[]): Kline[] {
     if (Number.isNaN(d.getTime())) continue;
     // ISO 周: 周一为周首 (JS getUTCDay: 0=周日)
     const dow = (d.getUTCDay() + 6) % 7; // 0=周一
-    const monday = new Date(d);
-    monday.setUTCDate(d.getUTCDate() - dow);
-    const key = monday.toISOString().slice(0, 10);
+    const daysToFriday = dow <= 4 ? 4 - dow : 11 - dow;
+    const friday = new Date(d);
+    friday.setUTCDate(d.getUTCDate() + daysToFriday);
+    const key = friday.toISOString().slice(0, 10);
     const arr = groups.get(key);
     if (arr) arr.push(k);
     else groups.set(key, [k]);
   }
   const weekly: Kline[] = [];
-  for (const [, arr] of [...groups.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+  for (const [friday, arr] of [...groups.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
     if (arr.length === 0) continue;
     const first = arr[0];
     const last = arr[arr.length - 1];
     weekly.push({
-      date: last.date,
+      date: friday,
       open: first.open,
       high: Math.max(...arr.map((x) => x.high)),
       low: Math.min(...arr.map((x) => x.low)),
@@ -223,6 +225,10 @@ function aggregateDailyToWeekly(daily: Kline[]): Kline[] {
       volume: arr.reduce((s, x) => s + (x.volume || 0), 0),
       amount: arr.reduce((s, x) => s + (x.amount || 0), 0),
     });
+  }
+  // 丢弃最后一根未完成周
+  if (weekly.length > 0 && sorted[sorted.length - 1].date < weekly[weekly.length - 1].date) {
+    weekly.pop();
   }
   return sanitizeKlines(weekly);
 }
