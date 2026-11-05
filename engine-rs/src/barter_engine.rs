@@ -473,7 +473,18 @@ impl PoolStrategy {
         // so every signal would be sized to zero. Size the slot from what the
         // capital can actually hold instead: how many names fit at a typical lot
         // cost, capped by the universe.
-        let universe = ids.len().max(1);
+        //
+        // 宇宙规模只数「模拟第一天已经上市」的标的：若用整段数据出现过的全部
+        // 标的（含未来才上市的），槽位会随回测截止日变化，属于未来信息。
+        let universe = match market.dates.first() {
+            Some(first) => market
+                .series
+                .values()
+                .filter(|s| s.bars.first().is_some_and(|b| b.date <= *first))
+                .count(),
+            None => ids.len(),
+        }
+        .max(1);
         let typical_lot = typical_lot_cost(market, cfg.lot_size);
         let by_lot = if typical_lot > 0.0 {
             (cfg.initial_cash / (typical_lot * 1.05)).floor() as usize
@@ -794,13 +805,25 @@ impl<Clock, State, ExecutionTxs, Risk> OnTradingDisabled<Clock, State, Execution
 
 /// Median cost of one lot across the pool, using each symbol's median close so a
 /// single spiky price cannot skew the plan.
+///
+/// 只用模拟第一天及以前已知的收盘价：槽位规划发生在模拟开始时刻，若用整段
+/// 行情的中位价，就依赖了未来的价格（会随数据截断日期变化）。
 fn typical_lot_cost(market: &Market, lot: f64) -> f64 {
+    let first_day = match market.dates.first() {
+        Some(d) => *d,
+        None => return 0.0,
+    };
     let mut per_symbol: Vec<f64> = Vec::with_capacity(market.series.len());
     for series in market.series.values() {
-        if series.bars.is_empty() {
+        let mut closes: Vec<f64> = series
+            .bars
+            .iter()
+            .filter(|b| b.date <= first_day)
+            .map(|b| b.close)
+            .collect();
+        if closes.is_empty() {
             continue;
         }
-        let mut closes: Vec<f64> = series.bars.iter().map(|b| b.close).collect();
         closes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         per_symbol.push(closes[closes.len() / 2] * lot);
     }

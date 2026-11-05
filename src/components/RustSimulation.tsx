@@ -52,8 +52,51 @@ import type {
   RustStrategy,
   RustTrade,
 } from '../types/rustSim';
-// 策略的真实实现就在引擎源码里, 构建时原样内联, 供「查看源码」展示
-import strategiesRustSource from '../../engine-rs/src/strategies.rs?raw';
+// 策略的真实实现就在引擎源码里, 构建时原样内联, 供「查看源码」展示。
+// 每个策略一个文件, 这里按策略 id 映射到对应源码。
+import strategiesModRustSource from '../../engine-rs/src/strategies/mod.rs?raw';
+import maCrossRustSource from '../../engine-rs/src/strategies/ma_cross.rs?raw';
+import donchianBreakoutRustSource from '../../engine-rs/src/strategies/donchian_breakout.rs?raw';
+import rsiReversionRustSource from '../../engine-rs/src/strategies/rsi_reversion.rs?raw';
+import momentumRustSource from '../../engine-rs/src/strategies/momentum.rs?raw';
+import chanlunB3PullbackRustSource from '../../engine-rs/src/strategies/chanlun_b3_pullback.rs?raw';
+import chanlunB3AlphaRustSource from '../../engine-rs/src/strategies/chanlun_b3_alpha.rs?raw';
+import chanlunBreakoutStateRustSource from '../../engine-rs/src/strategies/chanlun_breakout_state.rs?raw';
+import turtleTrendBreakoutRustSource from '../../engine-rs/src/strategies/turtle_trend_breakout.rs?raw';
+
+const STRATEGY_REGISTRY_SOURCE = {
+  path: 'engine-rs/src/strategies/mod.rs',
+  code: strategiesModRustSource,
+};
+
+const RUST_STRATEGY_SOURCES: Record<string, { path: string; code: string }> = {
+  'ma-cross': { path: 'engine-rs/src/strategies/ma_cross.rs', code: maCrossRustSource },
+  'donchian-breakout': {
+    path: 'engine-rs/src/strategies/donchian_breakout.rs',
+    code: donchianBreakoutRustSource,
+  },
+  'rsi-reversion': {
+    path: 'engine-rs/src/strategies/rsi_reversion.rs',
+    code: rsiReversionRustSource,
+  },
+  momentum: { path: 'engine-rs/src/strategies/momentum.rs', code: momentumRustSource },
+  'cl-trend-b3-pullback': {
+    path: 'engine-rs/src/strategies/chanlun_b3_pullback.rs',
+    code: chanlunB3PullbackRustSource,
+  },
+  'cl-trend-breakout-alpha': {
+    path: 'engine-rs/src/strategies/chanlun_b3_alpha.rs',
+    code: chanlunB3AlphaRustSource,
+  },
+  'cl-breakout-state': {
+    path: 'engine-rs/src/strategies/chanlun_breakout_state.rs',
+    code: chanlunBreakoutStateRustSource,
+  },
+  'turtle-trend-breakout': {
+    path: 'engine-rs/src/strategies/turtle_trend_breakout.rs',
+    code: turtleTrendBreakoutRustSource,
+  },
+};
 
 // ---------------------------------------------------------------------------
 // formatting helpers
@@ -151,6 +194,13 @@ export default function RustSimulation() {
     () => strategies.find((s) => s.id === strategyId),
     [strategies, strategyId],
   );
+  const activeSource = useMemo(
+    () =>
+      activeStrategy
+        ? (RUST_STRATEGY_SOURCES[activeStrategy.id] ?? STRATEGY_REGISTRY_SOURCE)
+        : undefined,
+    [activeStrategy],
+  );
 
   // Usable date span = min(first) .. max(last) across the selected pools.
   const range = useMemo(() => {
@@ -206,15 +256,22 @@ export default function RustSimulation() {
     refreshCoverage(selectedPools);
   }, [online, selectedPools, refreshCoverage]);
 
+  // End date defaults to today. Cached bars can lag by a day, so allow picking
+  // today even when the cache stops earlier — the engine just runs through the
+  // last available trading day.
+  const today = toIso(new Date());
+  const endLimit = !range.last ? '' : range.last > today ? range.last : today;
+
   // Default the window to the full cached span once coverage is known.
   useEffect(() => {
     if (!range.first || !range.last) return;
     // The cache may reach back further than the project's fixed analysis window;
     // default to that window (2023-01-01) and let the user widen it by hand.
     const preferred = range.first < '2023-01-01' ? '2023-01-01' : range.first;
+    const endMax = range.last > today ? range.last : today;
     setStartDate((prev) => (prev && prev >= range.first && prev <= range.last ? prev : preferred));
-    setEndDate((prev) => (prev && prev >= range.first && prev <= range.last ? prev : range.last));
-  }, [range.first, range.last]);
+    setEndDate((prev) => (prev && prev >= range.first && prev <= endMax ? prev : endMax));
+  }, [range.first, range.last, today]);
 
   // Reset parameter values to the selected strategy's defaults.
   useEffect(() => {
@@ -666,7 +723,7 @@ export default function RustSimulation() {
                   value={startDate}
                   onChange={setStartDate}
                   min={range.first || undefined}
-                  max={endDate || range.last || undefined}
+                  max={endDate || endLimit || undefined}
                   ariaLabel="回测开始日期"
                 />
               </Field>
@@ -675,7 +732,7 @@ export default function RustSimulation() {
                   value={endDate}
                   onChange={setEndDate}
                   min={startDate || range.first || undefined}
-                  max={range.last || undefined}
+                  max={endLimit || undefined}
                   ariaLabel="回测结束日期"
                 />
               </Field>
@@ -714,7 +771,7 @@ export default function RustSimulation() {
             />
             <div className="mt-2 flex items-center justify-between gap-2">
               <span className="text-[11px] text-zinc-600 font-mono truncate">
-                engine-rs/src/strategies.rs
+                {activeSource?.path ?? 'engine-rs/src/strategies/'}
               </span>
               <button
                 type="button"
@@ -1613,8 +1670,8 @@ export default function RustSimulation() {
       <CodeViewerModal
         open={sourceOpen}
         title={`${activeStrategy?.name ?? '策略'} · Rust 源码`}
-        subtitle="engine-rs/src/strategies.rs · 引擎实际执行的策略实现"
-        code={strategiesRustSource}
+        subtitle={`${activeSource?.path ?? 'engine-rs/src/strategies/'} · 引擎实际执行的策略实现`}
+        code={activeSource?.code ?? null}
         language="rust"
         onClose={() => setSourceOpen(false)}
       />

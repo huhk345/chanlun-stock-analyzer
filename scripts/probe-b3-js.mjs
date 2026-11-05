@@ -2,7 +2,7 @@
 /**
  * 用真实 K 线跑一遍 JS 策略（回测面板那一份），把买入/卖出日期打出来。
  *
- * 目的：`src/strategies/cl-trend-b3-pullback.js` 与 `engine-rs/src/strategies.rs`
+ * 目的：`src/strategies/cl-trend-b3-pullback.js` 与 `engine-rs/src/strategies/chanlun_b3_pullback.rs`
  * 是同一套规则的两份实现，改了其中一份必须能验证另一份的行为是否跟着变。
  * 自检脚本用的是合成行情，只能验契约；这个脚本喂真实 K 线，用来和 Rust 引擎的
  * 决策日志对齐（同一标的、同一区间，看买入日期是否重合）。

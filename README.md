@@ -197,7 +197,7 @@ barter's and the venue is `AShareBroker` — barter is designed for exactly this
 | --- | --- | --- |
 | Data feed | `engine-rs/src/data.rs` | pool members + cached bars → aligned trading calendar |
 | Strategy contract | `engine-rs/src/strategy.rs` | `on_day(&DayContext) -> Signal` (BUY/SELL/HOLD + amount) |
-| Built-ins | `engine-rs/src/strategies.rs` | `ma-cross`, `donchian-breakout`, `rsi-reversion`, `momentum` |
+| Built-ins | `engine-rs/src/strategies/` | one file per strategy: `ma-cross`, `donchian-breakout`, `rsi-reversion`, `momentum`, `cl-trend-b3-pullback`, `cl-trend-breakout-alpha`, `cl-breakout-state`, `turtle-trend-breakout` |
 | Engine adapter | `engine-rs/src/barter_engine.rs` | `AlgoStrategy` + `Ledger` (`GlobalData`) + `BarState` (`InstrumentData`) |
 | A-share execution | `engine-rs/src/barter_engine.rs` | lots / T+1 / limits / commission + stamp duty + transfer fee |
 | Recorder | `engine-rs/src/barter_engine.rs` | one `DayRow` per trading day (decision, fills, cash, equity) |
@@ -498,7 +498,7 @@ public/index-members.*.json + .cache/klines/*.json
 | --- | --- | --- |
 | 数据层 | `engine-rs/src/data.rs` | 池成分 + 缓存日线 → 对齐的交易日历 |
 | 策略契约 | `engine-rs/src/strategy.rs` | `on_day(&DayContext) -> Signal` (BUY/SELL/HOLD + 数量) |
-| 内置策略 | `engine-rs/src/strategies.rs` | `ma-cross`、`donchian-breakout`、`rsi-reversion`、`momentum` |
+| 内置策略 | `engine-rs/src/strategies/` | 每个策略一个文件: `ma-cross`、`donchian-breakout`、`rsi-reversion`、`momentum`、`cl-trend-b3-pullback`、`cl-trend-breakout-alpha`、`cl-breakout-state`、`turtle-trend-breakout` |
 | 引擎适配 | `engine-rs/src/barter_engine.rs` | `AlgoStrategy` + `Ledger`(GlobalData) + `BarState`(InstrumentData) |
 | A 股撮合 | `engine-rs/src/barter_engine.rs` | 整手 / T+1 / 涨跌停 / 佣金 + 印花税 + 过户费 |
 | 逐日录制 | `engine-rs/src/barter_engine.rs` | 每个交易日一行 (决策 / 成交 / 现金 / 权益) |
