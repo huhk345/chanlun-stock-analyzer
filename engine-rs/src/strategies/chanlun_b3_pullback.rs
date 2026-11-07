@@ -6,7 +6,8 @@ use super::chanlun_b3_common::{base_params, B3Core};
 
 const B3_DESC: &str = "只做三买（突破中枢后回抽不回中枢），要求 EMA 多头排列的顺势环境；\
      突破幅度+回踩深度+回踩缩量+确认阳线四重约束；\
-     卖点为结构止损（ATR 计价）/顶背驰/ATR 跟踪止盈，不设固定止盈";
+     卖点为结构止损（ATR 计价）/顶背驰/ATR 跟踪止盈，不设固定止盈；\
+     仓位按「单笔风险预算 / 结构止损距离」占权益定仓（海龟式），不设单只上限，最小开仓仅作下限";
 
 pub struct ChanlunB3Pullback {
     core: B3Core,

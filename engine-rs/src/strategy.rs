@@ -54,6 +54,9 @@ pub enum AmountUnit {
     Shares,
     /// Percent of buying power (BUY) or of the position (SELL).
     Percent,
+    /// Percent of account equity (BUY only). Used by risk-parity sizing so a
+    /// position is not capped by the equal-weight slot.
+    EquityPercent,
 }
 
 impl AmountUnit {
@@ -62,6 +65,7 @@ impl AmountUnit {
             AmountUnit::Cash => "cash",
             AmountUnit::Shares => "shares",
             AmountUnit::Percent => "percent",
+            AmountUnit::EquityPercent => "equity_percent",
         }
     }
 }
@@ -111,6 +115,11 @@ impl Signal {
 
     pub fn buy_percent(value: f64, reason: impl Into<String>) -> Self {
         Self::buy(AmountUnit::Percent, value, reason)
+    }
+
+    /// Buy `value` percent of account equity (no per-name slot cap).
+    pub fn buy_equity_percent(value: f64, reason: impl Into<String>) -> Self {
+        Self::buy(AmountUnit::EquityPercent, value, reason)
     }
 
     pub fn sell_percent(value: f64, reason: impl Into<String>) -> Self {

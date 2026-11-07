@@ -35,6 +35,11 @@
  *    5×ATR 在 2.3% ATR 的票上是 11% 回吐空间，浮盈不到 11% 时跟踪线不存在。
  *    回吐上限就是补这个缺口的——它定义在盈利空间里，与小盘/大盘无关。
  *
+ *    离场松紧由入场时的回踩质量分 PQ 决定（`pqExit`，默认 0 = 关闭）：
+ *    PQ 量的是「信号日起 60 日漂移」，与「带止损的成交收益」不是一回事，
+ *    直接拿它拦信号会把低分的大赢家一起砍掉。但用它决定「这笔给多长的绳子」
+ *    是对齐的 —— 高分形态值得多让一段，低分则维持原样（收紧实测更差）。
+ *
  * 5. 仓位
  *    按 R 风险平价：单笔风险 = 权益 × riskPerTradePct%，除以每股风险得到股数，
  *    再折算成 percent 交给撮合层（100 股整手由引擎处理）。
@@ -49,7 +54,7 @@
  *    一组差 3~4 个百分点，大阳线是「一日游」的典型形态，而追高上限（maxChasePct）
  *    衡量的是「离回踩低点多远」，管不住这件事。
  *
- * 7. 参数只留 11 个（+ 面板专有的仓位预算）
+ * 7. 参数只留 15 个（含 PQ 三个与仓位预算）
  *    46 个参数 / 80 笔来回，自由度比样本还大，多留一个旋钮就是多一次过拟合的机会。
  *    审计结果：46 个里 28 个拨动后输出完全不变（死旋钮），剩下的也只有
  *    突破/回踩/止损/跟踪四个方向是真活的。其余全部下沉成常量。
@@ -85,6 +90,17 @@ const STOP_BUFFER_FALLBACK = 1.5;
 // 中位数 4.95%→8.17%，胜率 53%→59%，震荡子样本 2.14%→4.31%。
 const GIVEBACK_KEEP = 0.5;
 
+// PQ 驱动的离场松紧（`pqExit > 0` 才生效）。
+// PQ 预测的是「信号日起 60 日漂移」，而成交收益由止损 + 跟踪止盈决定 ——
+// 两者对不上，正是 PQ 在交易层打平的原因。所以 PQ 不用来拦信号，
+// 只用来决定「这笔该给多长的绳子」：
+//   低分 → 不动（收到更紧是反的：这个策略的全部正期望来自让赢家跑，
+//          实测把低分段收紧一档反而更差，见 reports/cl-trend-b3-pullback/pq-exit.md）
+//   高分 → 放宽（跟踪 5×ATR → 7.5×ATR，回吐保留 50% → 65%）
+// 锚点 45 是样本 PQ 中位，跨度 25 分到端点，k 夹在 [0, +1]。
+const PQ_EXIT_ANCHOR = 45;
+const PQ_EXIT_SPAN = 25;
+
 // ---------------------------------------------------------------------------
 // 小工具
 // ---------------------------------------------------------------------------
@@ -97,6 +113,16 @@ function clamp(v, lo, hi) {
 function numParam(params, key, def) {
   const v = params ? params[key] : undefined;
   return typeof v === 'number' && isFinite(v) ? v : def;
+}
+
+/**
+ * 从建仓记录里取回「入场时的回踩质量分」。
+ * 策略无状态，持仓期间的 PQ 只能从 BUY 的 reason（`｜质量 NN`）反推；
+ * 取不到就返回锚点，等价于 k = 0（离场规则与原版一致）。
+ */
+function entryPqFromReason(reason) {
+  const m = /质量\s*(\d+)/.exec(reason || '');
+  return m ? Number(m[1]) : PQ_EXIT_ANCHOR;
 }
 
 
@@ -234,6 +260,82 @@ function entryBarOk(klines, i, cfg) {
  * 返回 null 表示当前不是「三买·突破回踩」的入场点，否则返回结构详情。
  * 所有判断都只用 klines[0..i] 与在该前缀上算出的笔/中枢，无未来数据。
  */
+// ---------------------------------------------------------------------------
+// 回踩质量分 PQ（0~100）
+//
+// 三个分项，全部只用信号当根及之前的数据，无未来函数：
+//   深度分  回踩深度 30% → 65% 线性映射到 0~1（越深越好）
+//   突破分  以 ATR 计的突破幅度，倒 U，峰值 5.8 ATR，3.0 / 8.6 两端归零
+//   动量分  前 60 日涨幅除以其自身 60 日波动，越低越好
+// 权重 0.5 / 0.3 / 0.2：深度是唯一 p<0.01 的分项，占主导。
+//
+// 标定（沪深300 290 只 / 121 个信号 / 2019-2026，60 日超额，见 scripts/pq-score.py）：
+//   PQ<40 → −5.0%(n48)  PQ 40~50 → +4.2%(n24)  PQ 60~70 → +7.7%(n13)  PQ≥70 → +10.3%(n16)
+//   分年 6/6 方向一致；前后两段 ρ 分别 +0.31 / +0.30。
+//   交易层顶四分位 +6.88%/止损率 40%，其余 +1.78%/止损率 57%。
+//
+// 注意：这不是选股信号——PQ 与标的年化波动 (ρ=0.00)、年份 (ρ=+0.02) 均无关，
+// 它描述的是「这一次回踩的形态」，同一只股票不同信号的 PQ 可以差很多。
+// ---------------------------------------------------------------------------
+const PQ_DEPTH_LO = 30; // 回踩深度 30% 以下记 0 分
+const PQ_DEPTH_HI = 65; // 65% 以上记满分
+const PQ_BRK_PEAK = 5.8; // 突破幅度最佳值（ATR 倍数）
+const PQ_BRK_LO = 3.0; // 低于 3.0 ATR 突破太弱
+const PQ_BRK_HI = 8.6; // 高于 8.6 ATR 已经追高
+const PQ_MOM_CENTER = 1.5; // 动量 z 中心（越低越好）
+const PQ_MOM_WIDTH = 1.2;
+
+function pullbackQuality(ctx, setup) {
+  const { klines, closes, i, base, atrNow } = ctx;
+  const c = klines[i].close;
+  if (!(c > 0)) return null;
+
+  // 1) 回踩深度：占突破幅度的比例，越深说明洗盘越充分
+  const depthPct = setup.depth * 100;
+  const sDepth = clamp((depthPct - PQ_DEPTH_LO) / (PQ_DEPTH_HI - PQ_DEPTH_LO), 0, 1);
+
+  // 2) 突破幅度（ATR 计）：太弱是假突破，太远是追高，倒 U
+  const atrPct = atrNow > 0 ? (atrNow / c) * 100 : 0;
+  let sBrk = 0.5;
+  if (atrPct > 0) {
+    const brkAtr = setup.brkPct / atrPct;
+    sBrk =
+      brkAtr <= PQ_BRK_PEAK
+        ? clamp((brkAtr - PQ_BRK_LO) / (PQ_BRK_PEAK - PQ_BRK_LO), 0, 1)
+        : clamp((PQ_BRK_HI - brkAtr) / (PQ_BRK_HI - PQ_BRK_PEAK), 0, 1);
+  }
+
+  // 3) 前 60 日涨幅 / 自身 60 日波动：涨得越猛，突破越可能是最后一棒
+  let sMom = 0.5;
+  const j = i - base;
+  if (j >= 61) {
+    const ret60 = (c / closes[j - 60] - 1) * 100;
+    let sum = 0;
+    let sum2 = 0;
+    for (let t = j - 19; t <= j; t++) {
+      const r = closes[t] / closes[t - 1] - 1;
+      sum += r;
+      sum2 += r * r;
+    }
+    const mean = sum / 20;
+    const vol20 = Math.sqrt(Math.max(sum2 / 20 - mean * mean, 0)) * Math.sqrt(252) * 100;
+    if (vol20 > 1) {
+      const momZ = ret60 / (vol20 * Math.sqrt(60 / 252));
+      sMom = clamp((PQ_MOM_CENTER - momZ) / PQ_MOM_WIDTH, 0, 1);
+    }
+  }
+
+  return {
+    pq: 100 * (0.5 * sDepth + 0.3 * sBrk + 0.2 * sMom),
+    depthPct,
+    brkAtr: atrPct > 0 ? setup.brkPct / atrPct : null,
+    sDepth,
+    sBrk,
+    sMom,
+  };
+}
+
+
 function detectBreakoutPullback(ctx) {
   const { klines, i, strokes, hubs, cfg } = ctx;
 
@@ -395,8 +497,12 @@ const strategy = {
     { key: 'maxRiskPct', label: '单笔最大风险(%)', type: 'number', defaultValue: 12, min: 2, max: 20, step: 1 },
     { key: 'trailAtrMult', label: 'ATR 跟踪倍数', type: 'number', defaultValue: 5, min: 1, max: 8, step: 0.5 },
     { key: 'maxHoldBars', label: '最长持仓(日)', type: 'number', defaultValue: 120, min: 20, max: 250, step: 5 },
-    // 面板专有：单标的引擎按 R 风险平价定仓位（Rust 池子引擎用等权槽位）
+    // R 风险平价定仓（占权益百分比）；Rust 池子引擎用同一口径，最小开仓只作下限
     { key: 'riskPerTradePct', label: '单笔风险预算(权益%)', type: 'number', defaultValue: 1, min: 0.2, max: 5, step: 0.1 },
+    // 回踩质量分 PQ：0 = 关闭（保持原有行为）。推荐 40 起。
+    { key: 'minPQ', label: '回踩质量分下限(0=关)', type: 'number', defaultValue: 0, min: 0, max: 90, step: 5 },
+    { key: 'pqSizing', label: '质量分调仓强度(0=等权)', type: 'number', defaultValue: 0, min: 0, max: 1, step: 0.1 },
+    { key: 'pqExit', label: '质量分离场强度(0=关)', type: 'number', defaultValue: 0, min: 0, max: 1, step: 0.25 },
   ],
 
   availableIndicators: [],
@@ -434,6 +540,9 @@ const strategy = {
       trailAtrMult: numParam(params, 'trailAtrMult', 5),
       maxHoldBars: Math.round(numParam(params, 'maxHoldBars', 120)),
       riskPerTradePct: numParam(params, 'riskPerTradePct', 1),
+      minPQ: numParam(params, 'minPQ', 0),
+      pqSizing: numParam(params, 'pqSizing', 0),
+      pqExit: numParam(params, 'pqExit', 0),
     };
 
     // ---- 指标窗口（只算尾部，保证逐日调用不至于 O(n²) 爆炸）----
@@ -521,6 +630,15 @@ const strategy = {
 
       const entryPrice = lastBuy && lastBuy.price > 0 ? lastBuy.price : position.averageCost;
 
+      // ---- 质量分离场：只对高分放长绳子 ----
+      // pqExit = 0 时 pqK 恒为 0，跟踪倍数与回吐保留都等于原常量，行为与原版完全一致。
+      const pqK =
+        cfg.pqExit > 0
+          ? clamp((entryPqFromReason(lastBuy && lastBuy.reason) - PQ_EXIT_ANCHOR) / PQ_EXIT_SPAN, 0, 1)
+          : 0;
+      const trailMult = cfg.trailAtrMult * (1 + cfg.pqExit * 0.5 * pqK);
+      const keepFrac = clamp(GIVEBACK_KEEP + cfg.pqExit * 0.15 * pqK, GIVEBACK_KEEP, 0.8);
+
       // 结构止损位：复现建仓时的「回踩低点」。
       // 先找建仓前最近的突破高点，再取它之后到建仓日的最低价——
       // 不能简单地取「最近 N 根最低价」，否则会把中枢内部的低点算进来，止损被无声放宽。
@@ -552,10 +670,10 @@ const strategy = {
       let stopLine = stop0;
       if (unrealizedR >= BREAKEVEN_R) {
         stopLine = Math.max(stopLine, entryPrice * 1.005); // 覆盖双边费用
-        stopLine = Math.max(stopLine, highest - cfg.trailAtrMult * atrNow);
+        stopLine = Math.max(stopLine, highest - trailMult * atrNow);
         // 回吐上限：最多回吐浮盈的一半。只在 ATR 跟踪线更松时生效，
         // 也就是只收紧小/中赢家，大趋势碰不到它（见 GIVEBACK_KEEP 注释）。
-        stopLine = Math.max(stopLine, entryPrice + (highest - entryPrice) * GIVEBACK_KEEP);
+        stopLine = Math.max(stopLine, entryPrice + (highest - entryPrice) * keepFrac);
       }
 
       // 顶背驰只响应一次：数「本次建仓之后」卖过几次，换仓后不会把上一笔的次数带过来
@@ -638,6 +756,7 @@ const strategy = {
       i,
       base,
       vols,
+      closes,
       strokes: chanlun.strokes,
       hubs,
       fractions: swingPoints,
@@ -649,6 +768,13 @@ const strategy = {
     let setup = null;
     if (strongTrend) setup = detectBreakoutPullback(ctx);
     if (!setup) return { action: 'HOLD', score: trendScore };
+
+    // ---- 回踩质量分：低于阈值的信号直接放弃 ----
+    const q = pullbackQuality(ctx, setup);
+    if (!q) return { action: 'HOLD', score: trendScore };
+    if (cfg.minPQ > 0 && q.pq < cfg.minPQ) {
+      return { action: 'HOLD', score: trendScore, quality: q.pq / 100 };
+    }
 
     // ---- R 风险平价仓位 ----
     const entry = c;
@@ -663,19 +789,18 @@ const strategy = {
     let pct = (riskCash / (perShareRisk * entry)) * 100;
     // 99.5 而非 100：给佣金/过户费留出余量，否则「按可用资金 100% 买入」会被费用顶穿
     pct = clamp(pct, 0, Math.min(MAX_POSITION_PCT, 99.5));
+
+    // ---- 质量分调仓：阈值处 0.5 倍，阈值 +25 分以上回到 1 倍 ----
+    // pqSizing=0 时系数恒为 1，行为与原版完全一致。
+    const pqRamp = clamp((q.pq - cfg.minPQ) / 25, 0, 1);
+    const sizeScale = 1 - cfg.pqSizing * (0.5 - 0.5 * pqRamp);
+    pct *= sizeScale;
+
     if (pct < 5) return { action: 'HOLD', score: trendScore }; // 仓位太小，不值得开
 
-    const quality = clamp(
-      (setup.type === 'B3'
-        ? 0.45 +
-          clamp(setup.brkPct / 10, 0, 0.25) +
-          clamp((1 - setup.volRatio) * 0.3, 0, 0.2) +
-          (hubUp ? 0.1 : 0)
-        : 0.4) +
-        trendScore * 0.3,
-      0,
-      1,
-    );
+    // quality 直接由 PQ 与趋势强度合成。
+    // 旧版在这里奖励 brkPct 大（clamp(brkPct/10, 0, 0.25)），实测突破越远越差，已纠正。
+    const quality = clamp((q.pq / 100) * 0.7 + trendScore * 0.3, 0, 1);
 
     const reason =
       setup.type === 'B3'
@@ -692,7 +817,9 @@ const strategy = {
           '%，量比 ' +
           setup.volRatio.toFixed(2) +
           '），反包确认' +
-          (hubUp ? '｜中枢上移' : '')
+          (hubUp ? '｜中枢上移' : '') +
+          '｜质量 ' +
+          q.pq.toFixed(0)
         : '二买·背驰后不创新低：一买低点 ' +
           setup.oneBuyLow.toFixed(2) +
           '，本次回调 ' +
@@ -704,7 +831,8 @@ const strategy = {
       amount: { unit: 'percent', value: Math.round(pct * 10) / 10 },
       reason: reason + '｜风险 ' + riskPct.toFixed(1) + '% 仓位 ' + pct.toFixed(0) + '%',
       confidence: Math.round(clamp(0.55 + quality * 0.4, 0, 0.95) * 100) / 100,
-      score: clamp(quality * 0.7 + trendScore * 0.3, 0, 1),
+      score: clamp(quality, 0, 1),
+      quality: q.pq / 100,
     };
   },
 };

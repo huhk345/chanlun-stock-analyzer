@@ -856,7 +856,7 @@ export default function RustSimulation() {
                   </span>
                 </div>
                 <div className="flex items-baseline justify-between text-[12px]">
-                  <span className="text-zinc-500">每只上限</span>
+                  <span className="text-zinc-500">等权参考槽位</span>
                   <span className="font-mono text-zinc-300">¥{fmtMoney(result.slot_cash)}</span>
                 </div>
                 <div className="flex items-baseline justify-between text-[12px]">
@@ -868,13 +868,15 @@ export default function RustSimulation() {
                   </span>
                 </div>
                 <p className="text-[12px] text-zinc-600 leading-relaxed">
-                  按「一手成本中位数」反推资金能同时持有几只, 再等权分配。开仓金额低于下限的会被直接跳过,
-                  不会开小仓; 一手都超过上限的高价股同样跳过。
+                  最小开仓是<span className="text-zinc-400">下限</span>，不是上限。三买系列按「单笔风险预算 /
+                  结构止损距离」占权益定仓，止损越紧仓位越大，现金是唯一上限；
+                  只有等权百分比仓位的策略才受参考槽位约束。
                 </p>
               </div>
             ) : (
               <p className="mt-2 text-[12px] text-zinc-600 leading-relaxed">
-                每只标的按等权仓位上限建仓, 上限由资金能同时持有几只决定; 组合共用同一现金账户。
+                最小开仓只作下限；三买系列按单笔风险预算与止损距离占权益定仓，不设单只上限；
+                组合共用同一现金账户。
               </p>
             )}
           </Card>

@@ -31,7 +31,7 @@ export interface RustPool {
 export interface RustDecision {
   symbol: string;
   action: 'BUY' | 'SELL';
-  amount_unit: 'cash' | 'shares' | 'percent' | null;
+  amount_unit: 'cash' | 'shares' | 'percent' | 'equity_percent' | null;
   amount_value: number | null;
   reason: string | null;
   close: number;

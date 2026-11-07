@@ -406,9 +406,9 @@ pub struct SimOutput {
     pub universe: usize,
     /// 按「可交易范围」从股票池里剔除的标的数 (创业板/科创板/北交所/ST)
     pub filtered_out: usize,
-    /// Names this capital can hold at a typical lot cost (equal-weight slots).
+    /// 等权参考槽位数（仅 `Percent` 口径的策略使用；按权益定仓的策略不受此限）。
     pub max_positions: usize,
-    /// Per-name capital ceiling implied by `max_positions`.
+    /// 等权参考槽位金额 = 初始资金 / max_positions。
     pub slot_cash: f64,
     /// Hard floor applied to every newly opened position (0 = disabled).
     pub min_position_value: f64,
@@ -443,6 +443,11 @@ pub struct PoolStrategy {
     slot_cash: f64,
     /// How many names this capital can hold at a typical lot cost.
     max_positions: usize,
+    /// Cash reserved by BUY orders already routed on the current bar. Fills are
+    /// drained after every symbol has been evaluated, so `state.cash` is stale
+    /// during the loop; without this reservation same-day signals would all size
+    /// against the same cash and over-allocate.
+    committed_cash: Mutex<f64>,
     /// Runtime parameters, handed to every `DayContext` so a strategy can read
     /// `ctx.params` instead of baking them in at construction.
     params: Params,
@@ -510,6 +515,7 @@ impl PoolStrategy {
                 strategy_id: strategy_id.to_string(),
                 slot_cash,
                 max_positions,
+                committed_cash: Mutex::new(0.0),
                 params: params.clone(),
                 regime: market.regime.clone(),
                 current_day: Mutex::new(0),
@@ -524,6 +530,7 @@ impl PoolStrategy {
 
     fn set_day(&self, index: usize) {
         *self.current_day.lock().unwrap() = index;
+        *self.committed_cash.lock().unwrap() = 0.0;
     }
 }
 
@@ -620,24 +627,31 @@ impl AlgoStrategy for PoolStrategy {
         let mut buy_reject: Option<String> = None;
         let quantity = match signal.action {
             Action::Buy => {
-                // Equal-weight slot: each pool member may hold at most its share
-                // of the capital, so one symbol cannot eat the whole account.
+                // 两种百分比口径：
+                // - `Percent` = 等权槽位的百分比，历史策略用它；
+                // - `EquityPercent` = 账户权益百分比，风险平价策略用它，
+                //   不受槽位上限约束（按海龟的「风险预算 / 止损距离」定仓）。
                 let requested = match signal.amount {
                     Some(a) => match a.unit {
                         AmountUnit::Percent => self.slot_cash * a.value / 100.0,
+                        AmountUnit::EquityPercent => equity * a.value / 100.0,
                         AmountUnit::Cash => a.value.min(self.slot_cash),
                         AmountUnit::Shares => a.value * close,
                     },
                     None => 0.0,
                 };
+                // 只有风险平价口径（EquityPercent）豁免槽位上限；
+                // 其余用途（等权 Percent / 固定 Cash / Shares）保持原有上限语义。
+                let slot_limited =
+                    !matches!(&signal.amount, Some(a) if a.unit == AmountUnit::EquityPercent);
                 let lot = self.cfg.lot_size;
                 let floor_value = self.cfg.min_position_value.max(0.0);
-                let cash = state.global.cash;
+                // 当日已路由的买单会先占用现金，但成交是在全部标的跑完后才结算，
+                // 所以这里必须用「现金 - 当日已承诺」而不是 state.cash。
+                let cash = (state.global.cash - *self.committed_cash.lock().unwrap()).max(0.0);
 
-                // Hard rule: a new position is never smaller than `floor_value`.
-                // The strategy's own sizing is a *target*, so raise it to the
-                // floor, then round to a whole lot — rounding down could drop the
-                // order back under the floor, so round up one lot instead.
+                // `min_position_value` 只是下限：低于它不开，高于它的金额照常放行。
+                // 四舍五入到整手时向上取整，避免落到下限之下。
                 let target_cash = requested.max(floor_value).min(cash);
                 let mut shares = floor_lot(target_cash / close, lot);
                 if shares * close < floor_value {
@@ -654,22 +668,24 @@ impl AlgoStrategy for PoolStrategy {
                         cash, value
                     ));
                     0.0
-                } else if value > self.slot_cash * 1.5 + 1e-9 {
-                    // One lot alone blows past the slot — this name cannot be held
-                    // under the equal-weight plan at this capital level.
+                } else if slot_limited && value > self.slot_cash * 1.5 + 1e-9 {
+                    // 一手成本已经撑破等权槽位，这只票在当前资金下无法按计划持有。
                     buy_reject = Some(format!(
                         "一手 {:.0} 元 超出仓位上限 {:.0} 元",
                         value, self.slot_cash
                     ));
                     0.0
                 } else {
+                    *self.committed_cash.lock().unwrap() += value;
                     shares
                 }
             }
             Action::Sell => {
                 let target = match signal.amount {
                     Some(a) => match a.unit {
-                        AmountUnit::Percent => position.shares * a.value / 100.0,
+                        AmountUnit::Percent | AmountUnit::EquityPercent => {
+                            position.shares * a.value / 100.0
+                        }
                         AmountUnit::Shares => a.value,
                         AmountUnit::Cash => a.value / close,
                     },
@@ -703,7 +719,11 @@ impl AlgoStrategy for PoolStrategy {
         } else if signal.action == Action::Buy {
             // Distinguish "one lot does not fit the slot" from "cash is spent" —
             // they are different problems and only one of them is about capital.
-            if lot_cost > self.slot_cash {
+            let available =
+                (state.global.cash - *self.committed_cash.lock().unwrap()).max(0.0);
+            let slot_limited =
+                !matches!(&signal.amount, Some(a) if a.unit == AmountUnit::EquityPercent);
+            if slot_limited && lot_cost > self.slot_cash {
                 Some(format!(
                     "仓位不足一手 (每只上限 {:.0} 元, 一手需 {:.0} 元)",
                     self.slot_cash, lot_cost
@@ -711,7 +731,7 @@ impl AlgoStrategy for PoolStrategy {
             } else {
                 Some(format!(
                     "现金不足 (可用 {:.0} 元, 一手需 {:.0} 元)",
-                    state.global.cash, lot_cost
+                    available, lot_cost
                 ))
             }
         } else {

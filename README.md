@@ -292,18 +292,19 @@ Every fill follows the signal bar's close, 100-share lots, T+1 (shares bought to
 sold today), limit-up / limit-down rejection (10% main board / 20% ChiNext & STAR / 30% BSE),
 commission 0.025% (min ¥5) + stamp duty 0.05% on sells + transfer fee 0.001%.
 
-Position sizing is capital-driven, not universe-driven: the slot is `capital ÷ N`, where `N` is
-how many names that capital can actually hold at a typical one-lot cost (median lot price × 1.05),
-capped by the universe **and** by the minimum-position floor. With ¥5M across 300 names that is the
-full 300 at ¥16.7k each; with ¥20k it becomes 4 names at ¥5k each, so a small account still trades
-instead of producing zero fills.
+Position sizing has two modes. Legacy strategies use an equal-weight slot: `capital ÷ N`, where `N`
+is how many names that capital can actually hold at a typical one-lot cost (median lot price ×
+1.05), capped by the universe and by the minimum-position floor. Risk-parity strategies (the B3
+family) use `EquityPercent` instead: sizing comes from the turtle rule `risk budget ÷ structural
+stop distance`, expressed as a share of account equity. **That mode is not capped by the slot** —
+a tight stop may take up to 99.5% of equity, and available cash is the only limit.
 
-**Minimum position size (hard rule).** A newly opened position is never smaller than
-`minPositionValue` (default **¥5,000**, `0` disables it). The strategy's own sizing is treated as a
-target: it is raised to the floor, rounded to whole lots (rounding *up* when flooring would drop
-below the floor), and the fill is rejected if available cash would shrink it under the floor. Names
-whose single lot exceeds 1.5× the slot are skipped as `一手 ... 超出仓位上限`, and a spent account
-reports `现金不足` — never a silent runt position.
+**Minimum position size (hard floor, not a cap).** A newly opened position is never smaller than
+`minPositionValue` (default **¥5,000**, `0` disables it). Sizes above the floor pass through
+unchanged. The target is rounded to whole lots (rounding *up* when flooring would drop below the
+floor) and rejected only when available cash cannot cover one lot. `一手 ... 超出仓位上限` applies
+only to slot-based sizing; equity-percent orders report `现金不足` when the account is spent —
+never a silent runt position.
 
 **Troubleshooting:** an error like `Cannot find module '.../node_modules/.pnpm/vite.../dist/node/chunks/dep-*.js'` means `node_modules` was checked out as a (possibly self-referential) symlink, which breaks module resolution. `node_modules` is never tracked; remove the bad link and reinstall:
 ```bash
@@ -582,16 +583,16 @@ impl Strategy for MyStrategy {
 
 成交口径: 信号当根收盘价、100 股整手、T+1 (当日买入不可卖)、涨跌停拦截 (主板 10% / 创业板·
 科创板 20% / 北交所 30%)、佣金万 2.5 (最低 5 元) + 卖出印花税千 0.5 + 过户费万 0.1。
-仓位上限由资金决定而不是由标的数决定: 上限 = 资金 ÷ N, 其中 N 是这笔钱按「一手成本中位数 × 1.05」
-真正能同时持有几只 (不超过标的数, 也受最小开仓金额约束)。500 万配 300 只 → 300 只 × 1.67 万;
-2 万 → 4 只 × 5000 元, 小资金也能成交, 而不是所有信号都算成 0 股。
+仓位有两种口径。历史策略用等权槽位: 槽位 = 资金 ÷ N, 其中 N 是这笔钱按「一手成本中位数 × 1.05」
+真正能同时持有几只 (不超过标的数, 也受最小开仓金额约束)。三买系列用「权益百分比」:
+仓位 = 单笔风险预算 ÷ 结构止损距离, 即海龟式风险平价, 单位为账户权益的比例。
+**该口径不受槽位上限约束**——止损越紧仓位越大, 单只最高可到 99.5% 权益, 唯一上限是可用现金。
 
-**最小开仓金额 (硬规则).** 每次开仓金额不低于 `minPositionValue` (默认 **5000 元**, 传 0 关闭)。
-策略给出的仓位只当作目标值: 低于下限时抬到下限, 再按整手取整 (向下取整会跌破下限时改为向上补一手),
-撮合阶段若因现金不足被削减到下限以下则整笔拒绝。一手就超过仓位上限 1.5 倍的高价股直接跳过
-(`一手 ... 超出仓位上限`), 钱花完了报 `现金不足` —— 任何情况下都不会开出一个低于下限的碎仓。
-组合共用同一现金账户 —— 连一手都买不起的
-信号会明确记成 `仓位不足一手`, 而不是静默丢弃。
+**最小开仓金额 (下限, 不是上限).** 每次开仓金额不低于 `minPositionValue` (默认 **5000 元**, 传 0 关闭),
+高于下限的金额原样放行。目标金额按整手取整 (向下取整会跌破下限时改为向上补一手),
+只有现金连一手都买不起时才整笔拒绝。`一手 ... 超出仓位上限` 仅对等权槽位口径生效;
+权益百分比口径在钱花完时报 `现金不足` —— 任何情况下都不会开出一个低于下限的碎仓。
+组合共用同一现金账户, 当日已路由的买单会先占用现金, 避免同一天多个信号重复使用同一份现金。
 
 **疑难排查:** 出现 `Cannot find module '.../node_modules/.pnpm/vite.../dist/node/chunks/dep-*.js'` 报错，通常是因为 `node_modules` 被检出成了（可能自引用的）符号链接，导致模块解析失败。仓库不跟踪 `node_modules`；删除坏链接后重装即可:
 ```bash

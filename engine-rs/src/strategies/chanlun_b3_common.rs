@@ -44,12 +44,19 @@ const DIV_RATIO: f64 = 0.85;
 const BREAKEVEN_R: f64 = 1.0;
 const TIME_STOP_R: f64 = 1.0;
 const DIV_MIN_R: f64 = 2.0;
-const SIZE_PCT: f64 = 100.0;
+/// 单笔仓位占权益的硬上限：不放大杠杆，满仓即止。
+const MAX_SIZE_PCT: f64 = 99.5;
 /// `stop_atr` 取不到 ATR 时的备用缓冲（%）
 const STOP_BUFFER_FALLBACK: f64 = 1.5;
+/// PQ 驱动的离场松紧（`pq_exit > 0` 才生效）：只对高分放宽，低分不动。
+/// 锚点 45 是样本 PQ 中位，跨度 25 分到端点，k 夹在 [0, +1]。
+/// 与 JS 侧 `PQ_EXIT_ANCHOR` / `PQ_EXIT_SPAN` 同名同值，改一边必须改另一边。
+const PQ_EXIT_ANCHOR: f64 = 45.0;
+const PQ_EXIT_SPAN: f64 = 25.0;
 
-/// 11 个真正影响信号的参数。其余全部下沉成常量或删掉：
-/// 46 个参数 / 80 笔来回，自由度比样本还大，多留一个旋钮就是多一次过拟合的机会。
+/// 真正影响信号的参数 + 一个仓位参数（`risk_pct` 只定仓，不影响买卖点）。
+/// 其余全部下沉成常量或删掉：46 个参数 / 80 笔来回，自由度比样本还大，
+/// 多留一个旋钮就是多一次过拟合的机会。
 struct B3Config {
     breakout_min: f64,
     pullback_min: f64,
@@ -62,6 +69,14 @@ struct B3Config {
     max_risk: f64,
     trail_atr: f64,
     max_hold: usize,
+    /// 单笔风险预算（权益 %）。仓位 = 预算 / 结构止损距离，参考海龟的 N 定仓。
+    risk_pct: f64,
+    /// 回踩质量分下限（0 = 关闭）
+    min_pq: f64,
+    /// 质量分调仓强度（0 = 等权，1 = 阈值处半仓）
+    pq_sizing: f64,
+    /// 质量分驱动的离场松紧（0 = 关闭，与改动前完全一致）
+    pq_exit: f64,
 }
 
 impl B3Config {
@@ -79,6 +94,10 @@ impl B3Config {
             max_risk: p.f64("max_risk", 12.0),
             trail_atr: p.f64("trail_atr", 5.0).max(0.0),
             max_hold: usize_of("max_hold", 120.0),
+            risk_pct: p.f64("risk_pct", 1.0).clamp(0.1, 10.0),
+            min_pq: p.f64("min_pq", 0.0).clamp(0.0, 90.0),
+            pq_sizing: p.f64("pq_sizing", 0.0).clamp(0.0, 1.0),
+            pq_exit: p.f64("pq_exit", 0.0).clamp(0.0, 1.0),
         }
     }
 }
@@ -88,9 +107,83 @@ pub(super) struct Setup {
     label: &'static str,
     stop0: f64,
     reason: String,
+    /// 0~1，由回踩质量分 PQ 归一化而来（与 JS 侧 `quality` 同义）
     quality: f64,
+    /// 回踩质量分 0~100，仅用于展示与门控
+    pub(super) pq: f64,
     /// 突破段的平均成交量 / 突破前 20 日均量（VMA 因子）
     pub(super) brk_vol_ratio: f64,
+}
+
+/// 回踩质量分 PQ（0~100），与 `src/strategies/cl-trend-b3-pullback.js` 的
+/// `pullbackQuality()` 逐项对应，改一边必须改另一边。
+///
+///   深度分  回踩深度 30% → 65% 线性映射到 0~1（越深越好）
+///   突破分  以 ATR 计的突破幅度，倒 U，峰值 5.8 ATR，3.0 / 8.6 两端归零
+///   动量分  前 60 日涨幅除以其自身 60 日波动，越低越好
+/// 权重 0.5 / 0.3 / 0.2。
+///
+/// 标定（沪深300 290 只 / 121 个信号 / 2019-2026，60 日超额）：
+///   PQ<40 → −5.0%  PQ 40~50 → +4.2%  PQ 60~70 → +7.7%  PQ≥70 → +10.3%
+///   分年 6/6 方向一致；前后两段 ρ 分别 +0.31 / +0.30。
+/// PQ 与标的年化波动 (ρ=0.00)、年份 (ρ=+0.02) 无关 —— 它描述的是「这一次回踩的形态」。
+fn pullback_quality(bars: &[Bar], j: usize, depth: f64, brk_pct: f64, atr_now: f64) -> f64 {
+    const DEPTH_LO: f64 = 30.0;
+    const DEPTH_HI: f64 = 65.0;
+    const BRK_PEAK: f64 = 5.8;
+    const BRK_LO: f64 = 3.0;
+    const BRK_HI: f64 = 8.6;
+    const MOM_CENTER: f64 = 1.5;
+    const MOM_WIDTH: f64 = 1.2;
+
+    let close = bars[j].close;
+    if !(close > 0.0) {
+        return 0.0;
+    }
+
+    // 1) 回踩深度
+    let s_depth = ((depth * 100.0 - DEPTH_LO) / (DEPTH_HI - DEPTH_LO)).clamp(0.0, 1.0);
+
+    // 2) 突破幅度（ATR 计）：倒 U
+    let atr_pct = if atr_now > 0.0 {
+        atr_now / close * 100.0
+    } else {
+        0.0
+    };
+    let s_brk = if atr_pct > 0.0 {
+        let brk_atr = brk_pct / atr_pct;
+        if brk_atr <= BRK_PEAK {
+            ((brk_atr - BRK_LO) / (BRK_PEAK - BRK_LO)).clamp(0.0, 1.0)
+        } else {
+            ((BRK_HI - brk_atr) / (BRK_HI - BRK_PEAK)).clamp(0.0, 1.0)
+        }
+    } else {
+        0.5
+    };
+
+    // 3) 前 60 日涨幅 / 自身 60 日波动
+    let mut s_mom = 0.5;
+    if j >= 61 {
+        let ret60 = (close / bars[j - 60].close - 1.0) * 100.0;
+        let mut sum = 0.0;
+        let mut sum2 = 0.0;
+        for t in (j - 19)..=j {
+            let prev = bars[t - 1].close;
+            if prev > 0.0 {
+                let r = bars[t].close / prev - 1.0;
+                sum += r;
+                sum2 += r * r;
+            }
+        }
+        let mean = sum / 20.0;
+        let vol20 = (sum2 / 20.0 - mean * mean).max(0.0).sqrt() * 252f64.sqrt() * 100.0;
+        if vol20 > 1.0 {
+            let mom_z = ret60 / (vol20 * (60.0f64 / 252.0).sqrt());
+            s_mom = ((MOM_CENTER - mom_z) / MOM_WIDTH).clamp(0.0, 1.0);
+        }
+    }
+
+    100.0 * (0.5 * s_depth + 0.3 * s_brk + 0.2 * s_mom)
 }
 
 fn last_top_before(points: &[Fraction], idx: usize) -> Option<Fraction> {
@@ -238,21 +331,26 @@ fn detect_b3(bars: &[Bar], j: usize, st: &Structures, cfg: &B3Config, atr_now: f
     };
     let brk_vol_ratio = if base_vol > 0.0 { brk_vol / base_vol } else { 1.0 };
 
+    let pq = pullback_quality(bars, j, depth, brk_pct, atr_now);
+
     Some(Setup {
         label: "三买·突破回踩",
         stop0,
         reason: format!(
-            "三买·突破回踩：中枢 ZG {:.2} 突破至 {:.2} (+{:.1}%)，回踩 {:.2} 未回中枢（深度 {:.0}%，量比 {:.2}，突破量比 {:.2}x）",
+            "三买·突破回踩：中枢 ZG {:.2} 突破至 {:.2} (+{:.1}%)，回踩 {:.2} 未回中枢（深度 {:.0}%，量比 {:.2}，突破量比 {:.2}x）｜质量 {:.0}",
             hub.zg,
             brk_high,
             brk_pct,
             pull_low,
             depth * 100.0,
             vol_ratio,
-            brk_vol_ratio
+            brk_vol_ratio,
+            pq
         ),
-        quality: (0.45 + (brk_pct / 10.0).clamp(0.0, 0.25) + (1.0 - vol_ratio).clamp(0.0, 0.2) * 0.3)
-            .clamp(0.0, 1.0),
+        // quality 直接取 PQ/100，on_day 里再与趋势强度合成 score。
+        // 旧版这里是 0.45 + clamp(brk_pct/10) —— 奖励突破越远越好，实测方向是反的，已纠正。
+        quality: (pq / 100.0).clamp(0.0, 1.0),
+        pq,
         brk_vol_ratio,
     })
 }
@@ -301,6 +399,11 @@ pub(super) fn base_params() -> Vec<ParamSpec> {
         ParamSpec::number("max_risk", "单笔最大风险 %", 12.0).with_range(2.0, 20.0, 1.0),
         ParamSpec::number("trail_atr", "ATR 跟踪倍数", 5.0).with_range(1.0, 8.0, 0.5),
         ParamSpec::number("max_hold", "最长持仓 日", 120.0).with_range(20.0, 250.0, 5.0),
+        ParamSpec::number("risk_pct", "单笔风险预算 (权益 %)", 1.0)
+            .with_range(0.2, 5.0, 0.1),
+        ParamSpec::number("min_pq", "回踩质量分下限 (0=关)", 0.0).with_range(0.0, 90.0, 5.0),
+        ParamSpec::number("pq_sizing", "质量分调仓强度 (0=等权)", 0.0).with_range(0.0, 1.0, 0.1),
+        ParamSpec::number("pq_exit", "质量分离场强度 (0=关)", 0.0).with_range(0.0, 1.0, 0.25),
     ]
 }
 
@@ -314,6 +417,8 @@ pub(super) struct B3Core {
     stop0: f64,
     risk: f64,
     div_done: bool,
+    /// 入场时的回踩质量分，离场松紧按它缩放（取不到时等于锚点 = 不缩放）
+    entry_pq: f64,
 }
 
 impl B3Core {
@@ -327,6 +432,7 @@ impl B3Core {
             stop0: 0.0,
             risk: 0.0,
             div_done: false,
+            entry_pq: PQ_EXIT_ANCHOR,
         }
     }
 
@@ -396,6 +502,8 @@ impl B3Core {
                 self.stop0 = self.entry_price * (1.0 - self.cfg.max_risk / 100.0);
                 self.risk = (self.entry_price - self.stop0).max(self.entry_price * 0.01);
                 self.highest = ctx.today().high;
+                // 反推不到入场 PQ，退回锚点：离场松紧不缩放，与改动前一致
+                self.entry_pq = PQ_EXIT_ANCHOR;
             }
             self.highest = self.highest.max(ctx.today().high);
 
@@ -407,14 +515,23 @@ impl B3Core {
             };
 
             // 止损线：结构止损 → +1R 保本 → Chandelier 跟踪 → 回吐上限（不设固定止盈）
+            // 跟踪倍数与回吐保留只对高分放宽（低分不动）：收紧低分段实测更差，
+            // 因为这套策略的全部正期望来自让赢家跑。
+            // pq_exit = 0 时 k = 0，两处都等于原常量，行为与改动前完全一致。
+            let pq_k = if self.cfg.pq_exit > 0.0 {
+                ((self.entry_pq - PQ_EXIT_ANCHOR) / PQ_EXIT_SPAN).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let trail_mult = self.cfg.trail_atr * (1.0 + self.cfg.pq_exit * 0.5 * pq_k);
+            let keep_frac = (GIVEBACK_KEEP + self.cfg.pq_exit * 0.15 * pq_k).clamp(GIVEBACK_KEEP, 0.8);
             let mut stop_line = self.stop0;
             if r_now >= BREAKEVEN_R {
                 stop_line = stop_line.max(self.entry_price * 1.005);
-                stop_line = stop_line.max(self.highest - self.cfg.trail_atr * atr_now);
+                stop_line = stop_line.max(self.highest - trail_mult * atr_now);
                 // 只在小/中赢家上生效：大趋势的回吐空间本来就大于这条线
-                stop_line = stop_line.max(
-                    self.entry_price + (self.highest - self.entry_price) * GIVEBACK_KEEP,
-                );
+                stop_line = stop_line
+                    .max(self.entry_price + (self.highest - self.entry_price) * keep_frac);
             }
             if close <= stop_line {
                 let tag = if r_now >= BREAKEVEN_R {
@@ -486,6 +603,11 @@ impl B3Core {
             return Signal::hold().with_score(trend_score);
         };
 
+        // 回踩质量分门控：低于阈值的信号直接放弃。
+        if self.cfg.min_pq > 0.0 && s.pq < self.cfg.min_pq {
+            return Signal::hold().with_score(trend_score);
+        }
+
         let risk_pct = (close - s.stop0) / close * 100.0;
         if !(risk_pct > 0.0) || risk_pct > self.cfg.max_risk {
             return Signal::hold().with_score(trend_score);
@@ -509,11 +631,20 @@ impl B3Core {
         self.risk = (close - s.stop0).max(close * 0.01);
         self.highest = ctx.today().high;
         self.div_done = false;
+        self.entry_pq = s.pq;
 
-        Signal::buy_percent(
-            SIZE_PCT,
+        // 海龟式的「风险平价」定仓：单笔亏损预算除以结构止损距离，
+        // 得到占权益的仓位比例；`min_position_value` 只是下限，不设单只上限。
+        let mut size_pct = (self.cfg.risk_pct * 100.0 / risk_pct).clamp(0.0, MAX_SIZE_PCT);
+
+        // 质量分调仓：阈值处 0.5 倍，阈值 +25 分以上回到 1 倍。pq_sizing=0 时系数恒为 1。
+        let pq_ramp = ((s.pq - self.cfg.min_pq) / 25.0).clamp(0.0, 1.0);
+        size_pct *= 1.0 - self.cfg.pq_sizing * (0.5 - 0.5 * pq_ramp);
+
+        Signal::buy_equity_percent(
+            size_pct,
             format!(
-                "{}｜风险 {risk_pct:.1}% 仓位 {SIZE_PCT:.0}%{}",
+                "{}｜风险 {risk_pct:.1}% 仓位 {size_pct:.0}%（权益）{}",
                 s.reason,
                 if hub_up { "｜中枢上移" } else { "" }
             ),
